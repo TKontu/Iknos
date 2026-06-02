@@ -16,15 +16,15 @@ indexes — knowledge *in*, with source references retained throughout.
 
 ## Segmentation backbone (§2)
 
-- [ ] Adjacent-window similarity signal over the cached embeddings; smooth it.
-- [ ] Valley detection by **depth score** + adaptive threshold (mean − k·σ); not raw
+- [x] Adjacent-window similarity signal over the cached embeddings; smooth it.
+- [x] Valley detection by **depth score** + adaptive threshold (mean − k·σ); not raw
       argmin.
-- [ ] **DP segmentation** over sentence units: maximize intra-segment coherence minus a
+- [x] **DP segmentation** over sentence units: maximize intra-segment coherence minus a
       length penalty (no O(n²) position×size brute force).
 - [ ] Length penalty as the **level knob** → multiple abstraction levels (sub-paragraph
       … chapter) from one mechanism; store segments as `Span` offset ranges with
       `level`.
-- [ ] Blend an information signal (entity/number density) into the objective so
+- [x] Blend an information signal (entity/number density) into the objective so
       segments don't collapse onto redundant blobs.
 - [ ] Coarse levels as **summaries**, not just longer windows (RAPTOR-style upward
       tree) — needed so §5.1 coarse-to-fine pruning has crisp parents.
