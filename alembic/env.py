@@ -48,6 +48,17 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _include_object(obj, name, type_, reflected, compare_to) -> bool:
+    """Keep autogenerate to ORM-managed relational tables only.
+
+    Apache AGE creates a schema named after the graph ('iknos') plus tables in
+    ag_catalog. None of that is ORM-managed, so anything outside `public` is
+    excluded from the autogenerate comparison.
+    """
+    schema = getattr(obj, "schema", None)
+    return schema in (None, "public")
+
+
 def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section) or {}
     section["sqlalchemy.url"] = _resolve_url()
@@ -57,7 +68,18 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        # The DB role is also the AGE graph name ('iknos'), so once the graph
+        # exists the `"$user"` entry in the default search_path resolves to the
+        # graph schema — making it current_schema() and shadowing `public`
+        # during reflection. Pin the relational default schema to public so
+        # alembic_version and autogenerate target public, not the graph schema.
+        # (Migrations that touch AGE set ag_catalog on the search_path locally.)
+        connection.exec_driver_sql("SET search_path TO public")
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=_include_object,
+        )
         with context.begin_transaction():
             context.run_migrations()
 
