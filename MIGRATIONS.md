@@ -1,5 +1,12 @@
 # Database Migrations with Alembic
 
+> **Iknos note:** this file is generic Alembic guidance carried over from a prior
+> project (some commands here, e.g. `docker compose up`, do **not** apply to the
+> Iknos host). For the Iknos-specific Apache AGE + CI gotchas — the
+> role-name/graph-name `search_path` traps that have already broken CI once —
+> see **[`CI_MIGRATIONS.md`](CI_MIGRATIONS.md)** and read it before writing a new
+> migration.
+
 This document explains how to work with database migrations in the Knowledge Extraction pipeline using Alembic.
 
 ## Overview
