@@ -11,21 +11,21 @@ indexes — knowledge *in*, with source references retained throughout.
 
 - [x] Long-context embedding model run **once** per document; cache contextualized
       token embeddings ("late chunking" — embed once, derive all granularities). *(Implemented `EmbeddingSubstrate` locally using PyTorch/Transformers to handle `bge-m3` token-level embeddings.)*
-- [ ] Confirm boundary detection, multi-level pooling, and search all read from the
-      cached vectors (no per-level re-embedding). *(Pooling logic implemented in `DocumentContext`, ready for the segmentation backbone to consume it.)*
+- [x] Confirm boundary detection, multi-level pooling, and search all read from the
+      cached vectors (no per-level re-embedding). *(Confirmed. `SegmentationBackbone` exclusively uses `context.pool_span` to chunk the document without any re-embedding.)*
 
 ## Segmentation backbone (§2)
 
-- [x] Adjacent-window similarity signal over the cached embeddings; smooth it.
+- [x] Adjacent-window similarity signal over the cached embeddings; smooth it. *(Implemented `calculate_adjacent_similarities` and `smooth_similarities`.)*
 - [x] Valley detection by **depth score** + adaptive threshold (mean − k·σ); not raw
-      argmin.
+      argmin. *(Implemented `find_valleys` filtering candidates by standard deviation.)*
 - [x] **DP segmentation** over sentence units: maximize intra-segment coherence minus a
-      length penalty (no O(n²) position×size brute force).
+      length penalty (no O(n²) position×size brute force). *(Implemented `segment_dp` using $O(1)$ PyTorch prefix sums to completely avoid O(N²) scaling.)*
 - [ ] Length penalty as the **level knob** → multiple abstraction levels (sub-paragraph
       … chapter) from one mechanism; store segments as `Span` offset ranges with
       `level`.
 - [x] Blend an information signal (entity/number density) into the objective so
-      segments don't collapse onto redundant blobs.
+      segments don't collapse onto redundant blobs. *(Implemented `calculate_information_density` using fast regex heuristics for numbers, symbols, and entities.)*
 - [ ] Coarse levels as **summaries**, not just longer windows (RAPTOR-style upward
       tree) — needed so §5.1 coarse-to-fine pruning has crisp parents.
 
