@@ -10,7 +10,7 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, event, pool
 
 from alembic import context
 
@@ -67,14 +67,23 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+
+    # The DB role is also the AGE graph name ('iknos'), so once create_graph()
+    # has run the `"$user"` entry in the default search_path resolves to the
+    # graph schema. That would make current_schema() the graph schema, which
+    # SQLAlchemy caches as default_schema_name at connect time — placing
+    # alembic_version (and autogenerate's reflection target) in the graph schema
+    # instead of public, and inconsistently so across an up/down/up cycle. Pin
+    # the search_path to public on every new DBAPI connection, before the
+    # dialect inspects current_schema(), so the relational default schema is
+    # always public. Migrations that touch AGE set ag_catalog locally as needed.
+    @event.listens_for(connectable, "connect")
+    def _pin_search_path(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET search_path TO public")
+        cursor.close()
+
     with connectable.connect() as connection:
-        # The DB role is also the AGE graph name ('iknos'), so once the graph
-        # exists the `"$user"` entry in the default search_path resolves to the
-        # graph schema — making it current_schema() and shadowing `public`
-        # during reflection. Pin the relational default schema to public so
-        # alembic_version and autogenerate target public, not the graph schema.
-        # (Migrations that touch AGE set ag_catalog on the search_path locally.)
-        connection.exec_driver_sql("SET search_path TO public")
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
