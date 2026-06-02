@@ -1,0 +1,113 @@
+# Production stack for Portainer (Git-based Stack deploy).
+#
+# Portainer clones this repo and runs:
+#   docker compose -f compose.prod.yaml --env-file stack.env up -d --build
+#
+# Env vars: set in Portainer UI > Stack > "Environment variables".
+# `stack.env` exists in the repo (Portainer requires the file) but holds no
+# real values — the UI overrides them at deploy time.
+#
+# Deploy chain (all in-stack, no shell hooks):
+#   1. postgres comes up healthy
+#   2. pg_backup runs `pg_dump` to the `iknos_backups` volume (no-op on first deploy)
+#   3. migrate runs `alembic upgrade head` after backup completes
+#   4. api starts after migrate completes
+#
+# IMPORTANT — Portainer setting:
+#   The Stack must be configured to recreate containers on update
+#   (Portainer: "Re-pull image and redeploy" toggle, or `--force-recreate`).
+#   Otherwise a redeploy with no image change will reuse the previous
+#   "exited 0" pg_backup and migrate containers and skip both steps,
+#   leaving migrations un-applied.
+#
+# Rollback: restore the most recent dump from the `iknos_backups` volume,
+# then redeploy the previous git ref via Portainer's "Stop & redeploy".
+
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
+    image: iknos-postgres:prod
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  pg_backup:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      BACKUP_RETAIN: ${BACKUP_RETAIN:-14}
+    volumes:
+      - iknos_backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        TS=$$(date -u +%Y%m%d_%H%M%S)
+        OUT="/backups/iknos_$${TS}.sql.gz"
+        echo "==> pg_dump -> $$OUT"
+        pg_dump -h postgres -U "$$POSTGRES_USER" "$$POSTGRES_DB" | gzip > "$$OUT"
+        cd /backups && ls -1t iknos_*.sql.gz 2>/dev/null | tail -n +$$((BACKUP_RETAIN + 1)) | xargs -r rm -v
+        echo "==> done"
+    restart: "no"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: iknos-api:prod
+    depends_on:
+      pg_backup:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: iknos-api:prod
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: ["uvicorn", "iknos.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+    networks:
+      - default
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK}"
+      - "traefik.http.routers.iknos-api.rule=Host(`${API_DOMAIN}`)"
+      - "traefik.http.routers.iknos-api.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.iknos-api.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}"
+      - "traefik.http.services.iknos-api.loadbalancer.server.port=8000"
+
+volumes:
+  postgres_data:
+  iknos_backups:
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK}

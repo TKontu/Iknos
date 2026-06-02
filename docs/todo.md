@@ -1,4 +1,4 @@
-# Cairn — Development Plan
+# Iknos — Development Plan
 
 Top-level roadmap. Each phase has a dedicated `todo_phase_N_*.md` with detailed
 tasks, dependencies, and exit criteria. **`architecture.md` is the source of truth**

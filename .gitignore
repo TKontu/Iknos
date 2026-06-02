@@ -5,4 +5,13 @@ __pycache__/
 dist/
 build/
 .env
+.env.*
+.envrc
+!.env.example
+!.env.sample
 *.log
+
+# Unrelated material that happens to live in this working tree (other projects;
+# contain their own .env files). Not part of Iknos.
+factapi_setup/
+local-llm-setup/
