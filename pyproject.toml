@@ -12,6 +12,10 @@ dependencies = [
   "pydantic-settings>=2.7",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
+  "pgvector>=0.3.6",
+  "transformers>=4.48.0",
+  "torch>=2.5.1",
+  "openai>=1.60.0",
 ]
 
 [dependency-groups]

@@ -9,10 +9,10 @@ indexes — knowledge *in*, with source references retained throughout.
 
 ## Embedding substrate (§1)
 
-- [ ] Long-context embedding model run **once** per document; cache contextualized
-      token embeddings ("late chunking" — embed once, derive all granularities).
+- [x] Long-context embedding model run **once** per document; cache contextualized
+      token embeddings ("late chunking" — embed once, derive all granularities). *(Implemented `EmbeddingSubstrate` locally using PyTorch/Transformers to handle `bge-m3` token-level embeddings.)*
 - [ ] Confirm boundary detection, multi-level pooling, and search all read from the
-      cached vectors (no per-level re-embedding).
+      cached vectors (no per-level re-embedding). *(Pooling logic implemented in `DocumentContext`, ready for the segmentation backbone to consume it.)*
 
 ## Segmentation backbone (§2)
 
@@ -39,7 +39,7 @@ indexes — knowledge *in*, with source references retained throughout.
 
 ## Indexing (§4)
 
-- [ ] **Dense** index in pgvector over the chosen granularities.
+- [ ] **Partial.** **Dense** index in pgvector over the chosen granularities. *(Schema `document_embeddings` with `VECTOR(1024)` created in Alembic `0002` migration; index population pending.)*
 - [ ] **Sparse/lexical** index (TF-IDF/BM25) — catches names, codes, acronyms.
 - [ ] Both indexes carry `box` id so retrieval can be scoped to the active working set.
 - [ ] (Keyword/entity index feeds graph nodes in Phase 2 and candidate generation in
