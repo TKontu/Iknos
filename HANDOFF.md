@@ -11,6 +11,9 @@
 - All 7 TDD unit tests pass perfectly.
 - Illustrated on the `attention.md` sample document yielding 25 optimal segments.
 
+## In Progress
+- The Segmentation Backbone logic is merged/pushed to `feature/phase1-increment2-segmentation-backbone`. We are fully prepared to shift focus to the Proposition Layer.
+
 ## Next Steps
 - [ ] Phase 1, Increment 3: **Proposition Layer**. 
 - [ ] Transform sub-paragraph spans into atomic, self-contained statements (resolve pronouns, attach qualifiers, split compound claims).
@@ -21,3 +24,6 @@
 - `src/iknos/core/segmentation.py` - Core algorithms for similarity, valleys, and O(N) DP optimization.
 - `tests/unit/test_segmentation.py` - Exhaustive TDD unit tests guaranteeing the backbone works cleanly.
 - `scripts/illustrate.py` - Example script proving the segmenter on a real 30-page research paper.
+
+## Context
+- The DP chunker successfully handles $O(N)$ semantic segmentation. We must ensure the upcoming Propositionizer LLM tasks are routed to the vLLM instance at `192.168.0.247` and can scale efficiently over these exact `Span` chunks.
