@@ -1,8 +1,8 @@
-# Cairn *(working title — rename as needed)*
+# Iknos
 
 **A self-hosted system that turns text into a traceable, non-monotonic reasoning graph — so experts can investigate complex problems and see *why* the system believes what it does.**
 
-Cairn ingests arbitrary documents, extracts facts, derives conclusions and hypotheses, and links them with evidential edges (*supports* / *refutes*). The result is a knowledge network an expert can explore, audit back to source text, and correct — built for research, investigations, and root-cause analysis.
+Iknos ingests arbitrary documents, extracts facts, derives conclusions and hypotheses, and links them with evidential edges (*supports* / *refutes*). The result is a knowledge network an expert can explore, audit back to source text, and correct — built for research, investigations, and root-cause analysis.
 
 > **Status: pre-implementation.** This repository currently holds the architecture and design. The MVP is not yet built. See [`architecture.md`](architecture.md) for the full specification and [Roadmap](#roadmap) for the staged build. Install and usage instructions will follow the first working stage.
 
@@ -12,7 +12,7 @@ Cairn ingests arbitrary documents, extracts facts, derives conclusions and hypot
 
 Some problems aren't answered by retrieval — they're answered by *reasoning over evidence that conflicts, accumulates, and gets overturned*. A failure investigation, a literature synthesis, a root-cause analysis: the work is assembling facts from many sources, drawing conclusions, forming competing hypotheses, and tracking which evidence supports or refutes each one as new information arrives.
 
-Cairn is built for that. It is an **expert tool**: its output is an *initial conclusion* — a starting point for expert review — not a verdict to be trusted blindly.
+Iknos is built for that. It is an **expert tool**: its output is an *initial conclusion* — a starting point for expert review — not a verdict to be trusted blindly.
 
 ## What makes it different
 

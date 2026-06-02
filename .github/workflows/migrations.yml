@@ -1,0 +1,118 @@
+name: migrations
+
+# Enforces the MIGRATIONS.md invariants on every change to the schema or its
+# tooling:
+#
+#   1. `alembic upgrade head` applies cleanly from an empty database
+#      (single source of schema truth — no parallel init.sql).
+#   2. `alembic downgrade base` reverses every revision (dev rollback works).
+#   3. `alembic upgrade head` re-applies after the downgrade (revisions are
+#      idempotent across a full down/up cycle).
+#   4. There is no pending autogenerate diff — the ORM models and the migrations
+#      agree (relational schema only; AGE graph DDL is op.execute and exempt).
+#
+# Postgres here is built from docker/postgres.Dockerfile so it carries Apache
+# AGE + pgvector, exactly like prod. GitHub `services:` can't build from a
+# Dockerfile, so we build and run the container by hand.
+
+on:
+  push:
+    paths:
+      - "alembic/**"
+      - "src/iknos/db/orm.py"
+      - "docker/postgres.Dockerfile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/migrations.yml"
+  pull_request:
+    paths:
+      - "alembic/**"
+      - "src/iknos/db/orm.py"
+      - "docker/postgres.Dockerfile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/migrations.yml"
+
+jobs:
+  upgrade-downgrade-upgrade:
+    runs-on: ubuntu-latest
+
+    env:
+      POSTGRES_DB: iknos
+      POSTGRES_USER: iknos
+      POSTGRES_PASSWORD: iknos
+      # alembic resolves this; env.py rewrites the driver to psycopg.
+      DATABASE_URL: postgresql+asyncpg://iknos:iknos@localhost:5432/iknos
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build AGE + pgvector postgres image
+        run: docker build -f docker/postgres.Dockerfile -t iknos-postgres:ci .
+
+      - name: Start postgres
+        run: |
+          docker run -d --name iknos-pg \
+            -e POSTGRES_DB="$POSTGRES_DB" \
+            -e POSTGRES_USER="$POSTGRES_USER" \
+            -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            -p 5432:5432 \
+            iknos-postgres:ci
+
+      - name: Wait for postgres to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec iknos-pg pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+              echo "postgres ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "postgres did not become ready" >&2
+          docker logs iknos-pg
+          exit 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --no-dev
+
+      - name: upgrade head (from empty database)
+        run: uv run alembic upgrade head
+
+      - name: downgrade base (full reverse)
+        run: uv run alembic downgrade base
+
+      - name: upgrade head again (re-apply after downgrade)
+        run: uv run alembic upgrade head
+
+      - name: assert no pending autogenerate diff
+        # --autogenerate against an at-head database must produce an empty
+        # migration. If it doesn't, the ORM models drifted from the migrations.
+        # Only the public-schema relational tables are compared; AGE graph DDL
+        # lives in the 'iknos'/ag_catalog schemas and is invisible to
+        # autogenerate (env.py does not set include_schemas), so it is exempt.
+        run: |
+          uv run alembic revision --autogenerate -m "ci_drift_check"
+          GENERATED=$(ls -t alembic/versions/*ci_drift_check*.py 2>/dev/null | head -1)
+          if [ -z "$GENERATED" ]; then
+            echo "autogenerate produced no file — treating as no-diff"
+            exit 0
+          fi
+          # An empty autogenerate writes `pass` in both upgrade() and downgrade().
+          if grep -qE "op\.(create|drop|add|alter|rename)" "$GENERATED"; then
+            echo "ERROR: ORM models drift from migrations — pending operations:" >&2
+            grep -nE "op\.(create|drop|add|alter|rename)" "$GENERATED" >&2
+            rm -f "$GENERATED"
+            exit 1
+          fi
+          echo "no relational drift detected"
+          rm -f "$GENERATED"
+
+      - name: Postgres logs on failure
+        if: failure()
+        run: docker logs iknos-pg

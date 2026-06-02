@@ -1,0 +1,86 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ruff check --fix --quiet $CLAUDE_FILE_PATH || true"
+          },
+          {
+            "type": "command",
+            "command": "ruff format --quiet $CLAUDE_FILE_PATH || true"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(pytest:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(ruff check:*)",
+      "Bash(ruff format:*)",
+      "Bash(mypy:*)",
+      "Bash(uvicorn:*)",
+      "Bash(pip list:*)",
+      "Bash(pip show:*)",
+      "Bash(pip freeze:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(tree:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(cat:*)",
+      "Bash(wc:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git show:*)",
+      "Bash(git fetch origin)",
+      "Bash(git checkout main && git pull origin main)",
+      "Bash(git pull origin main)",
+      "Bash(git checkout -b feat/*)",
+      "Bash(alembic history:*)",
+      "Bash(alembic current:*)",
+      "Bash(alembic heads:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker images:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker-compose restart:*)",
+      "Bash(docker-compose build* && docker-compose up -d :*)",
+      "Bash(docker volume ls | grep *)",
+      "Bash(poetry show:*)",
+      "Bash(poetry env info:*)",
+      "Bash(uv pip list:*)",
+      "Bash(uv pip show:*)",
+      "Bash(celery inspect:*)",
+      "Bash(redis-cli INFO:*)",
+      "Bash(redis-cli KEYS:*)",
+      "Bash(redis-cli GET:*)",
+      "Bash(source *.venv/bin/activate && pytest *)",
+      "Bash(sleep 5 && source *.venv/bin/activate && pytest *)",
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(git add *)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(source .venv/bin/activate && python -c *)",
+      "Bash(git push -u origin feat/*)",
+      "Bash(git commit -m *)",
+      "Bash(git checkout -b feat/*)",
+      "Bash(gh pr create --title * --body *)",
+      "Bash(gh pr view * --json title,url,state | python3 -m json.tool)",
+      "Bash(npx gitnexus analyze)",
+      "Gitnexus - query(*)",
+      "Bash(.venv/bin/python -m pytest --tb=short -q 2>&1 | tail -10)",
+      "Bash(.venv/bin/python -m pytest tests/* -v 2>&1 | tail -*)"
+    ],
+    "deny": [
+      "Bash(cd * && python *)",
+      "Bash(python3 *)",
+      "Bash(python *)"
+    ]
+  }
+}

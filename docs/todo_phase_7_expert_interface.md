@@ -2,7 +2,7 @@
 
 **Goal:** the expert-facing graph analysis view where conclusions are reviewed, audited
 to source, and corrected — with corrections soft, logged, reversible, and fed back as a
-calibration signal. This is what makes Cairn an expert tool (principle 8) and closes
+calibration signal. This is what makes Iknos an expert tool (principle 8) and closes
 the human-in-the-loop.
 
 **Depends on:** Phase 6 (runtime, presentation), and the audit/override plumbing from

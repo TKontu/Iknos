@@ -1,0 +1,54 @@
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
+    image: iknos-postgres:dev
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-iknos}
+      POSTGRES_USER: ${POSTGRES_USER:-iknos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: iknos-api:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-iknos}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-iknos}
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: iknos-api:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-iknos}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-iknos}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./src:/app/src
+    ports:
+      - "${API_PORT:-8000}:8000"
+    command: ["uvicorn", "iknos.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
+
+volumes:
+  postgres_data:
