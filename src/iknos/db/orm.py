@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import TIMESTAMP, Text, text
+from sqlalchemy import TIMESTAMP, Index, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -31,6 +31,10 @@ class DocumentContent(Base):
 
 class Action(Base):
     __tablename__ = "actions"
+    __table_args__ = (
+        Index("ix_actions_timestamp", "timestamp"),
+        Index("ix_actions_actor_type", "actor", "action_type"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")

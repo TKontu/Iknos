@@ -60,6 +60,12 @@ def upgrade() -> None:
     for label in EDGE_LABELS:
         op.execute(f"SELECT create_elabel('iknos', '{label}')")
 
+    # AGE prepended ag_catalog to the search_path above. Reset it so the
+    # relational tables/indexes below are created in `public` — otherwise they
+    # land in ag_catalog and the downgrade (which drops from public) cannot find
+    # them. Keep the graph DDL above and the relational DDL below schema-separated.
+    op.execute("SET search_path = public")
+
     op.create_table(
         "document_content",
         sa.Column("document_id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -112,8 +118,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_actions_actor_type", "actions")
-    op.drop_index("ix_actions_timestamp", "actions")
+    # Relational objects live in `public` (see the search_path reset in upgrade).
+    # Pin it explicitly so these drops resolve regardless of the role's default.
+    op.execute("SET search_path = public")
+    op.drop_index("ix_actions_actor_type", table_name="actions")
+    op.drop_index("ix_actions_timestamp", table_name="actions")
     op.drop_table("actions")
     op.drop_table("document_content")
 

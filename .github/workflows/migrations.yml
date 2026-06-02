@@ -93,9 +93,11 @@ jobs:
       - name: assert no pending autogenerate diff
         # --autogenerate against an at-head database must produce an empty
         # migration. If it doesn't, the ORM models drifted from the migrations.
-        # Only the public-schema relational tables are compared; AGE graph DDL
-        # lives in the 'iknos'/ag_catalog schemas and is invisible to
-        # autogenerate (env.py does not set include_schemas), so it is exempt.
+        # Only public-schema relational tables are compared: env.py pins the
+        # search_path to public (the DB role 'iknos' shares its name with the
+        # AGE graph schema, which would otherwise be current_schema()) and an
+        # include_object filter drops anything outside public, so the AGE graph
+        # DDL in the 'iknos'/ag_catalog schemas is exempt.
         run: |
           uv run alembic revision --autogenerate -m "ci_drift_check"
           GENERATED=$(ls -t alembic/versions/*ci_drift_check*.py 2>/dev/null | head -1)

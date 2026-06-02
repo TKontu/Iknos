@@ -10,7 +10,7 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, event, pool
 
 from alembic import context
 
@@ -48,6 +48,17 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _include_object(obj, name, type_, reflected, compare_to) -> bool:
+    """Keep autogenerate to ORM-managed relational tables only.
+
+    Apache AGE creates a schema named after the graph ('iknos') plus tables in
+    ag_catalog. None of that is ORM-managed, so anything outside `public` is
+    excluded from the autogenerate comparison.
+    """
+    schema = getattr(obj, "schema", None)
+    return schema in (None, "public")
+
+
 def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section) or {}
     section["sqlalchemy.url"] = _resolve_url()
@@ -56,8 +67,28 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+
+    # The DB role is also the AGE graph name ('iknos'), so once create_graph()
+    # has run the `"$user"` entry in the default search_path resolves to the
+    # graph schema. That would make current_schema() the graph schema, which
+    # SQLAlchemy caches as default_schema_name at connect time — placing
+    # alembic_version (and autogenerate's reflection target) in the graph schema
+    # instead of public, and inconsistently so across an up/down/up cycle. Pin
+    # the search_path to public on every new DBAPI connection, before the
+    # dialect inspects current_schema(), so the relational default schema is
+    # always public. Migrations that touch AGE set ag_catalog locally as needed.
+    @event.listens_for(connectable, "connect")
+    def _pin_search_path(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET search_path TO public")
+        cursor.close()
+
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=_include_object,
+        )
         with context.begin_transaction():
             context.run_migrations()
 
