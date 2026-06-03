@@ -8,7 +8,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import TIMESTAMP, Index, Text, text
+from sqlalchemy import TIMESTAMP, Index, Text, text, Integer, ForeignKey
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -54,3 +55,19 @@ class Action(Base):
     sampling: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     raw_judgment: Mapped[str | None] = mapped_column(Text)
     calibration: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class DocumentEmbedding(Base):
+    __tablename__ = "document_embeddings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("document_content.document_id", ondelete="CASCADE"), nullable=False
+    )
+    span_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # Matches graph node id, optional constraints since graph is in AGE
+    span_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    span_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    level: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)

@@ -9,6 +9,7 @@ initial migration but get their Pydantic models in later phases.
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -68,4 +69,4 @@ class Fact(BaseModel):
     statement: str
     annotations: Annotations
     temporal: BitemporalFields
-    override: dict | None = None  # §10.3 — logic lands in Phase 7
+    override: dict[str, Any] | None = None  # §10.3 — logic lands in Phase 7

@@ -8,6 +8,7 @@ Two categories:
 
 import uuid
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -39,4 +40,4 @@ class EvidentialEdge(BaseModel):
     significance: float = Field(..., ge=0.0, le=1.0)
     annotations: Annotations
     temporal: BitemporalFields
-    override: dict | None = None
+    override: dict[str, Any] | None = None

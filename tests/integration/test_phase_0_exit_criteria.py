@@ -68,11 +68,12 @@ async def test_phase_0_end_to_end(session: AsyncSession) -> None:
 
     span_id = uuid.uuid4()
     span_start, span_end = 0, 49
+    span_props = _props(
+        {"id": str(span_id), "document_id": str(doc_id), "start": span_start, "end": span_end}
+    )
     await execute_cypher(
         session,
-        "CREATE (:Span "
-        f"{_props({'id': str(span_id), 'document_id': str(doc_id), 'start': span_start, 'end': span_end})}"
-        ")",
+        f"CREATE (:Span {span_props})",
     )
 
     resolved = await resolve_span_text(session, doc_id, span_start, span_end)
