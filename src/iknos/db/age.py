@@ -9,12 +9,37 @@ AGE quirks driving this module:
 - Results come back as `agtype` columns; callers parse them.
 """
 
+import json
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.config import settings
+
+
+def cypher_map(props: dict[str, Any]) -> str:
+    """Serialize a dict into a Cypher map literal, e.g. ``{id: 'abc', n: 3}``.
+
+    AGE's cypher() cannot bind parameters into the Cypher body (see module
+    docstring), so values must be inlined into the query text. Strings are
+    single-quote escaped; never pass untrusted keys (only values are escaped).
+    """
+    parts: list[str] = []
+    for k, v in props.items():
+        if isinstance(v, str):
+            esc = v.replace("\\", "\\\\").replace("'", "\\'")
+            parts.append(f"{k}: '{esc}'")
+        elif isinstance(v, bool):
+            parts.append(f"{k}: {'true' if v else 'false'}")
+        elif isinstance(v, (int, float)):
+            parts.append(f"{k}: {v}")
+        elif v is None:
+            parts.append(f"{k}: null")
+        else:
+            esc = json.dumps(v).replace("\\", "\\\\").replace("'", "\\'")
+            parts.append(f"{k}: '{esc}'")
+    return "{" + ", ".join(parts) + "}"
 
 
 async def bootstrap_session(session: AsyncSession) -> None:
@@ -38,6 +63,13 @@ async def execute_cypher(
     query: str,
     returns: str = "result agtype",
 ) -> list[Any]:
-    """Run a Cypher query, return the rows."""
-    result = await session.execute(text(cypher(query, returns)))
+    """Run a Cypher query, return the rows.
+
+    Uses ``exec_driver_sql`` rather than ``text()`` so the raw SQL goes straight
+    to the driver. AGE's Cypher uses ``:Label`` / ``:TYPE`` syntax, which SQLAlchemy's
+    ``text()`` would otherwise misparse as ``:name`` bind parameters. Binding into the
+    Cypher body is impossible anyway (see module docstring), so raw execution is correct.
+    """
+    conn = await session.connection()
+    result = await conn.exec_driver_sql(cypher(query, returns))
     return list(result.all())

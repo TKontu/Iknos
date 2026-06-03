@@ -8,9 +8,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import TIMESTAMP, Index, Text, text, Integer, ForeignKey
 from pgvector.sqlalchemy import Vector
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import TIMESTAMP, ForeignKey, Index, Integer, Text, text
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -64,10 +64,60 @@ class DocumentEmbedding(Base):
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
     document_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("document_content.document_id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("document_content.document_id", ondelete="CASCADE"),
+        nullable=False,
     )
-    span_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))  # Matches graph node id, optional constraints since graph is in AGE
+    span_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True)
+    )  # Matches graph node id, optional constraints since graph is in AGE
     span_start: Mapped[int] = mapped_column(Integer, nullable=False)
     span_end: Mapped[int] = mapped_column(Integer, nullable=False)
     level: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+
+
+class PropositionEmbedding(Base):
+    """Dense index over decontextualized proposition text (§4).
+
+    Propositions are rewritten text that does not appear in the document, so they
+    cannot be pooled from the cached late-chunking embeddings — they are embedded
+    afresh via EmbeddingSubstrate.embed_passages. `proposition_id` matches the AGE
+    node id; there is no cross-store FK since the graph lives in AGE.
+    """
+
+    __tablename__ = "proposition_embeddings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    proposition_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("document_content.document_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+
+
+class PropositionLexicalIndex(Base):
+    """Sparse lexical-exact index over proposition text (§4).
+
+    Built with the Postgres `simple` text-search config (unstemmed, no stop-words)
+    so codes/acronyms survive verbatim for exact recall — not stemmed BM25 ranking.
+    The GIN index on `lexemes` is created in the migration.
+    """
+
+    __tablename__ = "proposition_lexical_index"
+
+    proposition_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("document_content.document_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    lexemes: Mapped[str] = mapped_column(TSVECTOR, nullable=False)
