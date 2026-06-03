@@ -108,10 +108,12 @@ class PropositionLexicalIndex(Base):
 
     Built with the Postgres `simple` text-search config (unstemmed, no stop-words)
     so codes/acronyms survive verbatim for exact recall — not stemmed BM25 ranking.
-    The GIN index on `lexemes` is created in the migration.
+    The GIN index on `lexemes` is declared here (and created by the migration) so
+    the ORM and migrations stay drift-free.
     """
 
     __tablename__ = "proposition_lexical_index"
+    __table_args__ = (Index("ix_proposition_lexical_lexemes", "lexemes", postgresql_using="gin"),)
 
     proposition_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     document_id: Mapped[uuid.UUID] = mapped_column(
