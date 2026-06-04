@@ -10,9 +10,12 @@ async def resolve_span_text(
     session: AsyncSession, document_id: uuid.UUID, start: int, end: int
 ) -> str | None:
     """Return the substring of the document's raw_text at [start, end)."""
+    # Use substr(text, int, int) rather than the SQL `substring(... FROM ... FOR ...)`
+    # keyword form: the latter is type-ambiguous (it also has a regex overload), so
+    # asyncpg infers the positional args as text and rejects the integer offsets.
     row = await session.execute(
         text(
-            "SELECT substring(raw_text FROM :start_pos FOR :length) "
+            "SELECT substr(raw_text, :start_pos, :length) "
             "FROM document_content WHERE document_id = :doc_id"
         ),
         {"doc_id": document_id, "start_pos": start + 1, "length": end - start},
