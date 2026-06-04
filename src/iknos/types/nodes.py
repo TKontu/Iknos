@@ -1,9 +1,9 @@
 """Reasoning-graph nodes (§10). Pydantic projections of AGE vertices.
 
 Phase 0 covers the minimal set needed for the exit-criteria smoke test.
-Remaining labels (Proposition, Actor, Object, DeductiveConclusion,
-InductiveConclusion, Hypothesis) are pre-created in the AGE graph by the
-initial migration but get their Pydantic models in later phases.
+Remaining labels (Actor, Object, DeductiveConclusion, InductiveConclusion,
+Hypothesis) are pre-created in the AGE graph by the initial migration but get
+their Pydantic models in later phases. Proposition lands in Phase 1 Increment 3.
 """
 
 import uuid
@@ -43,6 +43,20 @@ class Span(BaseModel):
     document_id: uuid.UUID
     start: int = Field(..., ge=0)
     end: int = Field(..., ge=0)
+
+
+class Proposition(BaseModel):
+    """A decontextualized atomic statement (§3, §10).
+
+    Provenance is carried by the EVIDENCED_BY edge to the source Span(s), never
+    embedded here — so no document_id field (it is reachable via the span). `box`
+    is deferred to Phase 2, which owns boxing/tiers (tracked deviation from §10).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: uuid.UUID
+    text: str
 
 
 class Box(BaseModel):
