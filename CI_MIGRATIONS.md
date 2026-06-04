@@ -85,6 +85,31 @@ regardless, so leave the guards in place.
   the migration, so autogenerate flagged them as drift forever until the ORM
   matched.
 
+## Runtime query-layer gotchas (not migrations)
+
+These are **not** migration bugs — they live in the DB access layer, not Alembic — but
+they share this doc's thesis: **AGE + SQLAlchemy + asyncpg surprise you with raw
+SQL/Cypher, and only a live-AGE run reveals it.** Both sat latent until the Phase 0
+integration test was first run against a real database (the `migrations` workflow only
+exercises Alembic, never `pytest` — see the checklist note below). Recorded so they
+aren't reintroduced:
+
+- **Issuing Cypher: use `exec_driver_sql`, not `text()`.** AGE Cypher uses `:Label` /
+  `:TYPE` syntax (`CREATE (:Document {...})`, `-[:SUPPORTS]->`). SQLAlchemy's `text()`
+  parses `:word` as a `:bind` parameter, so the label becomes an unbound param
+  (`A value is required for bind parameter 'Document'`). Binding into the Cypher body is
+  impossible anyway, so run the wrapped SQL raw via
+  `(await session.connection()).exec_driver_sql(...)`. Fixed in `src/iknos/db/age.py`.
+- **Raw SQL offsets under asyncpg: prefer `substr(text, int, int)`.** The keyword form
+  `substring(col FROM :a FOR :b)` is type-ambiguous (it also has a regex overload), so
+  asyncpg infers the integer offsets as `text` and rejects them
+  (`invalid input for query argument $1: ... expected str, got int`). The function-call
+  form `substr(col, :a, :b)` is unambiguous. Fixed in `src/iknos/db/spans.py`.
+
+The durable guard against these is a CI job that runs `pytest` against the live AGE
+image (the way `migrations.yml` runs Alembic) — not yet wired. Until it is, any new
+DB-access code must be exercised against a live AGE DB before merge.
+
 ## Checklist for any new migration
 
 - [ ] In `upgrade()`, if you touch AGE (`create_graph`/`create_vlabel`/etc.), set
