@@ -6,9 +6,9 @@ Create Date: 2026-06-02
 
 """
 
+import pgvector.sqlalchemy
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-import pgvector.sqlalchemy
 
 from alembic import op
 
@@ -16,6 +16,7 @@ revision = "0002_add_document_embeddings"
 down_revision = "0001_initial"
 branch_labels = None
 depends_on = None
+
 
 def upgrade() -> None:
     op.create_table(
@@ -38,6 +39,7 @@ def upgrade() -> None:
         sa.Column("level", sa.Integer(), nullable=False),
         sa.Column("embedding", pgvector.sqlalchemy.Vector(1024), nullable=False),
     )
+
 
 def downgrade() -> None:
     op.drop_table("document_embeddings")
