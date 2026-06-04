@@ -1,0 +1,95 @@
+name: tests
+
+# Runs the pytest suite against a live Apache AGE + pgvector database.
+#
+# Why this exists: the `migrations` workflow exercises a live DB only through
+# Alembic (up/down/up + drift). Nothing else ran pytest against a real database,
+# so runtime query-layer bugs shipped undetected — e.g. Cypher labels misparsed
+# as bind params, and `substring(... FROM ... FOR ...)` failing type inference
+# under asyncpg (see CI_MIGRATIONS.md → "Runtime query-layer gotchas"). The
+# integration tests catch exactly those, but only against a live AGE DB.
+#
+# Postgres is built from docker/postgres.Dockerfile so it carries AGE + pgvector
+# like prod. GitHub `services:` can't build from a Dockerfile, so we build and
+# run the container by hand (same recipe as migrations.yml).
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "docker/postgres.Dockerfile"
+      - ".github/workflows/tests.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "docker/postgres.Dockerfile"
+      - ".github/workflows/tests.yml"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    env:
+      CI: "true"
+      POSTGRES_DB: iknos
+      POSTGRES_USER: iknos
+      POSTGRES_PASSWORD: iknos
+      # Drives both alembic (env.py rewrites the driver to psycopg) and the
+      # integration tests' async engine (asyncpg).
+      DATABASE_URL: postgresql+asyncpg://iknos:iknos@localhost:5432/iknos
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build AGE + pgvector postgres image
+        run: docker build -f docker/postgres.Dockerfile -t iknos-postgres:ci .
+
+      - name: Start postgres
+        run: |
+          docker run -d --name iknos-pg \
+            -e POSTGRES_DB="$POSTGRES_DB" \
+            -e POSTGRES_USER="$POSTGRES_USER" \
+            -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            -p 5432:5432 \
+            iknos-postgres:ci
+
+      - name: Wait for postgres to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec iknos-pg pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+              echo "postgres ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "postgres did not become ready" >&2
+          docker logs iknos-pg
+          exit 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies (with dev — pytest lives in the dev group)
+        run: uv sync
+
+      - name: Create schema (graph + relational + pgvector)
+        run: uv run alembic upgrade head
+
+      - name: Run test suite (unit + live-DB integration)
+        # CI=true makes tests/integration/conftest.py hard-fail rather than skip
+        # if DATABASE_URL is missing, so the job can never go green without
+        # actually exercising the database.
+        run: uv run pytest tests/ -v
+
+      - name: Postgres logs on failure
+        if: failure()
+        run: docker logs iknos-pg
