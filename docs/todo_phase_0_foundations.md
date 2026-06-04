@@ -7,14 +7,21 @@ provenance and audit plumbing in place from the start. Everything else builds on
 **Architecture refs:** §6 (storage), §10 (schema), §9 (boxes/tiers — registry), §10.1
 (action log), principles 4, 6, 7, 9.
 
-> **Status (reviewed 2026-06-02):** Substantially complete — all four exit criteria are
-> implemented and exercised by `tests/integration/test_phase_0_exit_criteria.py`. Three
-> items are carried forward (each annotated `→ deferred` below): the `WITH RECURSIVE`
-> reachability helper (needed in Phase 3), the pgvector embeddings table (Phase 1 §1),
-> and wiring the test suite into CI. **Caveat:** the integration test requires a live
-> AGE DB and the host forbids `docker compose up`, so the exit-criteria test is written
-> but has **not yet been executed** here — only the `migrations` CI (up/down/up + drift)
-> runs against a live DB. Treat the exit criteria as *coded, pending a verified run*.
+> **Status (updated 2026-06-04):** **Complete.** All four exit criteria are implemented
+> and asserted in `tests/integration/test_phase_0_exit_criteria.py`, and that test now
+> **runs green against a live AGE+pgvector DB** — both manually and on every push via the
+> `tests` CI workflow (`.github/workflows/tests.yml`). The earlier "coded, pending a
+> verified run" caveat is resolved.
+>
+> The first live run surfaced two latent DB-layer bugs that the schema-only `migrations`
+> CI could never have caught — `db/age.py` (Cypher `:Label` misparsed as a SQLAlchemy
+> bind param) and `db/spans.py` (`substring(... FROM ... FOR ...)` failing asyncpg type
+> inference); both fixed (see `CI_MIGRATIONS.md` → "Runtime query-layer gotchas"). The
+> pgvector embeddings table also landed (migration `0002`, via Phase 1 Increment 1).
+>
+> **Only two line items carry forward**, both genuinely owned by later phases: the
+> `WITH RECURSIVE` reachability helper (→ Phase 3) and `LICENSE`/dependency-license
+> tracking (→ licensing cross-cutting track).
 
 ## Project scaffolding
 
@@ -29,9 +36,10 @@ provenance and audit plumbing in place from the start. Everything else builds on
       `pyproject.toml`/`uv.lock`. **No `LICENSE` file or formal license inventory yet**
       → deferred to the licensing cross-cutting track.)*
 - [x] CI skeleton + test harness; reserve a fixture-corpus location for later phases.
-      *(`tests/{unit,integration}` + `tests/fixtures/corpus/`; `.github/workflows/migrations.yml`.
-      **CI runs only the migration up/down/up + drift check — it does not yet run
-      pytest** → see deferred item under Exit criteria.)*
+      *(`tests/{unit,integration}` + `tests/fixtures/corpus/`. Two workflows:
+      `.github/workflows/migrations.yml` (Alembic up/down/up + drift) and
+      `.github/workflows/tests.yml` (builds the AGE+pgvector image and runs the full
+      pytest suite, incl. live-DB integration, on every push).)*
 
 ## Storage engine
 
@@ -70,11 +78,10 @@ provenance and audit plumbing in place from the start. Everything else builds on
       *(`types/temporal.py::BitemporalFields`.)*
 - [x] `override` property placeholder on reasoning nodes/edges (logic in Phase 7,
       §10.3). *(`override: dict | None` on `Fact` and `EvidentialEdge`.)*
-- [ ] **Partial.** Relational tables: raw text + offsets keyed by `Document.id`; pgvector
-      table for embeddings; join-by-id to the graph. *(`document_content` (raw text) + `actions`
-      done; span offsets live on `Span` graph nodes joined by id. **The pgvector
-      embeddings table is NOT created** — the `vector` extension is enabled but the
-      table itself is Phase 1 §1 (embedding substrate) → deferred to Phase 1.)*
+- [x] Relational tables: raw text + offsets keyed by `Document.id`; pgvector
+      table for embeddings; join-by-id to the graph. *(`document_content` (raw text) +
+      `actions` from `0001`; span offsets live on `Span` graph nodes joined by id; the
+      pgvector `document_embeddings` table landed in `0002` (Phase 1 Increment 1).)*
 
 ## Provenance & audit plumbing (must exist now, not later)
 
@@ -98,13 +105,11 @@ provenance and audit plumbing in place from the start. Everything else builds on
 - [x] The schema is documented in code as the single contract; matches `architecture.md`
       §10.
 
-> All four are implemented and asserted in `tests/integration/test_phase_0_exit_criteria.py`.
-> **Not yet verified by an actual run** — the test needs a live AGE DB (`DATABASE_URL`)
-> and the host forbids `docker compose up`. **→ deferred:** (a) wire a `tests` CI job
-> that brings up the AGE image (as `migrations.yml` does) and runs pytest, so the
-> exit-criteria test executes on every change; (b) or get one-off approval to bring up
-> postgres locally for a single verifying run. Until then the criteria are *coded,
-> pending green*.
+> All four are implemented and asserted in `tests/integration/test_phase_0_exit_criteria.py`,
+> **verified green against a live AGE+pgvector DB** — manually, and on every push via the
+> `tests` workflow (which builds the AGE image, migrates it, and runs the suite). The
+> conftest hard-fails under CI if `DATABASE_URL` is unset, so the live-DB tests can never
+> silently skip to a false green.
 
 ## Phase risks / decisions
 
@@ -119,9 +124,8 @@ provenance and audit plumbing in place from the start. Everything else builds on
 ## Carried into later phases (open Phase 0 line items)
 
 - **`WITH RECURSIVE` transitive-reachability helper** → Phase 3 (retraction closure is
-  its first consumer).
-- **pgvector embeddings table** → Phase 1 §1 (embedding substrate owns the schema).
-- **`tests` CI job running pytest against a live AGE image** → so the Phase 0
-  exit-criteria test (and later integration tests) actually execute. Currently only the
-  `migrations` workflow touches a live DB.
+  its first consumer; no consumer exists yet).
 - **`LICENSE` file + dependency license inventory** → licensing cross-cutting track.
+
+*(Resolved since the 2026-06-02 review: pgvector embeddings table — `0002`; `tests` CI
+job running pytest against live AGE — `tests.yml`; exit-criteria test verified green.)*
