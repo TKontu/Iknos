@@ -26,6 +26,15 @@ deprecation), §12 (propagation), §13 (trigger policy).
 - [ ] **Decide and implement the re-evaluation trigger policy** (open item, §13):
       eager propagation vs lazy recompute-on-read, and the propagation bound. This
       shapes the Layer A↔B interface.
+- [ ] **Split cheap vs expensive re-analysis (§6.1):** symbolic re-propagation (Layer
+      A/B, QBAF) on the delta-affected sub-graph runs **freely** (no LLM); expensive LLM
+      **re-inference** runs only where **VoI** (§11.1) says it could change the
+      conclusion. Beyond the VoI threshold, skip re-analysis.
+- [ ] **Budget-bounded mode:** under a fixed budget, spend LLM re-inference in VoI order
+      and stop at budget/threshold; flag un-inferred regions provisional, not dropped.
+- [ ] **Re-inference monotonicity (§12):** an expensive re-inference runs **at most once
+      per evidence-state** of a region (cache key = content + region state hash) and the
+      budget strictly decreases — so the VoI↔re-inference loop cannot churn.
 
 ## Box lifecycle (§9)
 
@@ -34,6 +43,15 @@ deprecation), §12 (propagation), §13 (trigger policy).
 - [ ] Promotion pathway (gated, explicit, never automatic): a validated working
       conclusion can change box membership into the reference tier. Define the gate
       check (what must hold before promotion).
+- [ ] **Pack/taxonomy versioning (§9.1):** packs are versioned + bitemporal; anchors are
+      stamped with the pack version; a pack update is a bitemporal supersession that
+      triggers delta-scoped, value-gated belief revision on dependent anchors (re-anchor,
+      re-derive levels); removed/merged taxonomy nodes handled like entity merge/split
+      (§5.2); broken anchors fall back to induced level + review.
+- [ ] **Sensitivity propagation (§9.1):** derived nodes inherit the max (least upper
+      bound) of their antecedents' `sensitivity` along provenance; re-propagate on change.
+- [ ] **Track-record credibility revision (§9.1):** when a source's claim is refuted,
+      lower its credibility for its other claims (belief-revised).
 
 ## Exit criteria
 

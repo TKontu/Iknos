@@ -9,17 +9,52 @@ for every design decision; phase files reference it by section (§).
 - **Thin slice first, then harden.** Build minimal versions through Phases 1–4,
   prove the end-to-end loop with the validation experiment, *then* scale and harden.
   Do not gold-plate a layer before the loop works.
+- **Earn the complexity; prove efficacy on real evidence.** The synthetic gate proves
+  mechanisms, not worth — so beat a cheap baseline (RAG / agentic RAG / expert+search) on
+  the differentiator axes *early* as a go/no-go, ablate to find the value-carrying
+  components, and climb the validity ladder (synthetic → retrospective real →
+  prospective). Never claim efficacy from the synthetic gate alone (Instrument E).
 - **Provenance and audit are not a phase — they are present from day one.** Every
   node, edge, and operator carries provenance and emits a process-action record from
   Phase 0 onward (principles 4 and 9). Auditability cannot be retrofitted.
 - **Two annotations from day one.** Every fact/edge carries both an integer
   support-count (Layer A) and a `[0,1]` confidence (Layer B); never collapsed (§12).
-- **LLM proposes, engine disposes (principle 6).** No LLM output mutates a maintained
-  value directly; it enters as a defeasible, provenance-stamped input.
+- **LLM proposes, engine disposes (principle 6) — including at the perception layer.**
+  No LLM output mutates a maintained value directly; it enters as a defeasible,
+  provenance-stamped input. This extends to *extraction*: propositions carry structured
+  epistemic fields (polarity/modality/attribution), references are bound by scored
+  `REFERS_TO` edges, extraction is verified (extract-then-verify), and low-faithfulness
+  atoms are quarantined from high-stakes use and routed to expert review (§3.1).
 - **Build, not buy; self-hosted, open-source (principle 7).** No commercial
   components; copyleft only as reference to re-implement.
 - **Present the network, not a verdict (principle 8).** The system never has to
   converge; unresolved/circular structure is surfaced, not forced.
+- **Four distinct hierarchies, never conflated (§2, `DERIVED_FROM`, §14, §6).** Text
+  chunk levels, the derivation structure, the entity part-whole (`PART_OF`) partonomy,
+  and the associative community structure (§6) are separate; community ≠ partonomy. A
+  fact's abstraction level is *derived* from its referent's position in `partOf`, not
+  stored; views are projections (cuts) over it.
+- **Goal-directed by a first-class Task (§11.2).** An investigation is framed by a
+  `Task` (the question + type) in a distinct *intentional* layer — answered, not
+  adjudicated. It scopes retrieval, candidates, and hypothesis formation, defines the
+  decision VoI/re-inference optimize for, and supplies the stopping criterion (answered
+  to threshold). Hypotheses seed from decomposition + domain-pack reference sets + the
+  expert; true/plausible/implausible/false is banded acceptability. Optional overlay —
+  undirected exploration still works.
+- **Bounded, incremental cost (§6.1).** Reference corpus processed once and reused;
+  LLM outputs content-addressed-cached; symbolic re-propagation on the delta runs freely
+  (no LLM); expensive LLM re-inference is VoI-gated and budget-bounded. Changes touch
+  only related parts — linear in the affected region, never exponential.
+- **Direct scarce expert attention by value of information (§11.1).** The system
+  produces more than any expert can review, so one ranked, budgeted queue — fed by every
+  needs-human signal and ordered by `leverage × uncertainty × significance` — decides
+  what gets reviewed first. No LLM in the ranking; it must beat cheaper baselines or be
+  replaced by them.
+- **Multi-domain via pluggable domain packs (§9).** The epistemic schema (facts,
+  conclusions, hypotheses, evidence) is fixed and domain-agnostic; the domain layer
+  (entity types, part-whole taxonomy, rules) is a domain pack = reference-tier box(es).
+  Reliability is a function of anchoring: a domain works well to the extent its pack's
+  taxonomy covers the referents; thin coverage means provisional levels + review.
 
 ## Phases
 
@@ -33,6 +68,7 @@ for every design decision; phase files reference it by section (§).
 | 5 | Temporal dynamics & belief revision | Bitemporal supersession, revision triggers, box deprecation |
 | 6 | Investigation runtime & analysis | The investigation loop end-to-end, network analysis, presentation |
 | 7 | Expert interface | Graph view, audit drill-down, soft override & reconciliation |
+| + | Presentation views *(optional)* | Radar, **table/bulk-edit** & coordinated projections of the hypothesis layer — `todo_presentation_views.md`. Editing via existing override machinery; no backend changes; layered on Phase 7 |
 
 ## Dependency order
 
@@ -74,15 +110,28 @@ The architecture's first milestone (§8 *Proposed small-scale experiment*). On a
 fixed corpus with deliberately planted contradictions and a later overturning fact,
 measure:
 
-- [ ] Counting-based retraction propagates correctly and stays local (Phase 3)
+- [ ] Counting/DRed well-founded retraction propagates correctly and stays local (Phase 3)
 - [ ] QBAF hypothesis state flips correctly when the overturning fact lands (Phase 4)
 - [ ] Consistency-based confidence beats raw verbalized confidence on the planted set
 - [ ] Ensemble contradiction detection beats a single LLM call
 - [ ] Candidate generation recalls the planted edges — **especially the refuting ones**
       (the dissimilar-refuter test, §5.1)
+- [ ] Extraction faithfulness and entity resolution clear their bars (Trials A5, A6)
 
-**Do not harden any layer until the gate passes.** A failure here changes the design,
-not just the code.
+**This synthetic gate proves *mechanisms*, not *efficacy*.** Two more checks are required
+before committing to the full build:
+
+- [ ] **Beat the cheap baseline (go/no-go, Trial E1)** — material lift over plain RAG /
+      agentic RAG / expert+search on the differentiator axes (contradiction handling,
+      retraction, traceability, calibration), bias-controlled. If not, **stop and rethink**.
+- [ ] **Ablation (Trial E2)** — which components carry the value; the data-driven minimal
+      system if descoping is needed.
+- [ ] **Ecological validity (Trial E3)** — run on a real, already-resolved case (messy
+      evidence, known answer). Climb the ladder: synthetic → retrospective real →
+      prospective/live; never claim efficacy from the synthetic gate alone.
+
+**Do not harden any layer or start Phases 5–7 until the gate passes *and* E1 is go.** A
+failure here changes the design, not just the code.
 
 ## Cross-cutting tracks (run through every phase)
 
@@ -92,6 +141,11 @@ not just the code.
   Phase 1; the planted-contradiction corpus from the gate kept as a regression suite.
 - **Licensing/compliance** — track dependency licenses; keep the fully-open stack
   (Postgres + AGE + pgvector, igraph, clingo) viable; isolate any GPL reference code.
+- **Governance (§9.1)** — sensitivity labels propagate over provenance and gate views by
+  clearance; source credibility is conditional (base × interest, against-interest boost)
+  and track-record-revised; corroboration is independence-aware; packs are versioned/
+  bitemporal; cold-start runs induce-mode + promotion-bootstrap. Present from the schema
+  up, not bolted on.
 
 ## Open questions & risks
 
@@ -104,3 +158,5 @@ are surfaced in the phase that must resolve them:
 - Cyclic-region presentation policy → Phase 6
 - Truth-maintenance placement (in-Postgres vs alongside via DBSP) → Phase 3 (MVP), revisit at scale
 - LLM judging bias / correlated error → Phase 4 (disciplines) + Phase 7 (expert calibration loop)
+- Part-whole hierarchy acquisition quality (taxonomy anchor / meronymy / relative ordering) → Phase 2 + gate
+- Mixed-level frontier rendering (adaptive abstraction per audience/region) → Phase 6
