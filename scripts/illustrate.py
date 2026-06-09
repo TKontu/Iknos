@@ -1,20 +1,6 @@
-import re
-
 from iknos.core.embeddings import EmbeddingSubstrate
+from iknos.core.ingest import split_sentences
 from iknos.core.segmentation import SegmentationBackbone
-
-
-def get_sentences(text):
-    sentences = []
-    # Basic heuristic sentence splitter that preserves offsets
-    # Looks for sentence-ending punctuation followed by space or newline
-    pattern = re.compile(r"[^.!?\n]+(?:[.!?]+(?=\s|$)|$)")
-    for match in pattern.finditer(text):
-        s_text = match.group().strip()
-        if not s_text:
-            continue
-        sentences.append({"text": s_text, "start_char": match.start(), "end_char": match.end()})
-    return sentences
 
 
 def main():
@@ -24,7 +10,7 @@ def main():
 
     print(f"Loaded {file_path} ({len(text)} characters)")
 
-    sentences = get_sentences(text)
+    sentences = split_sentences(text)
     print(f"Parsed {len(sentences)} sentences.")
 
     print("Loading EmbeddingSubstrate (bge-m3)...")
