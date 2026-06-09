@@ -1,0 +1,26 @@
+{
+  "name": "pump-basic",
+  "version": "0.1.0",
+  "tier": "reference",
+  "source": "iknos:bundled",
+  "reliability_prior": 0.9,
+  "description": "Trivial mechanical part-whole pack: a pump and its components. Exercises the component-integral roll-up rule (§14) — roller rolls up to pump through bearing, but its steel does not.",
+  "entity_types": [
+    {"name": "Assembly", "description": "A whole made of integral components."},
+    {"name": "Component", "description": "An integral part of an assembly."},
+    {"name": "Material", "description": "Stuff an object is made of."}
+  ],
+  "entities": [
+    {"key": "pump", "label": "Centrifugal pump", "type": "Assembly"},
+    {"key": "bearing", "label": "Rolling-element bearing", "type": "Component"},
+    {"key": "roller", "label": "Roller", "type": "Component"},
+    {"key": "housing", "label": "Pump housing", "type": "Component"},
+    {"key": "steel", "label": "Bearing steel", "type": "Material"}
+  ],
+  "part_of": [
+    {"part": "roller", "whole": "bearing", "meronymy": "component-integral"},
+    {"part": "bearing", "whole": "pump", "meronymy": "component-integral"},
+    {"part": "housing", "whole": "pump", "meronymy": "component-integral"},
+    {"part": "steel", "whole": "bearing", "meronymy": "stuff-object"}
+  ]
+}
