@@ -11,6 +11,10 @@ build/
 !.env.sample
 *.log
 
+# Local working handoff note — session-to-session scratch, intentionally not
+# tracked (each working copy keeps its own).
+HANDOFF.md
+
 # Unrelated material that happens to live in this working tree (other projects;
 # contain their own .env files). Not part of Iknos.
 factapi_setup/
