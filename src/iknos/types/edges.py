@@ -22,6 +22,33 @@ class EdgeSign(StrEnum):
     REFUTES = "refutes"
 
 
+class Role(StrEnum):
+    """The ``role`` property on an ``INVOLVES`` edge (§10).
+
+    ``INVOLVES`` links a reasoning node (Fact/Conclusion/Hypothesis) to an
+    Actor/Object, tagged with the entity's role in the claim. The vocabulary is
+    open in the same sense as ``TaskType`` — adding a member is additive (the
+    value is a stored string; no migration) — so unusual roles do not force a
+    break. The ``Involves`` Pydantic projection lands with Actor/Object in
+    Phase 2; the property *contract* is fixed here now (the Phase 0 convention).
+
+    **Why ``subject`` is privileged — abstraction level is *derived*, not stored
+    (§14).** A reasoning node has no ``level`` property. Its abstraction level is
+    the position of its **primary referent** — the entity on its ``subject``-role
+    ``INVOLVES`` edge — in the ``partOf`` order (the part-whole DAG built by the
+    domain layer, ``iknos.domain``; §14). Deriving level this way keeps it correct
+    as the hierarchy is refined and relative by construction; a fact whose
+    referent is ambiguous attaches at multiple levels rather than being forced to
+    one. Forward (Phase 6 consumer, no Phase 0 code): an optional ``partOf`` depth/
+    rank MAY be materialized for query performance, recomputed on any hierarchy
+    change — a cache of the derived value, never an authoritative stored level.
+    """
+
+    SUBJECT = "subject"  # the primary referent — anchors derived abstraction level
+    OBJECT = "object"
+    INSTRUMENT = "instrument"
+
+
 class EvidencedBy(BaseModel):
     model_config = ConfigDict(frozen=True)
     source: uuid.UUID
