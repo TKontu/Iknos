@@ -18,12 +18,17 @@ from iknos.types.temporal import BitemporalFields
 
 
 class Tier(StrEnum):
-    """Box reasoning tier (§9)."""
+    """Box reasoning tier (§9; architecture.md §10).
 
-    AXIOM = "axiom"
-    DOMAIN = "domain"
-    EVIDENCE = "evidence"
-    DERIVED = "derived"
+    Revised-plan vocabulary. Mapping from the old plan for anyone holding a dev
+    graph (AGE stores ``tier`` as a plain property string, so no data migration):
+    ``axiom→schema``, ``domain→reference``, ``evidence→case``, ``derived→working``.
+    """
+
+    SCHEMA = "schema"
+    REFERENCE = "reference"
+    CASE = "case"
+    WORKING = "working"
 
 
 class BoxStatus(StrEnum):

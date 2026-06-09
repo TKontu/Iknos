@@ -89,7 +89,7 @@ async def test_phase_0_end_to_end(session: AsyncSession) -> None:
             {
                 "id": str(box_id),
                 "name": "default-domain",
-                "tier": "domain",
+                "tier": "reference",
                 "version": "0.1.0",
                 "source": "test",
                 "reliability_prior": 0.9,
@@ -112,7 +112,7 @@ async def test_phase_0_end_to_end(session: AsyncSession) -> None:
                 {
                     "id": str(fid),
                     "box": str(box_id),
-                    "tier": "evidence" if fid == fact_a_id else "derived",
+                    "tier": "case" if fid == fact_a_id else "working",
                     "statement": statement,
                     "support_count": 1,
                     "confidence": 0.8,
