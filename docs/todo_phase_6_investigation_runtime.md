@@ -19,22 +19,51 @@ analysis), §9 (working set assembly), principle 8.
 
 ## The investigation loop (§11), end-to-end
 
-- [ ] **assemble working set:** activate case + reference boxes, create one working
-      box, seed edge confidence priors from box `reliability_prior`.
-- [ ] **retrieve:** hybrid (dense + sparse), box-scoped.
+- [ ] **frame (§11.2):** set the `Task` (framing question + type); seed hypotheses from
+      decomposition + the domain pack's reference hypothesis set + the expert. Scopes
+      everything below. (Optional overlay — undirected exploration still possible.)
+- [ ] **Completeness guards (§11.2)** so goal-directedness doesn't miss the unframed
+      answer: (a) **abductive hypothesis generation** — a high-significance observation
+      that no current hypothesis explains spawns a new candidate hypothesis/sub-Task; (b)
+      a **residual exploration budget** that never falls to zero (some unscoped retrieval/
+      candidate-gen always runs); (c) a periodic **undirected sweep** as a completeness
+      check. An unexplained high-significance observation is itself a finding.
+- [ ] **assemble working set:** activate case + reference boxes (incl. the Task's domain
+      pack), create one working box, seed edge confidence priors from box
+      `reliability_prior`.
+- [ ] **retrieve:** hybrid (dense + sparse), box- and Task-scoped.
 - [ ] **generate candidates:** the §5.1 funnel (recall-biased; refuters by
-      entity/topic).
+      entity/topic), prioritized toward the Task's hypotheses.
 - [ ] **expand:** run operators on selected nodes and candidate pairs; writes land in
-      the working box only; ensemble gate on refutation.
-- [ ] **adjudicate:** QBAF state recompute + Counting retraction on the affected
-      sub-graph.
+      the working box only; ensemble gate on refutation. **Corroboration counts only
+      across independent sources** (sources tracing to one origin are one — reuses
+      provenance/§5.2), so copy-flooding doesn't manufacture support (§9.1).
+- [ ] **adjudicate:** QBAF state recompute + well-founded retraction on the affected
+      sub-graph (Counting/DRed, §12).
 - [ ] **analyse:** extract the working subgraph into **igraph/NetworkX** — centrality
       (load-bearing facts), community detection (sub-arguments), hypothesis-support
       pathfinding. (Not in-DB.)
-- [ ] **present:** a result = Hypothesis + state + acceptability + its SUPPORTS/REFUTES
-      subgraph + resolved provenance (span → text) for every node shown.
+- [ ] **triage (§11.1):** rank all needs-human items by value of information
+      (`leverage × uncertainty × significance`) into one budgeted top-N queue. Leverage
+      from centrality + Layer A support-counts + QBAF perturbation (decision-relevance);
+      **two-tier cost:** cheap structural proxies rank the whole queue, QBAF perturbation
+      runs only on the top-k (it re-solves per item — not free at scale).
+      uncertainty from the aggregated confidence types (and *which* type → what judgment
+      is needed); include fragile-/conflicting-confidence items, not only uncertain ones.
+      No LLM in the ranking; re-rank between batches, not per click; graceful fallback to
+      significance + recency. The same VoI score gates the **re-inference budget**
+      (§6.1): expensive LLM re-analysis on a changed region runs only where VoI is above
+      threshold — cheap symbolic re-propagation runs everywhere, LLM re-inference only
+      where it could change the conclusion.
+- [ ] **sufficiency (§11.2):** stop expanding when the Task is answered to threshold or
+      the VoI of further work drops below threshold — the principled stopping point.
+- [ ] **present:** the answer to the Task — its addressing Hypotheses + state +
+      acceptability (banded true/plausible/implausible/false) + SUPPORTS/REFUTES subgraph
+      + resolved provenance (span → text) for every node shown.
 - [ ] **revise:** new evidence or expert override (Phase 7) re-enters at expand; only
-      the affected sub-graph re-evaluated.
+      the affected sub-graph re-evaluated. Entity resolution runs **continuously** here —
+      accumulating facts can confirm a candidate merge or trigger a split (§5.2), which
+      re-evaluates the affected component.
 
 ## Presentation (principle 8)
 
@@ -45,6 +74,22 @@ analysis), §9 (working set assembly), principle 8.
       presentation policy (open item, §13).
 - [ ] A result is never a bare answer: always claim + evidence subgraph + provenance
       trail.
+
+## Abstraction-level presentation (§14)
+
+- [ ] Audience views as **projections** (a cut through the `PART_OF` DAG), not new
+      data: management rolls up to coarse ancestor entities with summaries; experts
+      drill to leaves.
+- [ ] **Mixed-level frontier:** build on the established *degree-of-interest*
+      framework (Furnas; van Ham & Perer search/show-context/expand-on-demand) but
+      replace "a-priori importance − distance" with **"evidence significance −
+      distance"** — descend a subtree only where finer facts are load-bearing (high
+      evidence weight / contested / where hypotheses sit), weighted by the §6 signals.
+      Note: a single global resolution parameter provably cannot do this (resolution
+      limit) — selection is per-region. (Significance-weighting is novel; open item,
+      §13/§14.)
+- [ ] Level derived from the subject entity's `partOf` position; surface ambiguous
+      attachment rather than forcing a single level.
 
 ## Exit criteria
 

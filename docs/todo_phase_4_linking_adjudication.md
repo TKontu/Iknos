@@ -59,7 +59,14 @@ disciplines, confidence pipeline, experiment), §7.2 (ensemble gate, hypothesis 
       overturning fact); keep as a regression suite.
 - [ ] Measure: retraction propagation (Phase 3); hypothesis-state flip on the
       overturning fact; consistency vs verbalized confidence; ensemble vs single-call
-      contradiction; **candidate recall, especially refuter recall**.
+      contradiction; **candidate recall, especially refuter recall**; **fact→referent
+      level-attachment accuracy** (anchored vs induced) against human labels.
+- [ ] **Bias-controlled evaluation:** score against domain gold answers with controlled
+      answer ordering — **not** LLM-as-judge headline scores, which carry large
+      position/length bias (§8, §13).
+- [ ] **Accuracy gates before automation:** level attachment gated on inter-annotator
+      agreement (κ > 0.6) before automating; inferred-level embeddings gated on
+      depth-recovery correlation (ρ > 0.6) before they are trusted (§13/§14).
 - [ ] **Gate:** do not proceed to Phase 5 / do not harden until results are acceptable.
       A failure changes the design.
 

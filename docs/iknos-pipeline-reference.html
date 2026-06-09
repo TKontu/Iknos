@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Iknos — processing &amp; data-flow reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f3f0e8;
+    --paper2:#eae6da;
+    --ink:#20242c;
+    --ink2:#3c4350;
+    --muted:#6b7280;
+    --faint:#9aa0ab;
+    --line:#c9c4b6;
+    --grid:#dcd7c8;
+    --proc:#ffffff;       /* machine process */
+    --store:#dce7e6;      /* data store */
+    --storeb:#7fa8a3;
+    --engine:#e4e0ef;     /* reasoning engine */
+    --engineb:#8a7fb0;
+    --human:#f6dfae;      /* human interaction */
+    --humanb:#cf9b3a;
+    --humank:#9a6b14;
+    --flow:#5b6472;
+    --accent:#2f6f8f;
+    --refute:#bf5a44;
+    --support:#5f8c54;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --sans:'IBM Plex Sans',sans-serif;
+    --serif:'IBM Plex Serif',serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;font-size:15px;
+    background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:26px 26px;background-position:-1px -1px;
+  }
+  .wrap{max-width:1120px;margin:0 auto;padding:0 30px}
+  .mono{font-family:var(--mono)}
+  h1,h2,h3{font-family:var(--sans);font-weight:600;letter-spacing:-.01em}
+
+  /* header */
+  header{border-bottom:2px solid var(--ink);background:rgba(243,240,232,.9);padding:30px 0 22px;margin-bottom:8px}
+  .doc-meta{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px}
+  .doc-meta .t1{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent)}
+  h1{font-size:30px;margin-top:6px}
+  .doc-meta .right{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right;line-height:1.7}
+  .doc-meta .right b{color:var(--ink2)}
+
+  /* legend */
+  .legend{display:flex;gap:22px;flex-wrap:wrap;margin:18px 0 4px;padding:12px 16px;border:1px solid var(--line);background:rgba(255,255,255,.5);border-radius:4px}
+  .legend .li{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--ink2)}
+  .swatch{width:18px;height:13px;border:1.5px solid var(--ink2);border-radius:2px;flex:none}
+  .swatch.proc{background:var(--proc)}
+  .swatch.store{background:var(--store);border-color:var(--storeb)}
+  .swatch.engine{background:var(--engine);border-color:var(--engineb)}
+  .swatch.human{background:var(--human);border-color:var(--humanb)}
+  .swatch.flowl{border:none;height:0;border-top:2px solid var(--flow);width:20px}
+  .swatch.dash{border:none;height:0;border-top:2px dashed var(--flow);width:20px}
+
+  section{padding:34px 0;border-bottom:1px solid var(--line)}
+  .shead{display:flex;align-items:baseline;gap:12px;margin-bottom:6px}
+  .shead .sn{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:600}
+  .shead h2{font-size:21px}
+  .sdesc{color:var(--ink2);max-width:78ch;margin-bottom:20px;font-size:14.5px}
+  .sdesc code{font-family:var(--mono);font-size:12.5px;background:var(--paper2);padding:1px 5px;border-radius:3px;border:1px solid var(--line)}
+
+  .figure{background:rgba(255,255,255,.55);border:1px solid var(--line);border-radius:6px;padding:18px;overflow-x:auto}
+  .figcap{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:10px;letter-spacing:.03em}
+  .figcap b{color:var(--ink2)}
+  svg{display:block;max-width:100%;height:auto}
+  svg text{font-family:var(--mono);fill:var(--ink)}
+
+  /* tables */
+  table{width:100%;border-collapse:collapse;font-size:13px;background:rgba(255,255,255,.5)}
+  th,td{text-align:left;padding:9px 12px;border:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);background:var(--paper2)}
+  td .mono{font-size:12px;color:var(--accent)}
+  td b{color:var(--ink)}
+  .hl-human{background:rgba(246,223,174,.4)}
+  .tagh{font-family:var(--mono);font-size:10px;background:var(--human);border:1px solid var(--humanb);color:var(--humank);padding:1px 6px;border-radius:3px;white-space:nowrap}
+  .tagm{font-family:var(--mono);font-size:10px;background:var(--paper2);border:1px solid var(--line);color:var(--muted);padding:1px 6px;border-radius:3px;white-space:nowrap}
+
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:780px){.twocol{grid-template-columns:1fr}}
+  .panel{border:1px solid var(--line);border-radius:6px;padding:16px 18px;background:rgba(255,255,255,.5)}
+  .panel h3{font-size:14px;font-family:var(--mono);letter-spacing:.04em;margin-bottom:10px;color:var(--accent)}
+  .panel ul{list-style:none;font-size:13px;color:var(--ink2)}
+  .panel li{padding:4px 0 4px 16px;position:relative}
+  .panel li::before{content:"▸";position:absolute;left:0;color:var(--faint);font-size:10px;top:6px}
+  .panel li b{color:var(--ink)}
+
+  footer{padding:30px 0 60px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .note{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap doc-meta">
+    <div>
+      <div class="t1">Engineering reference · processing &amp; data flow</div>
+      <h1>Iknos — pipeline, layers &amp; data flow</h1>
+    </div>
+    <div class="right">
+      DOC · internal architecture<br>
+      substrate: <b>PostgreSQL + Apache AGE + pgvector</b><br>
+      status: <b>pre-implementation</b>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="legend">
+    <div class="li"><span class="swatch proc"></span>machine process</div>
+    <div class="li"><span class="swatch store"></span>data store / artifact</div>
+    <div class="li"><span class="swatch engine"></span>reasoning engine</div>
+    <div class="li"><span class="swatch human"></span>human interaction required</div>
+    <div class="li"><span class="swatch flowl"></span>data flow</div>
+    <div class="li"><span class="swatch dash"></span>cache / optional / deferred</div>
+  </div>
+
+  <!-- ===================== 0. LAYER STACK ===================== -->
+  <section>
+    <div class="shead"><span class="sn">§0</span><h2>System layers — the whole stack</h2></div>
+    <p class="sdesc">Six layers. Two of them — <b>ingestion</b> (knowledge in) and the <b>investigation runtime</b> (reasoning over it) — are <b>distinct flows and must not be conflated</b>. Cross-cutting facilities (provenance, governance, cache) span all layers.</p>
+    <div class="figure">
+      <svg viewBox="0 0 1040 470" role="img" aria-label="System layer stack">
+        <defs>
+          <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5b6472"/></marker>
+        </defs>
+        <!-- cross-cutting sidebar -->
+        <rect x="858" y="40" width="150" height="392" rx="5" fill="#f1ece0" stroke="#c9c4b6"/>
+        <text x="933" y="60" text-anchor="middle" font-size="11" font-weight="600" fill="#2f6f8f">CROSS-CUTTING</text>
+        <text x="933" y="100" text-anchor="middle" font-size="11">provenance</text>
+        <text x="933" y="116" text-anchor="middle" font-size="11">+ audit log</text>
+        <text x="933" y="190" text-anchor="middle" font-size="11">governance</text>
+        <text x="933" y="206" text-anchor="middle" font-size="11">(sensitivity,</text>
+        <text x="933" y="222" text-anchor="middle" font-size="11">credibility)</text>
+        <text x="933" y="300" text-anchor="middle" font-size="11">content cache</text>
+        <text x="933" y="316" text-anchor="middle" font-size="11">+ cost gating</text>
+        <text x="933" y="396" text-anchor="middle" font-size="11">bitemporal</text>
+        <text x="933" y="412" text-anchor="middle" font-size="11">record</text>
+
+        <!-- bands -->
+        <!-- 1 input -->
+        <rect x="32" y="40" width="800" height="56" rx="5" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="48" y="62" font-size="12" font-weight="600" fill="#9a6b14">1 · INPUT LAYER</text>
+        <text x="48" y="82" font-size="11" fill="#3c4350">case documents · static reference corpus · domain packs · the Task/question · expert overrides</text>
+
+        <!-- 2 ingestion -->
+        <rect x="32" y="108" width="800" height="56" rx="5" fill="#ffffff" stroke="#3c4350"/>
+        <text x="48" y="130" font-size="12" font-weight="600">2 · INGESTION PIPELINE  (machine; per-doc, mostly autonomous)</text>
+        <text x="48" y="150" font-size="11" fill="#3c4350">embed → segment → propositionize → verify → bind → resolve → anchor → index</text>
+
+        <!-- 3 substrate -->
+        <rect x="32" y="176" width="800" height="56" rx="5" fill="#dce7e6" stroke="#7fa8a3"/>
+        <text x="48" y="198" font-size="12" font-weight="600" fill="#2f6f8f">3 · STORAGE SUBSTRATE</text>
+        <text x="48" y="218" font-size="11" fill="#3c4350">Postgres (raw text, bitemporal) · AGE (graph) · pgvector (dense) · BM25 (sparse) · content-addressed cache</text>
+
+        <!-- 4 engines -->
+        <rect x="32" y="244" width="800" height="56" rx="5" fill="#e4e0ef" stroke="#8a7fb0"/>
+        <text x="48" y="266" font-size="12" font-weight="600" fill="#5b4f86">4 · REASONING ENGINES</text>
+        <text x="48" y="286" font-size="11" fill="#3c4350">LLM (propose) · NLI verifier · clingo (founded support, rules) · Layer A / Layer B propagation · QBAF · igraph</text>
+
+        <!-- 5 runtime -->
+        <rect x="32" y="312" width="800" height="56" rx="5" fill="#ffffff" stroke="#3c4350"/>
+        <text x="48" y="334" font-size="12" font-weight="600">5 · INVESTIGATION RUNTIME  (the loop)</text>
+        <text x="48" y="354" font-size="11" fill="#3c4350">frame → retrieve → candidates → expand → adjudicate → triage → present → revise</text>
+
+        <!-- 6 output -->
+        <rect x="32" y="380" width="800" height="52" rx="5" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="48" y="402" font-size="12" font-weight="600" fill="#9a6b14">6 · OUTPUT LAYER</text>
+        <text x="48" y="421" font-size="11" fill="#3c4350">initial conclusion + evidential subgraph + provenance trail · VoI review queue · audit log</text>
+
+        <!-- flow arrows between bands -->
+        <line x1="432" y1="96" x2="432" y2="106" stroke="#5b6472" stroke-width="1.6" marker-end="url(#ah)"/>
+        <line x1="432" y1="164" x2="432" y2="174" stroke="#5b6472" stroke-width="1.6" marker-end="url(#ah)"/>
+        <line x1="432" y1="232" x2="432" y2="242" stroke="#5b6472" stroke-width="1.6" marker-end="url(#ah)"/>
+        <line x1="432" y1="300" x2="432" y2="310" stroke="#5b6472" stroke-width="1.6" marker-end="url(#ah)"/>
+        <line x1="432" y1="368" x2="432" y2="378" stroke="#5b6472" stroke-width="1.6" marker-end="url(#ah)"/>
+        <!-- substrate <-> engines <-> runtime are read/write both ways -->
+        <line x1="700" y1="310" x2="700" y2="302" stroke="#5b6472" stroke-width="1.2" marker-end="url(#ah)" stroke-dasharray="3 3"/>
+        <line x1="700" y1="242" x2="700" y2="234" stroke="#5b6472" stroke-width="1.2" marker-end="url(#ah)" stroke-dasharray="3 3"/>
+      </svg>
+      <div class="figcap">FIG 0 · <b>Layers 2 and 5 are separate flows.</b> Ingestion writes the graph once; the runtime reads/derives over it and writes only into a working box. Dashed arrows = runtime ⇄ engines ⇄ substrate read/write.</div>
+    </div>
+  </section>
+
+  <!-- ===================== 1. INGESTION PIPELINE ===================== -->
+  <section>
+    <div class="shead"><span class="sn">§1</span><h2>Ingestion pipeline — knowledge in</h2></div>
+    <p class="sdesc">Per-document, left to right. The data shape changes at every stage (annotated on the arrows). <b>Embedding happens once</b>, at the front, and is reused downstream — it is never recomputed per level or per query. Ingestion is essentially autonomous: low-confidence outputs are <b>flagged provisional</b> and deferred to the runtime review queue rather than blocking.</p>
+    <div class="figure">
+      <svg viewBox="0 0 1040 360" role="img" aria-label="Ingestion pipeline">
+        <defs>
+          <marker id="ah2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5b6472"/></marker>
+        </defs>
+        <!-- input doc -->
+        <rect x="20" y="120" width="92" height="60" rx="5" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="66" y="146" text-anchor="middle" font-size="11" font-weight="600" fill="#9a6b14">raw</text>
+        <text x="66" y="162" text-anchor="middle" font-size="11" font-weight="600" fill="#9a6b14">document</text>
+
+        <!-- stage boxes -->
+        <!-- helper layout: 8 stages -->
+        <!-- EMBED -->
+        <rect x="150" y="118" width="96" height="64" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="198" y="142" text-anchor="middle" font-size="11" font-weight="600">EMBED</text>
+        <text x="198" y="158" text-anchor="middle" font-size="9" fill="#6b7280">long-ctx,</text>
+        <text x="198" y="170" text-anchor="middle" font-size="9" fill="#6b7280">once/doc</text>
+        <!-- SEGMENT -->
+        <rect x="284" y="118" width="96" height="64" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="332" y="142" text-anchor="middle" font-size="11" font-weight="600">SEGMENT</text>
+        <text x="332" y="158" text-anchor="middle" font-size="9" fill="#6b7280">multi-level</text>
+        <text x="332" y="170" text-anchor="middle" font-size="9" fill="#6b7280">DP split</text>
+        <!-- PROPOSITIONIZE -->
+        <rect x="418" y="118" width="104" height="64" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="470" y="140" text-anchor="middle" font-size="11" font-weight="600">PROPOSITION-</text>
+        <text x="470" y="152" text-anchor="middle" font-size="11" font-weight="600">IZE</text>
+        <text x="470" y="170" text-anchor="middle" font-size="9" fill="#6b7280">+epistemic fields</text>
+        <!-- VERIFY -->
+        <rect x="560" y="118" width="96" height="64" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="608" y="142" text-anchor="middle" font-size="11" font-weight="600">VERIFY</text>
+        <text x="608" y="158" text-anchor="middle" font-size="9" fill="#6b7280">NLI, indep.</text>
+        <text x="608" y="170" text-anchor="middle" font-size="9" fill="#6b7280">model</text>
+        <!-- BIND -->
+        <rect x="694" y="118" width="92" height="64" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="740" y="142" text-anchor="middle" font-size="11" font-weight="600">BIND</text>
+        <text x="740" y="158" text-anchor="middle" font-size="9" fill="#6b7280">REFERS_TO</text>
+        <text x="740" y="170" text-anchor="middle" font-size="9" fill="#6b7280">(scored)</text>
+        <!-- RESOLVE -->
+        <rect x="824" y="118" width="92" height="64" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="870" y="142" text-anchor="middle" font-size="11" font-weight="600">RESOLVE</text>
+        <text x="870" y="158" text-anchor="middle" font-size="9" fill="#6b7280">SAME_AS</text>
+        <text x="870" y="170" text-anchor="middle" font-size="9" fill="#6b7280">+ anchor</text>
+        <!-- INDEX -->
+        <rect x="952" y="118" width="72" height="64" rx="5" fill="#dce7e6" stroke="#7fa8a3"/>
+        <text x="988" y="146" text-anchor="middle" font-size="11" font-weight="600" fill="#2f6f8f">INDEX</text>
+        <text x="988" y="162" text-anchor="middle" font-size="9" fill="#2f6f8f">graph</text>
+
+        <!-- flow arrows + data labels -->
+        <line x1="112" y1="150" x2="148" y2="150" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah2)"/>
+        <line x1="246" y1="150" x2="282" y2="150" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah2)"/>
+        <text x="264" y="112" text-anchor="middle" font-size="8.5" fill="#5b6472">vectors</text>
+        <line x1="380" y1="150" x2="416" y2="150" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah2)"/>
+        <text x="398" y="112" text-anchor="middle" font-size="8.5" fill="#5b6472">spans@L</text>
+        <line x1="522" y1="150" x2="558" y2="150" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah2)"/>
+        <text x="540" y="112" text-anchor="middle" font-size="8.5" fill="#5b6472">props</text>
+        <line x1="656" y1="150" x2="692" y2="150" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah2)"/>
+        <text x="674" y="112" text-anchor="middle" font-size="8.5" fill="#5b6472">facts</text>
+        <line x1="786" y1="150" x2="822" y2="150" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah2)"/>
+        <text x="804" y="112" text-anchor="middle" font-size="8.5" fill="#5b6472">mentions</text>
+        <line x1="916" y1="150" x2="950" y2="150" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah2)"/>
+        <text x="933" y="112" text-anchor="middle" font-size="8.5" fill="#5b6472">entities</text>
+
+        <!-- embed-once reuse arcs -->
+        <path d="M198,118 C198,60 332,60 332,116" fill="none" stroke="#2f6f8f" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#ah2)"/>
+        <path d="M198,182 C198,250 740,250 740,184" fill="none" stroke="#2f6f8f" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#ah2)"/>
+        <text x="430" y="268" text-anchor="middle" font-size="9.5" fill="#2f6f8f">EMBED ONCE → reused by segmentation, retrieval &amp; candidate-generation kNN</text>
+
+        <!-- cache + provisional callouts -->
+        <rect x="418" y="210" width="238" height="26" rx="4" fill="#f1ece0" stroke="#c9c4b6"/>
+        <text x="537" y="227" text-anchor="middle" font-size="9.5" fill="#3c4350">content-addressed cache · unchanged span ⇒ skip re-extract</text>
+
+        <rect x="560" y="248" width="200" height="40" rx="4" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="660" y="264" text-anchor="middle" font-size="9.5" fill="#9a6b14">low faithfulness / ambiguous bind</text>
+        <text x="660" y="278" text-anchor="middle" font-size="9.5" fill="#9a6b14">⇒ flag PROVISIONAL → runtime triage</text>
+        <line x1="608" y1="182" x2="624" y2="246" stroke="#cf9b3a" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#ah2)"/>
+        <line x1="740" y1="182" x2="700" y2="246" stroke="#cf9b3a" stroke-width="1.2" stroke-dasharray="3 3"/>
+
+        <text x="20" y="320" font-size="9.5" fill="#6b7280">REFERENCE CORPUS: this whole pass runs ONCE, persisted &amp; reused across all investigations.  CASE DOCS: per-investigation only.</text>
+      </svg>
+      <div class="figcap">FIG 1 · Ingestion. <b>No inline human step</b> — provisional items are deferred (amber) to the runtime review queue (§4, §5).</div>
+    </div>
+
+    <table style="margin-top:16px">
+      <tr><th>Stage</th><th>Input</th><th>Operation</th><th>Output</th><th>Human?</th></tr>
+      <tr><td><b>Embed</b></td><td>raw document text</td><td>long-context embedding, <b>once</b></td><td>contextual vectors (cached)</td><td><span class="tagm">no</span></td></tr>
+      <tr><td><b>Segment</b></td><td>vectors + text</td><td>similarity-valley + DP split at several length penalties</td><td>spans at multiple levels</td><td><span class="tagm">no</span></td></tr>
+      <tr><td><b>Propositionize</b></td><td>spans</td><td>decontextualise → atomic claims; tag polarity / modality / attribution / scope / <b>epistemic_class</b></td><td>propositions (+fields)</td><td><span class="tagm">no</span></td></tr>
+      <tr><td><b>Verify</b></td><td>proposition + source span</td><td>NLI entailment by an <b>independent</b> model; score faithfulness</td><td>faithfulness ∈ [0,1]; provisional flag</td><td><span class="tagm">deferred</span></td></tr>
+      <tr><td><b>Bind</b></td><td>mentions</td><td>scored <code>REFERS_TO</code> → entity (local → graph → taxonomy)</td><td>bound mentions</td><td><span class="tagm">deferred</span></td></tr>
+      <tr><td><b>Resolve + anchor</b></td><td>entities</td><td>scored <code>SAME_AS</code> components; anchor to domain-pack taxonomy</td><td>canonical, leveled entities</td><td><span class="tagm">deferred</span></td></tr>
+      <tr><td><b>Index</b></td><td>graph + props</td><td>dense (pgvector) + sparse (BM25), box-scoped</td><td>queryable reasoning graph</td><td><span class="tagm">no</span></td></tr>
+    </table>
+  </section>
+
+  <!-- ===================== 2. WHAT/WHEN EMBEDDED & COMPUTED ===================== -->
+  <section>
+    <div class="shead"><span class="sn">§2</span><h2>What is embedded / computed — and when</h2></div>
+    <p class="sdesc">Three timing regimes: computed <b>once and amortized</b> (the reference corpus), computed <b>per investigation</b> (case documents), or computed <b>per change</b> (incremental re-analysis). Cheap symbolic re-propagation runs freely; expensive LLM re-inference is value-gated.</p>
+    <table>
+      <tr><th>Artifact / computation</th><th>Engine</th><th>Computed</th><th>Reused by</th><th>Recomputed when</th></tr>
+      <tr><td><b>Document embedding</b> (contextual)</td><td class="mono">embed model</td><td>once per doc, at ingest</td><td>segmentation · dense retrieval · candidate kNN</td><td>never (content-addressed; new version = new doc)</td></tr>
+      <tr><td><b>Multi-level spans</b></td><td class="mono">DP segmenter</td><td>once per doc</td><td>retrieval · coarse-to-fine candidates</td><td>document content changes</td></tr>
+      <tr><td><b>Propositions + epistemic fields</b></td><td class="mono">LLM + verifier</td><td>once per span (cached)</td><td>all reasoning</td><td>span content / model-version change</td></tr>
+      <tr><td><b>Entity resolution</b> <code>SAME_AS</code></td><td class="mono">scorer + clingo</td><td>continuous</td><td>evidence aggregation · anchoring · level</td><td>new facts · contradiction (split-review)</td></tr>
+      <tr class="hl-human"><td><b>Reference corpus</b> (all of the above)</td><td class="mono">full pipeline</td><td><b>once — amortized</b> over every investigation</td><td>every investigation (read-only)</td><td>reference update (delta-scoped)</td></tr>
+      <tr><td><b>Layer A / Layer B propagation</b></td><td class="mono">Counting/DRed · semiring</td><td>per change, delta-scoped</td><td>QBAF adjudication</td><td>any add / retract in the affected region (no LLM)</td></tr>
+      <tr><td><b>QBAF adjudication</b></td><td class="mono">QBAF</td><td>per change, affected sub-graph</td><td>hypothesis state · VoI leverage</td><td>edge/confidence change in region</td></tr>
+      <tr><td><b>LLM re-inference</b> (re-extract / re-judge)</td><td class="mono">LLM</td><td><b>value-gated</b>, ≤ 1 / evidence-state</td><td>—</td><td>only when VoI above threshold (§5)</td></tr>
+    </table>
+    <p class="note">// Rule: cheap symbolic re-propagation is unbounded; expensive LLM calls are content-cached and VoI-gated. A change is linear in the affected region — never exponential.</p>
+  </section>
+
+  <!-- ===================== 3. DATA MODEL LAYERS ===================== -->
+  <section>
+    <div class="shead"><span class="sn">§3</span><h2>Data model — the node/edge layers</h2></div>
+    <p class="sdesc">The graph is layered from raw text upward. The lower layers are <b>perception</b> (what the text says); the middle are <b>epistemic content</b> (facts &amp; conclusions, adjudicated by evidence); the top is the <b>intentional</b> layer (the question being answered). Everything is contained in a <b>Box</b> (tier + provenance unit).</p>
+    <div class="figure">
+      <svg viewBox="0 0 1040 430" role="img" aria-label="Data model layers">
+        <defs><marker id="ah3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5b6472"/></marker></defs>
+        <!-- box container -->
+        <rect x="24" y="30" width="720" height="380" rx="6" fill="none" stroke="#7fa8a3" stroke-dasharray="6 4"/>
+        <text x="34" y="50" font-size="10.5" fill="#2f6f8f">BOX  ·  tier {schema · reference · case · working}  ·  bitemporal  ·  sensitivity</text>
+
+        <!-- nodes stacked, with type labels -->
+        <!-- helper macro positions -->
+        <!-- Span -->
+        <rect x="60" y="346" width="150" height="40" rx="5" fill="#dce7e6" stroke="#7fa8a3"/>
+        <text x="135" y="364" text-anchor="middle" font-size="11" font-weight="600" fill="#2f6f8f">Span</text>
+        <text x="135" y="378" text-anchor="middle" font-size="9" fill="#3c4350">→ raw text offsets</text>
+        <text x="232" y="368" font-size="9" fill="#6b7280">PERCEPTION</text>
+        <!-- Proposition -->
+        <rect x="60" y="290" width="150" height="44" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="135" y="308" text-anchor="middle" font-size="11" font-weight="600">Proposition</text>
+        <text x="135" y="322" text-anchor="middle" font-size="8.5" fill="#6b7280">polarity·modality·class·faith</text>
+        <!-- Mention + Entity -->
+        <rect x="60" y="238" width="150" height="40" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="135" y="256" text-anchor="middle" font-size="11" font-weight="600">Mention → Actor/Object</text>
+        <text x="135" y="270" text-anchor="middle" font-size="8.5" fill="#6b7280">SAME_AS components</text>
+
+        <!-- Fact -->
+        <rect x="300" y="290" width="150" height="44" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="375" y="308" text-anchor="middle" font-size="11" font-weight="600">Fact</text>
+        <text x="375" y="322" text-anchor="middle" font-size="8.5" fill="#6b7280">observation = grounding</text>
+        <text x="500" y="312" font-size="9" fill="#6b7280">EPISTEMIC</text>
+        <!-- Conclusions -->
+        <rect x="300" y="234" width="150" height="44" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="375" y="252" text-anchor="middle" font-size="11" font-weight="600">Deductive /</text>
+        <text x="375" y="266" text-anchor="middle" font-size="11" font-weight="600">Inductive Conclusion</text>
+        <!-- Hypothesis -->
+        <rect x="300" y="178" width="150" height="44" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="375" y="196" text-anchor="middle" font-size="11" font-weight="600">Hypothesis</text>
+        <text x="375" y="210" text-anchor="middle" font-size="8.5" fill="#6b7280">supported/unsup/refuted</text>
+
+        <!-- Task -->
+        <rect x="540" y="122" width="170" height="48" rx="5" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="625" y="142" text-anchor="middle" font-size="11" font-weight="600" fill="#9a6b14">Task  (question)</text>
+        <text x="625" y="156" text-anchor="middle" font-size="8.5" fill="#9a6b14">intentional · answered, not adjudicated</text>
+        <text x="625" y="100" text-anchor="middle" font-size="9" fill="#6b7280">INTENTIONAL LAYER</text>
+
+        <!-- edges with labels -->
+        <line x1="135" y1="346" x2="135" y2="334" stroke="#5b6472" stroke-width="1.4" marker-end="url(#ah3)"/>
+        <text x="142" y="342" font-size="8" fill="#5b6472">decontextualise</text>
+        <line x1="135" y1="290" x2="135" y2="278" stroke="#5b6472" stroke-width="1.4" marker-end="url(#ah3)"/>
+        <line x1="210" y1="312" x2="298" y2="312" stroke="#5b6472" stroke-width="1.4" marker-end="url(#ah3)"/>
+        <text x="254" y="306" text-anchor="middle" font-size="8" fill="#5b6472">EVIDENCED_BY</text>
+        <line x1="375" y1="290" x2="375" y2="278" stroke="#5b6472" stroke-width="1.4" marker-end="url(#ah3)"/>
+        <text x="382" y="286" font-size="8" fill="#5b6472">DERIVED_FROM</text>
+        <line x1="375" y1="234" x2="375" y2="222" stroke="#5b6472" stroke-width="1.4" marker-end="url(#ah3)"/>
+        <text x="382" y="230" font-size="8" fill="#5b6472">SUPPORTS / REFUTES</text>
+        <line x1="450" y1="200" x2="538" y2="160" stroke="#5b6472" stroke-width="1.4" marker-end="url(#ah3)"/>
+        <text x="470" y="172" font-size="8" fill="#5b6472">ADDRESSES</text>
+
+        <!-- engines column on right -->
+        <rect x="780" y="178" width="234" height="232" rx="6" fill="#e4e0ef" stroke="#8a7fb0"/>
+        <text x="897" y="200" text-anchor="middle" font-size="11" font-weight="600" fill="#5b4f86">OPERATES OVER THE GRAPH</text>
+        <text x="897" y="228" text-anchor="middle" font-size="10" fill="#3c4350">Layer A — well-founded support</text>
+        <text x="897" y="250" text-anchor="middle" font-size="10" fill="#3c4350">Layer B — confidence semiring</text>
+        <text x="897" y="272" text-anchor="middle" font-size="10" fill="#3c4350">QBAF — adjudication</text>
+        <text x="897" y="294" text-anchor="middle" font-size="10" fill="#3c4350">clingo — rules / founded sets</text>
+        <text x="897" y="316" text-anchor="middle" font-size="10" fill="#3c4350">igraph — centrality / community</text>
+        <text x="897" y="338" text-anchor="middle" font-size="10" fill="#3c4350">VoI — review &amp; re-infer ranking</text>
+        <line x1="744" y1="294" x2="778" y2="294" stroke="#8a7fb0" stroke-width="1.3" stroke-dasharray="3 3" marker-end="url(#ah3)"/>
+
+        <text x="540" y="392" font-size="9" fill="#6b7280">every node/edge carries: provenance(span ids) · two annotations (support-count + confidence) · sensitivity · credibility · valid-time</text>
+      </svg>
+      <div class="figcap">FIG 3 · Data model. Perception → epistemic content → intentional. <b>Observations ground; conclusions are re-derived, never inherited from a source.</b></div>
+    </div>
+  </section>
+
+  <!-- ===================== 4. REASONING CORE ===================== -->
+  <section>
+    <div class="shead"><span class="sn">§4</span><h2>Reasoning core — propagation &amp; adjudication data flow</h2></div>
+    <p class="sdesc">When a fact is added or retracted, belief flows through two algebraically-distinct layers and then adjudication. <b>Layer A gates Layer B</b>: only well-founded nodes get a confidence. Cyclic/oscillating regions are bounded and surfaced, not silently re-iterated.</p>
+    <div class="figure">
+      <svg viewBox="0 0 1040 250" role="img" aria-label="Two-layer propagation and adjudication">
+        <defs><marker id="ah4" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5b6472"/></marker></defs>
+        <!-- base facts -->
+        <rect x="24" y="96" width="120" height="58" rx="5" fill="#dce7e6" stroke="#7fa8a3"/>
+        <text x="84" y="120" text-anchor="middle" font-size="11" font-weight="600" fill="#2f6f8f">base facts</text>
+        <text x="84" y="136" text-anchor="middle" font-size="9" fill="#3c4350">+ Δ add/retract</text>
+        <!-- Layer A -->
+        <rect x="190" y="86" width="180" height="78" rx="5" fill="#e4e0ef" stroke="#8a7fb0"/>
+        <text x="280" y="108" text-anchor="middle" font-size="11" font-weight="600" fill="#5b4f86">LAYER A</text>
+        <text x="280" y="126" text-anchor="middle" font-size="9.5" fill="#3c4350">well-founded support</text>
+        <text x="280" y="140" text-anchor="middle" font-size="9" fill="#6b7280">Counting (acyclic) /</text>
+        <text x="280" y="152" text-anchor="middle" font-size="9" fill="#6b7280">DRed · clingo (cyclic)</text>
+        <!-- gate -->
+        <rect x="410" y="104" width="92" height="42" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="456" y="122" text-anchor="middle" font-size="9.5" font-weight="600">founded?</text>
+        <text x="456" y="136" text-anchor="middle" font-size="8.5" fill="#6b7280">gate</text>
+        <!-- Layer B -->
+        <rect x="542" y="86" width="180" height="78" rx="5" fill="#e4e0ef" stroke="#8a7fb0"/>
+        <text x="632" y="108" text-anchor="middle" font-size="11" font-weight="600" fill="#5b4f86">LAYER B</text>
+        <text x="632" y="126" text-anchor="middle" font-size="9.5" fill="#3c4350">confidence ∈ [0,1]</text>
+        <text x="632" y="140" text-anchor="middle" font-size="9" fill="#6b7280">Viterbi / Gödel semiring</text>
+        <text x="632" y="152" text-anchor="middle" font-size="9" fill="#6b7280">absorptive · converges</text>
+        <!-- QBAF -->
+        <rect x="762" y="86" width="150" height="78" rx="5" fill="#e4e0ef" stroke="#8a7fb0"/>
+        <text x="837" y="108" text-anchor="middle" font-size="11" font-weight="600" fill="#5b4f86">QBAF</text>
+        <text x="837" y="126" text-anchor="middle" font-size="9.5" fill="#3c4350">gradual semantics</text>
+        <text x="837" y="142" text-anchor="middle" font-size="9" fill="#6b7280">support vs refute</text>
+        <!-- output state -->
+        <rect x="936" y="96" width="86" height="58" rx="5" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="979" y="118" text-anchor="middle" font-size="10" font-weight="600" fill="#9a6b14">hypothesis</text>
+        <text x="979" y="132" text-anchor="middle" font-size="10" font-weight="600" fill="#9a6b14">state</text>
+
+        <line x1="144" y1="125" x2="188" y2="125" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah4)"/>
+        <line x1="370" y1="125" x2="408" y2="125" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah4)"/>
+        <line x1="502" y1="125" x2="540" y2="125" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah4)"/>
+        <text x="521" y="118" text-anchor="middle" font-size="8" fill="#5b6472">founded set</text>
+        <line x1="722" y1="125" x2="760" y2="125" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah4)"/>
+        <line x1="912" y1="125" x2="934" y2="125" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah4)"/>
+
+        <text x="84" y="40" font-size="11" font-weight="600" fill="#2f6f8f">OWNS: retraction</text>
+        <text x="280" y="56" font-size="9" fill="#6b7280">"is it supported?"</text>
+        <text x="632" y="56" font-size="9" fill="#6b7280">"how strongly?"</text>
+        <line x1="280" y1="64" x2="280" y2="84" stroke="#8a7fb0" stroke-width="1" stroke-dasharray="2 2"/>
+        <line x1="632" y1="64" x2="632" y2="84" stroke="#8a7fb0" stroke-width="1" stroke-dasharray="2 2"/>
+
+        <!-- bounded loop note -->
+        <path d="M979,154 C979,210 456,210 280,210 L280,166" fill="none" stroke="#bf5a44" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ah4)"/>
+        <text x="600" y="206" text-anchor="middle" font-size="9" fill="#bf5a44">non-monotonic feedback (REFUTES ⇒ retract) — bounded iterations + oscillation detection; unstable region surfaced as a finding</text>
+      </svg>
+      <div class="figcap">FIG 4 · The split is forced by algebra: retraction needs subtraction, confidence needs idempotence; one structure can't have both.</div>
+    </div>
+  </section>
+
+  <!-- ===================== 5. RUNTIME LOOP + HUMAN ===================== -->
+  <section>
+    <div class="shead"><span class="sn">§5</span><h2>Investigation runtime — the loop &amp; where the human is required</h2></div>
+    <p class="sdesc">The loop is steered by the <b>Task</b>. Three points <b>require</b> a human (amber); the rest are autonomous. The expert never edits state directly — they act through framing, the review queue, soft overrides, and the promotion gate, and the engine re-derives.</p>
+    <div class="figure">
+      <svg viewBox="0 0 1040 380" role="img" aria-label="Investigation runtime loop with human interaction points">
+        <defs><marker id="ah5" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5b6472"/></marker></defs>
+        <!-- circular layout of stages -->
+        <!-- centre label -->
+        <text x="520" y="186" text-anchor="middle" font-size="12" font-weight="600" fill="#6b7280">INVESTIGATION LOOP</text>
+        <text x="520" y="204" text-anchor="middle" font-size="9.5" fill="#9aa0ab">only the affected sub-graph re-evaluated</text>
+
+        <!-- stages positioned around an ellipse -->
+        <!-- frame (human) top-left -->
+        <rect x="60" y="40" width="150" height="56" rx="5" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="135" y="62" text-anchor="middle" font-size="11" font-weight="600" fill="#9a6b14">FRAME ◆</text>
+        <text x="135" y="78" text-anchor="middle" font-size="9" fill="#9a6b14">set Task + seed hypotheses</text>
+        <!-- retrieve -->
+        <rect x="300" y="40" width="140" height="56" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="370" y="62" text-anchor="middle" font-size="11" font-weight="600">RETRIEVE</text>
+        <text x="370" y="78" text-anchor="middle" font-size="9" fill="#6b7280">Task + box scoped</text>
+        <!-- candidates -->
+        <rect x="500" y="40" width="150" height="56" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="575" y="62" text-anchor="middle" font-size="11" font-weight="600">CANDIDATES</text>
+        <text x="575" y="78" text-anchor="middle" font-size="9" fill="#6b7280">cheap→expensive funnel</text>
+        <!-- expand -->
+        <rect x="710" y="40" width="150" height="56" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="785" y="62" text-anchor="middle" font-size="11" font-weight="600">EXPAND</text>
+        <text x="785" y="78" text-anchor="middle" font-size="9" fill="#6b7280">operators · ensemble gate</text>
+        <!-- adjudicate (right) -->
+        <rect x="870" y="160" width="150" height="56" rx="5" fill="#e4e0ef" stroke="#8a7fb0"/>
+        <text x="945" y="182" text-anchor="middle" font-size="11" font-weight="600" fill="#5b4f86">ADJUDICATE</text>
+        <text x="945" y="198" text-anchor="middle" font-size="9" fill="#3c4350">two-layer + QBAF (§4)</text>
+        <!-- triage (human) bottom-right -->
+        <rect x="700" y="284" width="160" height="56" rx="5" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="780" y="306" text-anchor="middle" font-size="11" font-weight="600" fill="#9a6b14">TRIAGE ◆</text>
+        <text x="780" y="322" text-anchor="middle" font-size="9" fill="#9a6b14">VoI review queue</text>
+        <!-- present -->
+        <rect x="430" y="284" width="150" height="56" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="505" y="306" text-anchor="middle" font-size="11" font-weight="600">PRESENT</text>
+        <text x="505" y="322" text-anchor="middle" font-size="9" fill="#6b7280">answer + subgraph</text>
+        <!-- revise (human) bottom-left -->
+        <rect x="180" y="284" width="160" height="56" rx="5" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="260" y="306" text-anchor="middle" font-size="11" font-weight="600" fill="#9a6b14">REVISE ◆</text>
+        <text x="260" y="322" text-anchor="middle" font-size="9" fill="#9a6b14">override / new evidence</text>
+        <!-- sufficiency (left) -->
+        <rect x="20" y="160" width="150" height="56" rx="5" fill="#fff" stroke="#3c4350"/>
+        <text x="95" y="182" text-anchor="middle" font-size="11" font-weight="600">SUFFICIENCY</text>
+        <text x="95" y="198" text-anchor="middle" font-size="9" fill="#6b7280">Task answered? → stop</text>
+
+        <!-- arrows -->
+        <line x1="210" y1="68" x2="298" y2="68" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah5)"/>
+        <line x1="440" y1="68" x2="498" y2="68" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah5)"/>
+        <line x1="650" y1="68" x2="708" y2="68" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah5)"/>
+        <path d="M860,72 C940,80 945,120 945,158" fill="none" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah5)"/>
+        <path d="M945,216 C945,250 870,300 862,308" fill="none" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah5)"/>
+        <line x1="700" y1="312" x2="582" y2="312" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah5)"/>
+        <line x1="430" y1="312" x2="342" y2="312" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah5)"/>
+        <path d="M180,300 C90,300 95,250 95,218" fill="none" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah5)"/>
+        <path d="M95,160 C95,118 90,80 132,96" fill="none" stroke="#5b6472" stroke-width="1.5" marker-end="url(#ah5)"/>
+        <text x="120" y="135" font-size="8.5" fill="#5b6472">re-enter</text>
+
+        <!-- promotion side-gate -->
+        <rect x="380" y="160" width="190" height="40" rx="5" fill="#f6dfae" stroke="#cf9b3a"/>
+        <text x="475" y="178" text-anchor="middle" font-size="10" font-weight="600" fill="#9a6b14">PROMOTION GATE ◆ (optional)</text>
+        <text x="475" y="192" text-anchor="middle" font-size="8.5" fill="#9a6b14">validated conclusion → reference tier</text>
+      </svg>
+      <div class="figcap">FIG 5 · ◆ = human required. Frame (input), Triage (review queue), Revise (override / new evidence), and the optional Promotion gate. Everything else is autonomous.</div>
+    </div>
+  </section>
+
+  <!-- ===================== 6. HUMAN TOUCHPOINTS ===================== -->
+  <section>
+    <div class="shead"><span class="sn">§6</span><h2>Human-in-the-loop touchpoints</h2></div>
+    <p class="sdesc">The complete set of points where the system requires or invites a person. The expert acts <b>through</b> these interfaces; they never write graph state by hand — every action is logged, reversible, and triggers re-derivation.</p>
+    <table>
+      <tr><th>#</th><th>Stage</th><th>Trigger</th><th>What the expert does</th><th>Effect on the system</th></tr>
+      <tr class="hl-human"><td>1</td><td><b>Frame</b></td><td>investigation start</td><td>state the question + type; optionally seed / edit hypotheses &amp; the decomposition tree</td><td>scopes retrieval, candidates, hypotheses; sets the stop criterion</td></tr>
+      <tr class="hl-human"><td>2</td><td><b>Review queue</b> (triage)</td><td>VoI-ranked items needing judgement</td><td>confirm a referent · accept/reject a candidate merge · weigh evidence · judge a provisional proposition · resolve an unstable identity or cyclic region</td><td>corrects bindings / identity / weights; delta re-propagation</td></tr>
+      <tr class="hl-human"><td>3</td><td><b>Soft override</b></td><td>a computed value the expert disputes</td><td>override a property (with rationale)</td><td>value participates but is marked; retained, logged, reversible; reconciliation policy on re-derivation</td></tr>
+      <tr class="hl-human"><td>4</td><td><b>Promotion gate</b></td><td>a validated working conclusion</td><td>explicit, gated approval</td><td>moves into the reference tier (never automatic)</td></tr>
+      <tr class="hl-human"><td>5</td><td><b>Final review</b></td><td>present</td><td>examine conclusion + subgraph + provenance; accept or redirect</td><td>closes or re-opens the loop</td></tr>
+      <tr><td>0</td><td><b>Pack authoring</b> (setup)</td><td>onboarding a domain</td><td>author taxonomy / rules / interest model / reference hypothesis set</td><td>enables anchoring, hypothesis seeding, conditional credibility</td></tr>
+    </table>
+  </section>
+
+  <!-- ===================== 7. I/O LAYERS ===================== -->
+  <section>
+    <div class="shead"><span class="sn">§7</span><h2>Input &amp; output layers</h2></div>
+    <div class="twocol">
+      <div class="panel">
+        <h3>INPUT</h3>
+        <ul>
+          <li><b>Case documents</b> — the evidence of this investigation (tens of dense docs). Per-investigation ingest.</li>
+          <li><b>Static reference corpus</b> — domain/industry knowledge. Ingested once, reused read-only.</li>
+          <li><b>Domain pack(s)</b> — taxonomy, entity-type ontology, rules, interest model, reference hypothesis set.</li>
+          <li><b>Task / question</b> — the framing input that steers the loop.</li>
+          <li><b>Expert actions</b> — review-queue judgements, soft overrides, promotion approvals.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>OUTPUT</h3>
+        <ul>
+          <li><b>Initial conclusion</b> — the Task's addressing hypotheses + state + acceptability (banded true/plausible/implausible/false). <b>Not a verdict.</b></li>
+          <li><b>Evidential subgraph</b> — the SUPPORTS/REFUTES structure behind each conclusion.</li>
+          <li><b>Provenance trail</b> — every node resolvable to its source span (clearance-permitting).</li>
+          <li><b>Review queue</b> — the ranked, budgeted set of items most worth a human's time.</li>
+          <li><b>Audit log</b> — append-only record of every operation, for reconstruction.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="note">// All outputs are projections of one graph. Presentation renders a cut at the audience's abstraction level (mixed-level frontier) and filters by clearance — the underlying graph is single-source-of-truth.</p>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    IKNOS · processing &amp; data-flow reference · working title · self-hosted · open-source<br>
+    distinct flows: ingestion (§1) writes once · investigation runtime (§5) reads/derives · expert acts through 5 interfaces (§6)
+  </div>
+</footer>
+
+</body>
+</html>

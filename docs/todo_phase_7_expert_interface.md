@@ -17,6 +17,12 @@ Phases 0–2.
       `present`).
 - [ ] Visualize sign/strength/significance on evidential edges; mark expert-set vs
       machine-derived values.
+- [ ] **Abstraction-level controls (§14):** switch audience level (management ↔
+      expert) as a cut through the `PART_OF` hierarchy; expand/collapse a subtree to
+      adjust the mixed-level frontier interactively; show each region at its most
+      relevant level.
+- [ ] Allow expert **override of `PART_OF` attachment** (re-parent an entity / correct
+      a fact's level) as a soft override (§10.3) like any other edge.
 
 ## Point auditability (§10.2)
 
@@ -27,6 +33,34 @@ Phases 0–2.
       did; basis for replay.
 - [ ] Enforce the invariant: nothing displayed that cannot answer "where did you come
       from."
+- [ ] **Clearance-filtered views (§9.1):** present only nodes at-or-below the viewer's
+      clearance and within their compartments; a visible conclusion whose provenance the
+      viewer is not cleared for shows the trail redacted (auditability is relative to
+      clearance).
+
+## Task framing (§11.2)
+
+- [ ] Enter and edit the **`Task`** (framing question + type); view its `answer_state`
+      and the answer (addressing hypotheses, banded true/plausible/implausible/false).
+- [ ] View and **edit the decomposition tree** (`DECOMPOSES_INTO`) — accept/prune/add
+      sub-Tasks; decomposition is LLM-proposed but expert-editable (principle 6).
+- [ ] **Seed and edit hypotheses** — from decomposition, the domain pack's reference
+      hypothesis set, or entered by hand; each `ADDRESSES` a Task.
+
+## Review queue — value-of-information triage (§11.1)
+
+- [ ] Present a **ranked, budgeted review queue** ("review these N first"), ordered by
+      VoI from Phase 6 triage — not the whole graph, not whatever is on screen.
+- [ ] Each item states **what turns on it** (which hypotheses move, by how much) and
+      **what judgment is needed** (confirm a referent / weigh evidence / accept-reject a
+      merge / reconcile an override), derived from the dominant uncertainty type.
+- [ ] Surface **fragile-confidence** and **conflicting-confidence** items, not only
+      low-confidence ones (guard against confident-wrong).
+- [ ] Re-rank **between batches**, not per action; show the VoI decomposition (leverage,
+      uncertainty type, stakes) so the expert sees why they are needed (principle 9).
+- [ ] Feed all needs-human signals into this one queue: provisional propositions (§3.1),
+      ambiguous bindings (§3.1), candidate merges (§5.2), unresolved/cyclic regions
+      (§13), override-reconciliation prompts (§10.3).
 
 ## Soft override (§10.3) — expert-in-the-loop
 
