@@ -4,8 +4,26 @@
 indexes — knowledge *in*, with source references retained throughout.
 
 **Depends on:** Phase 0 (storage, `Document`/`Span`/`Proposition` schema, provenance).
-**Architecture refs:** §1 (embedding substrate), §2 (segmentation backbone), §3
-(proposition layer), §4 (indexing), principles 1–3.
+**Architecture refs:** §1 (parse front-end + embedding substrate), §2 (segmentation
+backbone), §3 (proposition layer), §4 (indexing), principles 1–3.
+
+## Document parsing — front-end (§1, Stage 0)
+
+- [ ] **Parser behind a fixed contract** (swappable, like the LLM): input a PDF/scan/doc,
+      output reading-order text + structure + tables + located figures + formulas +
+      per-element `{page, bbox}`. Default impl: **MinerU**.
+- [ ] **Invoke MinerU as a separate hosted service** (CLI/HTTP), **not vendored** — it is
+      AGPL-3.0; keep the copyleft at the service edge (§1, licensing track).
+- [ ] **Tables → structured observations:** ingest table rows/cells as propositions with
+      column semantics preserved (observation-class, §3.1); do not flatten to prose.
+- [ ] **Figures located here, interpreted later:** store figure region + caption + bbox;
+      a vision `extract` operator (Phase 2/§3) reads propositions off the figure, flagged
+      provisional.
+- [ ] **Carry `{page, bbox}` into `Span`** for visual provenance (claim → region on the
+      original page).
+- [ ] **Parse quality = faithfulness input:** mark scanned / handwritten / complex-table
+      parses lower-faithfulness → provisional → triage; surface MinerU's span/layout
+      visualization for expert QA against the original.
 
 ## Embedding substrate (§1)
 

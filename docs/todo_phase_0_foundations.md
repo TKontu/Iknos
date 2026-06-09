@@ -88,6 +88,11 @@ provenance and audit plumbing in place from the start. Everything else builds on
 - [x] `Span` as the sole provenance reference; implement `Span → (document_id, start,
       end) →` text resolution as a local join (§10 resolution rule). (`db/spans.py::
       resolve_span_text`.)
+      **Schema addition (revised plan, §1/§10):** `Span` also carries an optional
+      `layout {page, bbox}` for *visual* provenance (claim → region on the original
+      page image). The field's only consumer is the Phase-1 parse front-end, so the
+      `types/nodes.py::Span` + ORM field-add is tracked with it — `gap_phase_1_ingest.md`
+      G1.0 / widened G1.9 — not retrofitted here.
 - [x] **Process action log** (`Action` table, append-only, §10.1): `id`, `timestamp`,
       `actor`, `action_type`, `inputs`, `outputs`, and the LLM fields (`model`,
       `sampling`, raw judgment, calibration) — schema and write-path ready for
