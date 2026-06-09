@@ -9,13 +9,17 @@ so management and retrieval can be box-scoped (§9 "soft separation"). Packs are
 
 Two robustness properties, both leaning on the deterministic ids in ``pack.py``:
 
-- **Idempotent.** Ids are derived from ``(name, version, key)``, and every write
-  is a ``MERGE`` on id, so re-loading a pack is a no-op rather than a duplicate —
-  re-activation, retries, and a re-run migration are all safe.
+- **Immutable per version (G0.R1).** A pack is identified by ``(name, version)``;
+  re-loading identical content is a true no-op (no writes, so the bitemporal
+  ``valid_from`` never moves), and re-loading *changed* content under the same
+  version raises ``PackImmutabilityError`` rather than silently diverging. Writes
+  are ``MERGE`` on id, so a load never duplicates. Re-activation, retries, and a
+  re-run migration are all safe. See ``load_pack`` for the full branch table.
 - **Atomic in the caller's transaction.** ``load_pack`` issues all writes on the
   passed session and does **not** commit; the caller owns the transaction
   boundary, so a single ``commit`` makes the whole pack appear at once (and any
-  failure rolls the whole pack back).
+  failure rolls the whole pack back). This is also what makes the no-op branch
+  safe: a committed Box implies a committed (complete) pack.
 
 **Activation seam.** Investigation-scoped activation (an investigation activates
 the packs it needs, §9) arrives with the Task/investigation entity in Phase 6 —
@@ -50,14 +54,58 @@ class LoadedPack:
     already_loaded: bool = field(default=False)
 
 
-async def is_pack_loaded(session: AsyncSession, pack: DomainPack) -> bool:
-    """True if a Box with this pack's deterministic id already exists."""
+class PackImmutabilityError(Exception):
+    """Raised when a pack is re-loaded with **changed content under the same
+    ``(name, version)``** (G0.R1).
+
+    A domain pack is immutable per version: the same ``(name, version)`` maps to
+    the same deterministic Box id regardless of content, so silently re-writing
+    would let the graph diverge from the declaration and would move the
+    bitemporal ``valid_from``. Bump the version instead — a new version is a new
+    Box and the old one deprecates rather than mutating.
+    """
+
+
+@dataclass(frozen=True)
+class _BoxState:
+    """The subset of an existing pack Box the loader needs to decide a re-load."""
+
+    content_hash: str | None  # None = legacy Box written before G0.R1 hashing
+
+
+async def _loaded_box_state(session: AsyncSession, box_id: uuid.UUID) -> _BoxState | None:
+    """The stored state of this pack's Box, or ``None`` if it was never loaded.
+
+    Reads back ``content_hash`` so ``load_pack`` can distinguish an identical
+    re-load (no-op) from a changed-content re-load (immutability error) without
+    rewriting anything.
+    """
     rows = await execute_cypher(
         session,
-        f"MATCH (b:Box {{id: '{pack.box_id}'}}) RETURN count(b)",
-        returns="n agtype",
+        f"MATCH (b:Box {{id: '{box_id}'}}) RETURN b.content_hash",
+        returns="content_hash agtype",
     )
-    return bool(rows) and int(rows[0][0]) > 0
+    if not rows:
+        return None
+    raw = rows[0][0]
+    return _BoxState(content_hash=None if raw is None else _unquote(raw))
+
+
+def _loaded_result(
+    pack: DomainPack, entity_ids: dict[str, uuid.UUID], *, already_loaded: bool
+) -> LoadedPack:
+    """Build the ``LoadedPack`` return value purely from the pack (no DB reads).
+
+    Counts are a function of the declaration, so a no-op re-load reports the same
+    ids/counts a fresh load would, without re-querying the graph.
+    """
+    return LoadedPack(
+        box_id=pack.box_id,
+        entity_ids=entity_ids,
+        direct_part_of=len(pack.part_of),
+        part_of=len(pack.transitive_closure()),
+        already_loaded=already_loaded,
+    )
 
 
 async def load_pack(
@@ -68,15 +116,52 @@ async def load_pack(
 ) -> LoadedPack:
     """MERGE a pack's Box + taxonomy into the graph (caller commits).
 
-    Idempotent: a second call with the same pack rewrites identical properties
-    and creates no duplicates. Returns the deterministic ids and the edge counts.
+    **Immutable per version.** A pack is identified by ``(name, version)`` (its
+    deterministic Box id), and that identity is content-independent. So this is
+    not a blind upsert:
+
+    - **First load** (Box absent): write the Box + taxonomy, stamp ``valid_from``
+      (now, or the passed value), and record ``content_hash``.
+    - **Identical re-load** (same ``content_hash``): a true **no-op** — no writes
+      are issued, so the bitemporal ``valid_from`` is preserved exactly. Returns
+      ``already_loaded=True``. Safe for retries, re-activation, and a re-run
+      migration (the original G0.R1 motivation).
+    - **Changed content, same version**: raises :class:`PackImmutabilityError`
+      rather than silently diverging — bump the version (a new Box).
+    - **Legacy Box** (no stored ``content_hash``, e.g. a dev graph predating
+      G0.R1): adopt the hash in place (one ``SET``), leaving ``valid_from``
+      untouched; treated as a no-op otherwise.
+
+    ``valid_from`` is therefore **create-only**: the moment this pack version
+    became valid, never moved by a re-load. Atomicity makes the no-op-on-existing
+    branch safe — ``load_pack`` issues no commit, so a committed Box implies a
+    committed (complete) pack, with no half-written state to repair.
     """
+    entity_ids = {e.key: pack.entity_id(e.key) for e in pack.entities}
+    content_hash = pack.content_hash
+
+    state = await _loaded_box_state(session, pack.box_id)
+    if state is not None:
+        # Box already present — never rewrite content or valid_from.
+        if state.content_hash == content_hash:
+            return _loaded_result(pack, entity_ids, already_loaded=True)
+        if state.content_hash is None:
+            # Legacy Box (pre-G0.R1): adopt the hash without touching valid_from.
+            await execute_cypher(
+                session,
+                f"MATCH (b:Box {{id: '{pack.box_id}'}}) SET b.content_hash = '{content_hash}'",
+            )
+            return _loaded_result(pack, entity_ids, already_loaded=True)
+        raise PackImmutabilityError(
+            f"domain pack '{pack.name}@{pack.version}' was already loaded with different "
+            f"content (stored hash {state.content_hash[:12]}…, declared {content_hash[:12]}…). "
+            f"A pack version is immutable — bump the version to change it."
+        )
+
+    # --- first load: stamp valid_from once and persist content_hash ---
     stamp = valid_from or datetime.now(UTC)
     when = stamp.isoformat()
     box = pack.to_box(stamp)
-    entity_ids = {e.key: pack.entity_id(e.key) for e in pack.entities}
-
-    already = await is_pack_loaded(session, pack)
 
     # --- Box registry vertex: core Box props + pack metadata (extra AGE props) ---
     box_props: dict[str, Any] = {
@@ -91,6 +176,8 @@ async def load_pack(
         "status": str(box.status),
         # Pack-layer metadata — not on the domain-agnostic core Box model (§9, §10).
         "kind": PACK_KIND,
+        # Content hash anchoring per-version immutability (G0.R1, see load_pack).
+        "content_hash": content_hash,
         # Entity-type ontology travels with the Box so active-pack consumers
         # (entity linking, Phase 1) read legal types from the graph, not a file.
         # Forward path: promote to first-class type nodes if they need edges.
@@ -145,13 +232,7 @@ async def load_pack(
             },
         )
 
-    return LoadedPack(
-        box_id=box.id,
-        entity_ids=entity_ids,
-        direct_part_of=len(pack.part_of),
-        part_of=len(closure),
-        already_loaded=already,
-    )
+    return _loaded_result(pack, entity_ids, already_loaded=False)
 
 
 async def list_active_packs(session: AsyncSession) -> list[dict[str, str]]:

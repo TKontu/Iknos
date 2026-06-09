@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.db.age import bootstrap_session, execute_cypher
-from iknos.domain.loader import list_active_packs, load_pack
+from iknos.domain.loader import PackImmutabilityError, list_active_packs, load_pack
 from iknos.domain.packs import bundled_pack
 
 pytestmark = pytest.mark.asyncio
@@ -20,6 +20,13 @@ pytestmark = pytest.mark.asyncio
 async def _count(session: AsyncSession, query: str) -> int:
     rows = await execute_cypher(session, query, returns="n agtype")
     return int(rows[0][0]) if rows else 0
+
+
+async def _scalar(session: AsyncSession, query: str) -> str | None:
+    rows = await execute_cypher(session, query, returns="v agtype")
+    if not rows or rows[0][0] is None:
+        return None
+    return str(rows[0][0]).strip('"')
 
 
 async def test_pack_loads_end_to_end(session: AsyncSession) -> None:
@@ -106,11 +113,36 @@ async def test_reload_is_idempotent(session: AsyncSession) -> None:
 
     first = await load_pack(session, pack)
     await session.commit()
+    valid_from_after_first = await _scalar(
+        session, f"MATCH (b:Box {{id: '{box_id}'}}) RETURN b.valid_from"
+    )
+    edge_valid_from_after_first = await _scalar(
+        session,
+        f"MATCH (:Object)-[r:partOf {{box: '{box_id}'}}]->(:Object) RETURN r.valid_from LIMIT 1",
+    )
+
     second = await load_pack(session, pack)
     await session.commit()
 
     assert second.already_loaded is True
     assert first.box_id == second.box_id
+
+    # G0.R1: a re-load is a true no-op — the bitemporal valid_from is preserved,
+    # not silently rewritten to "now". (This is the assertion whose absence hid
+    # the original bug; counts alone could not catch it.)
+    assert valid_from_after_first is not None
+    assert (
+        await _scalar(session, f"MATCH (b:Box {{id: '{box_id}'}}) RETURN b.valid_from")
+        == valid_from_after_first
+    )
+    assert (
+        await _scalar(
+            session,
+            f"MATCH (:Object)-[r:partOf {{box: '{box_id}'}}]->(:Object) "
+            "RETURN r.valid_from LIMIT 1",
+        )
+        == edge_valid_from_after_first
+    )
 
     # No duplication: still exactly one Box, five Objects, five partOf edges.
     assert await _count(session, f"MATCH (b:Box {{id: '{box_id}'}}) RETURN count(b)") == 1
@@ -122,3 +154,31 @@ async def test_reload_is_idempotent(session: AsyncSession) -> None:
         )
         == 5
     )
+
+
+async def test_first_load_stamps_content_hash(session: AsyncSession) -> None:
+    await bootstrap_session(session)
+    pack = bundled_pack("pump_basic")
+
+    await load_pack(session, pack)
+    await session.commit()
+
+    stored = await _scalar(session, f"MATCH (b:Box {{id: '{pack.box_id}'}}) RETURN b.content_hash")
+    assert stored == pack.content_hash
+
+
+async def test_changed_content_same_version_is_rejected(session: AsyncSession) -> None:
+    await bootstrap_session(session)
+    pack = bundled_pack("pump_basic")
+
+    await load_pack(session, pack)
+    await session.commit()
+
+    # Same (name, version) — therefore the same Box id — but different content.
+    # A pack version is immutable: this must fail loudly, not silently diverge.
+    mutated = pack.model_copy(update={"reliability_prior": 0.5})
+    assert mutated.box_id == pack.box_id
+    assert mutated.content_hash != pack.content_hash
+
+    with pytest.raises(PackImmutabilityError, match="immutable"):
+        await load_pack(session, mutated)
