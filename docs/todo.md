@@ -68,6 +68,7 @@ for every design decision; phase files reference it by section (§).
 | 5 | Temporal dynamics & belief revision | Bitemporal supersession, revision triggers, box deprecation |
 | 6 | Investigation runtime & analysis | The investigation loop end-to-end, network analysis, presentation |
 | 7 | Expert interface | Graph view, audit drill-down, soft override & reconciliation |
+| + | Presentation views *(optional)* | Radar, **table/bulk-edit** & coordinated projections of the hypothesis layer — `todo_presentation_views.md`. Editing via existing override machinery; no backend changes; layered on Phase 7 |
 
 ## Dependency order
 

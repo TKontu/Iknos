@@ -12,17 +12,46 @@ Phases 0–2.
 
 ## Graph analysis view (`app/`, §6)
 
-- [ ] Interactive node-expansion canvas, performant on large graphs.
+- [ ] Interactive node-expansion canvas, performant on large graphs. **This is the
+      node-edge *projection* — one of several coordinated views of the one graph (§14);
+      the audit/relational surface that other projections drill into.**
 - [ ] Render ranked probable causes with their evidence subgraphs (from Phase 6
       `present`).
 - [ ] Visualize sign/strength/significance on evidential edges; mark expert-set vs
       machine-derived values.
+- [ ] **Coordinated views / linked selection:** selecting an item syncs across the
+      node-edge view, the review queue, and any optional projections
+      (`todo_presentation_views.md` — radar/matrix/timeline). View-switching preserves
+      selection and filter scope. The node-edge view is the drill-down target for all of
+      them.
 - [ ] **Abstraction-level controls (§14):** switch audience level (management ↔
       expert) as a cut through the `PART_OF` hierarchy; expand/collapse a subtree to
       adjust the mixed-level frontier interactively; show each region at its most
       relevant level.
 - [ ] Allow expert **override of `PART_OF` attachment** (re-parent an entity / correct
       a fact's level) as a soft override (§10.3) like any other edge.
+
+## Interaction & editing — direct manipulation (flowsint-style)
+
+- [ ] **Edit any value inline = soft override (§10.3).** Click an attribute / edge
+      weight / classification and change it; the UI is direct editing, the semantics are a
+      logged, reversible, bitemporal override (the computed value is retained underneath).
+- [ ] **Drag to re-link:** reconnect or redirect an edge (re-attach `REFERS_TO`, re-parent
+      `PART_OF`, add/redirect `SUPPORTS`/`REFUTES`) as an override.
+- [ ] **Manually assert content:** add nodes, edges, and facts directly from the canvas
+      (an entity, a relationship, a known fact / testimony). Expert-asserted content is
+      **attributed to the expert** (source = expert, `epistemic_class`, credibility) and
+      enters the same machinery — it is evidence, **not privileged ground truth**, logged
+      and provenanced like everything else.
+- [ ] **Invoke operators on demand (flowsint-style):** run an operator on a selected node
+      / region from the canvas — `extract` · `corroborate` · `find-contradiction` ·
+      `deduce` · `expand candidates` — so the analyst can *drive* the investigation, not
+      only consume the autonomous loop. Same operators as §11; results land in the working
+      box and re-propagate.
+- [ ] **All edits non-destructive & re-propagating:** every inline edit, manual assertion,
+      drag, and on-demand operator run is logged (§10.1), reversible, bitemporal, and
+      triggers delta-scoped re-propagation (§6.1, §12). No silent or hard mutation.
+- [ ] Real-time updates via the §6 `api` event stream; canvas responsive on large graphs.
 
 ## Point auditability (§10.2)
 
