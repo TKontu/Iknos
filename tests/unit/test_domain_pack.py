@@ -167,3 +167,63 @@ def test_version_bump_changes_box_id() -> None:
 
 def test_bundled_pack_is_reference_tier() -> None:
     assert bundled_pack("pump_basic").tier is Tier.REFERENCE
+
+
+# --- content hash / per-version immutability (G0.R1) ---
+
+
+def test_content_hash_is_stable_across_instances() -> None:
+    assert bundled_pack("pump_basic").content_hash == bundled_pack("pump_basic").content_hash
+
+
+def test_content_hash_is_order_independent() -> None:
+    # Reordering entities / part_of / entity_types is not a semantic change, so
+    # reindenting or reshuffling the JSON must NOT trip the immutability guard.
+    base = _pack(
+        entity_types=[{"name": "Assembly"}, {"name": "Component"}],
+        entities=[
+            {"key": "whole", "label": "Whole", "type": "Assembly"},
+            {"key": "part", "label": "Part", "type": "Component"},
+            {"key": "part2", "label": "Part 2", "type": "Component"},
+        ],
+        part_of=[
+            {"part": "part", "whole": "whole", "meronymy": "component-integral"},
+            {"part": "part2", "whole": "whole", "meronymy": "component-integral"},
+        ],
+    )
+    shuffled = _pack(
+        entity_types=[{"name": "Component"}, {"name": "Assembly"}],
+        entities=[
+            {"key": "part2", "label": "Part 2", "type": "Component"},
+            {"key": "part", "label": "Part", "type": "Component"},
+            {"key": "whole", "label": "Whole", "type": "Assembly"},
+        ],
+        part_of=[
+            {"part": "part2", "whole": "whole", "meronymy": "component-integral"},
+            {"part": "part", "whole": "whole", "meronymy": "component-integral"},
+        ],
+    )
+    assert DomainPack.from_dict(base).content_hash == DomainPack.from_dict(shuffled).content_hash
+
+
+def test_content_hash_changes_on_semantic_change() -> None:
+    base = DomainPack.from_dict(_pack())
+    # A different label is a genuine content change → different hash.
+    relabelled = DomainPack.from_dict(
+        _pack(
+            entities=[
+                {"key": "whole", "label": "Whole", "type": "Assembly"},
+                {"key": "part", "label": "RELABELLED", "type": "Component"},
+            ]
+        )
+    )
+    assert base.content_hash != relabelled.content_hash
+
+
+def test_content_hash_independent_of_version() -> None:
+    # The hash guards *content*; version is the identity axis (a bump = a new Box),
+    # so two versions of the same content share a content hash by design.
+    base = bundled_pack("pump_basic")
+    bumped = base.model_copy(update={"version": "0.2.0"})
+    assert base.content_hash == bumped.content_hash
+    assert base.box_id != bumped.box_id

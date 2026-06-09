@@ -26,6 +26,7 @@ investigation entity (Phase 6); until then a loaded pack's ``Box.status`` is the
 activation flag (see ``loader.list_active_packs``).
 """
 
+import hashlib
 import json
 import uuid
 from collections import deque
@@ -232,6 +233,55 @@ class DomainPack(BaseModel):
     def entity_id(self, key: str) -> uuid.UUID:
         """Stable Object id for a taxonomy key, namespaced under this pack's Box."""
         return uuid.uuid5(self.box_id, key)
+
+    @property
+    def content_hash(self) -> str:
+        """A stable SHA-256 over the pack's *semantic* declaration (G0.R1).
+
+        Persisted on the Box at first load so the loader can enforce pack
+        **immutability**: a re-load whose content matches is a true no-op (the
+        bitemporal ``valid_from`` is never rewritten), while a re-load whose
+        content differs under the **same** ``(name, version)`` is rejected rather
+        than silently diverging from the declaration (see ``loader.load_pack``).
+
+        Covers *content only*, not identity: ``name``/``version`` are excluded
+        because they are already the Box identity (``box_id``), and a hash is only
+        ever compared between two packs that share a ``box_id``. So the hash
+        answers "did the content change?", while ``box_id`` answers "is this the
+        same pack version?".
+
+        Canonicalized so the hash tracks *meaning*, not formatting: collections
+        are sorted (``entity_types`` by name, ``entities`` by key, ``part_of`` by
+        ``(part, whole)``) and meronymy is normalized to its string value, so
+        reordering or reindenting the JSON does **not** trip the immutability
+        guard — only a genuine change to a persisted field does.
+        """
+        payload = {
+            "tier": str(self.tier),
+            "source": self.source,
+            "reliability_prior": self.reliability_prior,
+            "description": self.description,
+            "entity_types": sorted(
+                (
+                    {"name": t.name, "description": t.description, "parent": t.parent}
+                    for t in self.entity_types
+                ),
+                key=lambda t: str(t["name"]),
+            ),
+            "entities": sorted(
+                ({"key": e.key, "label": e.label, "type": e.type} for e in self.entities),
+                key=lambda e: e["key"],
+            ),
+            "part_of": sorted(
+                (
+                    {"part": r.part, "whole": r.whole, "meronymy": str(r.meronymy)}
+                    for r in self.part_of
+                ),
+                key=lambda r: (r["part"], r["whole"]),
+            ),
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     # --- closure (§14) ---
 
