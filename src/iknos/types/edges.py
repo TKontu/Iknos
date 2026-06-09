@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from iknos.types.annotations import Annotations
+from iknos.types.governance import Sensitivity
 from iknos.types.temporal import BitemporalFields
 
 
@@ -28,7 +29,12 @@ class EvidencedBy(BaseModel):
 
 
 class EvidentialEdge(BaseModel):
-    """SUPPORTS or REFUTES link between reasoning nodes."""
+    """SUPPORTS or REFUTES link between reasoning nodes.
+
+    ``sensitivity`` is the lub of the edge's antecedents (§9.1; propagation walk
+    deferred) and is distinct from ``faithfulness`` (§3.1) and from edge
+    ``strength``/``significance`` (§8) — three separate quantities, never merged.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -40,4 +46,5 @@ class EvidentialEdge(BaseModel):
     significance: float = Field(..., ge=0.0, le=1.0)
     annotations: Annotations
     temporal: BitemporalFields
+    sensitivity: Sensitivity = Field(default_factory=Sensitivity)
     override: dict[str, Any] | None = None
