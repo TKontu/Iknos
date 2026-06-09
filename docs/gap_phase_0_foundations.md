@@ -72,20 +72,29 @@ Add to `EDGE_LABELS`:
       `RELEVANT_TO` (§11.2).
 
 ### G0.4 — `INVOLVES.role` + derived abstraction level (§14)
-- [ ] Establish the `role` property convention on `INVOLVES` now (string;
+- [x] Establish the `role` property convention on `INVOLVES` now (string;
       subject/object/instrument…), even though `Actor`/`Object` Pydantic models
       land in Phase 2 — the abstraction-level rule depends on the *subject-role*
-      entity.
-- [ ] Record the rule **abstraction level is derived, not stored**: a node's
+      entity. → `Role` StrEnum in `src/iknos/types/edges.py`.
+- [x] Record the rule **abstraction level is derived, not stored**: a node's
       level = its subject-role `INVOLVES` entity's position in the `partOf` order
       (§14). No `level` property on reasoning nodes. Optionally materialize a
       depth/rank (recomputed on hierarchy change) for query performance —
-      consumer is Phase 6, so a documented placeholder is enough now.
+      consumer is Phase 6, so a documented placeholder is enough now. → documented
+      on `Role` (forward note: depth/rank is a cache of the derived value, never
+      an authoritative stored level).
 
 ### G0.5 — Intentional layer hooks
-- [ ] `Hypothesis.acceptability` banding to `true/plausible/implausible/false`
+- [x] `Hypothesis.acceptability` banding to `true/plausible/implausible/false`
       for presentation (field in the schema contract; banding logic Phase 4/6).
-- [ ] `Task.answer_state` semantics documented as *answered*, not adjudicated.
+      → `AcceptabilityBand` + pure `band()` (single-source-of-truth thresholds,
+      tunable in Phase 4/6) and `HypothesisState` in `src/iknos/types/intentional.py`.
+- [x] `Task.answer_state` semantics documented as *answered*, not adjudicated.
+      → `AnswerState`/`TaskType` in `intentional.py`; the module docstring draws
+      the epistemic-vs-intentional line (Task is *answered*, Hypothesis is
+      *adjudicated*). Full `Task`/`Hypothesis` Pydantic projections stay deferred
+      (Phase 6 / Phase 4) per the node-projection convention — only the stable
+      property vocabularies are fixed now.
 
 ### G0.6 — Governance attributes (§9.1)
 The schema must carry governance from the start (propagation logic later):
@@ -117,8 +126,13 @@ Still deferred to Phase 3 (no consumer yet), but the revised plan **adds SCC
 detection** over `DERIVED_FROM` alongside transitive reachability (well-founded
 support + cycle-safe handling, §12).
 
-- [ ] Note the SCC requirement on the Phase 3 reachability-helper item so it is
-      not lost. No Phase 0 code beyond the note.
+- [x] Note the SCC requirement on the Phase 3 reachability-helper item so it is
+      not lost. No Phase 0 code beyond the note. → already captured in
+      `todo_phase_3_reasoning_core.md`: acyclic regions use Counting +
+      `WITH RECURSIVE` closure; **cyclic `DERIVED_FROM` SCCs are detected and
+      routed to a cycle-safe algorithm (DRed / clingo)**, with must-pass
+      ungrounded-vs-grounded-cycle correctness tests. Cross-referenced here so
+      the requirement is not lost.
 
 ## Migration
 
@@ -136,14 +150,16 @@ Tier rename (G0.1) and the new Pydantic fields are **code-only** (no DDL).
 
 ## Revised exit criteria (delta over the originals)
 
-- [ ] All new labels create-able; the `0004` migration is up/down/up + drift clean
-      (the existing `migrations` CI gate).
-- [ ] A `Task` stores with `type`/`answer_state`; a `Mention` binds to an entity
-      via a scored `REFERS_TO`.
-- [ ] A `directPartOf`/`partOf` pair stores with a meronymy-type tag.
-- [ ] A node carries `sensitivity`; a `Box` carries `credibility`/`interest`
-      alongside `reliability_prior`.
-- [ ] A trivial domain pack loads end-to-end (reference-tier box with a tiny
-      taxonomy).
-- [ ] `Tier` reads `schema/reference/case/working` everywhere; the Phase 0
-      exit-criteria test still passes.
+- [x] All new labels create-able; the `0004` migration is up/down/up + drift clean
+      (the existing `migrations` CI gate). (G0.2–G0.3, #12)
+- [x] A `Task` stores with `type`/`answer_state`; a `Mention` binds to an entity
+      via a scored `REFERS_TO`. (label + property contract; `0004` smoke test +
+      `TaskType`/`AnswerState` vocabulary, G0.2/G0.5)
+- [x] A `directPartOf`/`partOf` pair stores with a meronymy-type tag. (G0.7, #14 —
+      `tests/integration/test_domain_pack_load.py`)
+- [x] A node carries `sensitivity`; a `Box` carries `interest` (credibility is
+      derived-not-stored, §9.1/§14) alongside `reliability_prior`. (G0.6, #13)
+- [x] A trivial domain pack loads end-to-end (reference-tier box with a tiny
+      taxonomy). (G0.7, #14 — `packs/pump_basic.json`)
+- [x] `Tier` reads `schema/reference/case/working` everywhere; the Phase 0
+      exit-criteria test still passes. (G0.1, #11)
