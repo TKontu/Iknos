@@ -11,6 +11,20 @@ revised spec. It folds in (and supersedes) the old `proposition_layer_plan.md`.
 §3.1 (extraction faithfulness), §4 (indexing), §6.1 (cost/incrementality).
 Principles 1–3, 6.
 
+## Status (current)
+
+Shipped to `main`: **G1.9** span persistence (#18), **G1.1** structured epistemic
+fields + **G1.2** fact/judgement routing (#20), **G1.4** extract-then-verify (NLI) +
+**G1.5** faithfulness score (#21). The §3.1 perception-hardening core is in place: a
+proposition now carries `polarity/modality/attribution/scope/epistemic_class/routing`
+and — when an independent verifier is configured — a derived `faithfulness ∈ [0,1]` and
+`provisional` flag, with the verify verdict recorded as its own auditable `Action`.
+
+Remaining (next): **G1.3** multi-sample (the agreement signal that combines into
+`faithfulness` via the seam `faithfulness_from_verdict()` left open), **G1.6** quarantine
+*enforcement* (the `provisional` flag is now set per node; gating it at edge-creation is
+Phase-2-gated), **G1.0** parse front-end (MinerU), then G1.7/G1.8/G1.10–G1.12.
+
 ## Current implementation (baseline)
 
 The built proposition layer is sound and retained — its design is captured here
@@ -65,26 +79,30 @@ ingest of any real document.
       parses marked lower-faithfulness → provisional → triage (feeds G1.5/G1.6); surface
       MinerU's layout visualization for expert QA against the original.
 
-### G1.1 — Structured epistemic fields on `Proposition` (§3.1) *(core)*
+### G1.1 — Structured epistemic fields on `Proposition` (§3.1) *(core)* — ✅ shipped (#20)
 Today `Proposition = {id, text}`. `architecture.md` §10 (lines ~771–775) requires
 structured, **non-flattened** epistemic fields:
 
-- [ ] Extend `types/nodes.py::Proposition` and the extraction contract
+- [x] Extend `types/nodes.py::Proposition` and the extraction contract
       (`core/proposition.py::PropositionExtraction` / `_PropositionOut`) with:
       `polarity` (asserted/negated), `modality` (categorical/probable/possible/
       hypothesized), `attribution` (document/reported-speech/named-source),
       `scope` (quantifier-scope notes), `epistemic_class`
       (observation/testimony/judgement — orthogonal to modality),
-      `faithfulness` ∈ [0,1], `provisional` flag.
-- [ ] Update `SYSTEM_PROMPT` + the guided-JSON schema so the model emits these
+      `faithfulness` ∈ [0,1], `provisional` flag. *(faithfulness/provisional landed
+      as null placeholders here; computed in G1.4/G1.5.)*
+- [x] Update `SYSTEM_PROMPT` + the guided-JSON schema so the model emits these
       fields per proposition; persist them as `Proposition` node properties.
+      *(Enum lists interpolated from the StrEnums — no prompt/schema drift; the model
+      does not self-report `faithfulness`, per §3.1.)*
 
-### G1.2 — Observations as facts, conclusions as judgements (§3.1, §5)
-- [ ] Use `epistemic_class` to route: a source's **observations** ingest as facts;
+### G1.2 — Observations as facts, conclusions as judgements (§3.1, §5) — ✅ shipped (#20)
+- [x] Use `epistemic_class` to route: a source's **observations** ingest as facts;
       a source's **conclusions** ingest as defeasible, credibility-weighted
       *judgement-claims*, never as facts (the engine re-derives conclusions). The
       classification + routing flag originate here; the consuming extraction is
-      Phase 2, so emit the class and the routing decision now.
+      Phase 2, so emit the class and the routing decision now. *(`route_for()` +
+      cached `Routing` property on each `Proposition`; consumed in Phase 2.)*
 
 ### G1.3 — Multi-sample extraction *(reverses an old non-goal)*
 The old `proposition_layer_plan.md` explicitly listed "no multi-sample/calibration
@@ -94,26 +112,37 @@ for propositionization" as a non-goal. The revised plan reverses that.
       extractions → high `faithfulness`; unstable → `provisional`/flagged. Feed
       the agreement signal into `faithfulness` (G1.5).
 
-### G1.4 — `verify` step (entailment/NLI) (§3.1)
-- [ ] Add a `verify` step: check the source span entails the proposition **with
+### G1.4 — `verify` step (entailment/NLI) (§3.1) — ✅ shipped (#21)
+- [x] Add a `verify` step: check the source span entails the proposition **with
       its polarity and modality**; disagreement sets `provisional`. Prefer an
       **independent verifier — a different model family from the extractor** — to
       cut correlated error (§13). Requires `core/llm.py` to address a second
-      model/endpoint (config in `config.py`).
+      model/endpoint (config in `config.py`). *(`core/verify.py::Verifier` reuses
+      `LLMClient` against `LLM_VERIFIER_BASE_URL`/`LLM_VERIFIER_MODEL`; one
+      proposition per call in the propositionizer's concurrent phase; the verdict is
+      recorded as a separate `actor="verifier"` `Action`. Verifier optional —
+      absent → faithfulness/provisional stay null, the documented G1.1 mode.)*
 
-### G1.5 — `faithfulness` score, kept distinct (§3.1)
-- [ ] Record `faithfulness` ∈ [0,1] per proposition, **distinct** from source
+### G1.5 — `faithfulness` score, kept distinct (§3.1) — ✅ shipped (#21)
+- [x] Record `faithfulness` ∈ [0,1] per proposition, **distinct** from source
       `credibility` (§9, see `gap_phase_0_foundations.md` G0.6) and evidential
-      `strength` (§8). Persist on the node; wire the faithfulness-gate metric
-      (entailment, negation/modality preservation) for **Trial A5**
-      (`todo_trials.md`).
+      `strength` (§8). Persist on the node. *(`epistemic.faithfulness_from_verdict()`
+      — derived from the verify verdict, never self-reported: per-entailment base ×
+      multiplicative polarity/modality penalties; sets `provisional` via
+      `is_provisional()`. The G1.3 agreement signal combines in via a named seam.)*
+- [ ] Wire the faithfulness-gate **metric** (entailment, negation/modality
+      preservation accuracy) for **Trial A5** (`todo_trials.md`). *(The decomposed
+      verdicts are persisted in `actions.outputs` ready for the metric; computing the
+      metric on a labeled corpus is the remaining Trial-A5 work.)*
 
-### G1.6 — Quarantine by stakes (§3.1)
-- [ ] Provisional / low-faithfulness propositions may exist but **cannot drive
-      high-stakes moves** (e.g. a `REFUTES`) until confirmed; route them to the
-      expert-triage queue. The `provisional` gate + the rule originate here (the
-      queue UI is Phase 7); enforce the gate wherever a proposition feeds an
-      evidential edge.
+### G1.6 — Quarantine by stakes (§3.1) *(partial — flag set, enforcement pending)*
+- [x] The `provisional` flag is now **set** per proposition (`is_provisional(faithfulness)`,
+      G1.5) and persisted on the node.
+- [ ] **Enforcement:** provisional / low-faithfulness propositions may exist but
+      **cannot drive high-stakes moves** (e.g. a `REFUTES`) until confirmed; route them
+      to the expert-triage queue. The rule originates here (the queue UI is Phase 7);
+      enforce the gate wherever a proposition feeds an evidential edge. *(Evidential
+      edges are Phase 2, so enforcement is gated on that.)*
 
 ### G1.7 — Content-addressed cache (§6.1) *(generalizes current idempotency)*
 Current idempotency keys on `Action.inputs.target_span` (a span id) — so a
@@ -130,18 +159,18 @@ re-segmented or duplicated span re-infers.
       per investigation. Depends on the Phase 0 domain-pack scaffold
       (`gap_phase_0_foundations.md` G0.7) and box tier (`reference`/`schema`).
 
-### G1.9 — Span persistence *(the end-to-end blocker, carried)*
+### G1.9 — Span persistence *(the end-to-end blocker, carried)* — ✅ shipped (#18)
 `segmentation.py::segment_document` returns in-memory `(start, end)` tuples;
 nothing writes `Span` vertices to AGE or populates the dense span index
 (`document_embeddings`). `Propositionizer` assumes spans already exist (the
 integration test hand-creates them).
 
-- [ ] Persist `Span` vertices + `document_embeddings` rows from the segmentation
-      output. **This is the blocker for true end-to-end ingest** and the natural
-      next increment — close it before the §3.1 faithfulness work can be tested
-      on a real document.
-- [ ] Persist the optional `Span.layout {page, bbox}` (from G1.0) on the same write
+- [x] Persist `Span` vertices + `document_embeddings` rows from the segmentation
+      output. *(`core/ingest.py::persist_spans` — deterministic `uuid5` span ids +
+      MERGE/upsert + content-hash immutability guard; migration `0005`.)*
+- [x] Persist the optional `Span.layout {page, bbox}` (from G1.0) on the same write
       path when the parse front-end supplied it (null when ingesting plain text).
+      *(Seam `persist_spans(layouts=...)` in place; populated once G1.0 lands.)*
 
 ### G1.10 — Multi-level spans + RAPTOR summaries (§2)
 - [ ] Length penalty as the **level knob** → multiple abstraction levels stored as
@@ -162,14 +191,14 @@ integration test hand-creates them).
 ## Sequencing
 
 0. **G1.0 parse front-end** is the new Stage 0. The `Span.layout` field-add lands
-   with it; its write path merges into G1.9. The MinerU *service* integration can
-   proceed in parallel (text ingest already works without it), but `Span.layout`
-   must exist before G1.9 persists it.
-1. **G1.9 span persistence** — unblocks real end-to-end ingest (now also persists
-   `Span.layout` when present).
-2. **G1.1 epistemic fields** + **G1.4 verify** + **G1.5 faithfulness** —
-   the §3.1 perception-hardening core.
-3. **G1.3 multi-sample** + **G1.6 quarantine** — calibration + stakes gating.
+   with it; its write path merges into G1.9 (seam already present). The MinerU
+   *service* integration can proceed in parallel (text ingest already works without
+   it). *(not started)*
+1. ~~**G1.9 span persistence**~~ — ✅ #18.
+2. ~~**G1.1 epistemic fields** + **G1.2 routing** (#20) + **G1.4 verify** +
+   **G1.5 faithfulness** (#21)~~ — ✅ the §3.1 perception-hardening core.
+3. **G1.3 multi-sample** + **G1.6 quarantine enforcement** — calibration + stakes
+   gating (G1.6 flag is set; edge-time enforcement gated on Phase 2). ← **next**
 4. **G1.7 content-addressed cache** + **G1.8 reference amortization** — cost.
 5. **G1.10 multi-level/summaries**, **G1.11 box**, **G1.12 multi-span** —
    incremental, some gated on Phase 2.
