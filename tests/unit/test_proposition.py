@@ -5,9 +5,17 @@ import pytest
 
 from iknos.core.proposition import (
     Propositionizer,
+    _PropositionOut,
     build_context,
     build_messages,
     span_text,
+)
+from iknos.types.epistemic import (
+    Attribution,
+    EpistemicClass,
+    Modality,
+    Polarity,
+    Routing,
 )
 from iknos.types.nodes import Span
 
@@ -113,3 +121,69 @@ async def test_infer_span_empty_returns_no_results_and_skips_embedding():
 
     assert results == []
     p.substrate.embed_passages.assert_not_called()
+
+
+# --- epistemic fields (G1.1) ---
+
+
+def test_proposition_out_defaults_for_bare_text():
+    # A bare {"text": ...} response (the pre-G1.1 shape) still validates via defaults,
+    # so existing extractions / mocks keep working.
+    out = _PropositionOut.model_validate({"text": "The bearing failed."})
+    assert out.polarity is Polarity.ASSERTED
+    assert out.modality is Modality.CATEGORICAL
+    assert out.attribution is Attribution.DOCUMENT
+    assert out.scope == ""
+    assert out.epistemic_class is EpistemicClass.OBSERVATION
+
+
+def test_proposition_out_full_record():
+    out = _PropositionOut.model_validate(
+        {
+            "text": "The bearing failed.",
+            "polarity": "negated",
+            "modality": "probable",
+            "attribution": "named-source",
+            "scope": "for all bearings",
+            "epistemic_class": "judgement",
+        }
+    )
+    assert out.polarity is Polarity.NEGATED
+    assert out.modality is Modality.PROBABLE
+    assert out.attribution is Attribution.NAMED_SOURCE
+    assert out.epistemic_class is EpistemicClass.JUDGEMENT
+
+
+@pytest.mark.asyncio
+async def test_infer_span_populates_epistemic_fields_and_routing():
+    doc = uuid.uuid4()
+    raw = "Smith spoke. He concluded it was an assembly fault."
+    spans = [_span(doc, 0, 12), _span(doc, 13, 51)]
+    p = _propositionizer(
+        llm_return={
+            "propositions": [
+                {
+                    "text": "The failure was an assembly fault.",
+                    "polarity": "asserted",
+                    "modality": "categorical",
+                    "attribution": "named-source",
+                    "scope": "",
+                    "epistemic_class": "judgement",
+                },
+                {"text": "The rolling surface shows particle indentations."},  # bare → observation
+            ]
+        },
+        embed_return=[[1.0, 0.0], [0.0, 1.0]],
+    )
+
+    results = await p._infer_span(spans, index=1, raw_text=raw)
+
+    judgement, observation = results
+    assert judgement.epistemic_class is EpistemicClass.JUDGEMENT
+    assert judgement.attribution is Attribution.NAMED_SOURCE
+    assert judgement.routing is Routing.JUDGEMENT  # G1.2: a conclusion routes to judgement
+    # The bare-text proposition defaults to observation → routes to fact.
+    assert observation.epistemic_class is EpistemicClass.OBSERVATION
+    assert observation.routing is Routing.FACT
+    # faithfulness/provisional are not self-reported — null until G1.4/G1.5/G1.6.
+    assert all(r.faithfulness is None and r.provisional is None for r in results)

@@ -123,3 +123,81 @@ async def test_proposition_layer_end_to_end(session: AsyncSession) -> None:
         {"d": doc_id},
     )
     assert dense_after.scalar_one() == 4
+
+
+async def test_epistemic_fields_and_routing_persist(session: AsyncSession) -> None:
+    """G1.1/G1.2: epistemic fields land on the Proposition vertex; routing is derived
+    from epistemic_class; faithfulness/provisional are null (owned by G1.4/G1.5/G1.6)."""
+    await bootstrap_session(session)
+
+    doc_id = uuid.uuid4()
+    raw = "The supplier reported an assembly fault. The surface shows indentations."
+    await session.execute(
+        text("INSERT INTO document_content (document_id, raw_text) VALUES (:id, :t)"),
+        {"id": doc_id, "t": raw},
+    )
+    await execute_cypher(session, f"CREATE (:Document {cypher_map({'id': str(doc_id)})})")
+    span = Span(id=uuid.uuid4(), document_id=doc_id, start=0, end=len(raw))
+    await execute_cypher(
+        session,
+        "CREATE (:Span "
+        + cypher_map(
+            {"id": str(span.id), "document_id": str(doc_id), "start": span.start, "end": span.end}
+        )
+        + ")",
+    )
+    await session.commit()
+
+    p = _mock_propositionizer(
+        llm_return={
+            "propositions": [
+                {
+                    "text": "The failure was an assembly fault.",
+                    "polarity": "asserted",
+                    "modality": "probable",
+                    "attribution": "named-source",
+                    "scope": "",
+                    "epistemic_class": "judgement",
+                },
+                {
+                    "text": "The rolling surface shows particle indentations.",
+                    "polarity": "asserted",
+                    "modality": "categorical",
+                    "attribution": "document",
+                    "scope": "",
+                    "epistemic_class": "observation",
+                },
+            ]
+        },
+        n_vectors=2,
+    )
+    await p.propositionize_document(session, doc_id, [span], raw)
+
+    rows = await execute_cypher(
+        session,
+        f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span.id)})}) "
+        "RETURN p.text, p.epistemic_class, p.routing, p.modality, p.attribution, "
+        "p.faithfulness, p.provisional",
+        returns=(
+            "text agtype, ec agtype, routing agtype, modality agtype, "
+            "attribution agtype, faith agtype, prov agtype"
+        ),
+    )
+    by_text = {str(r[0]).strip('"'): r for r in rows}
+    assert len(by_text) == 2
+
+    # A source's conclusion → judgement class → routes to JUDGEMENT (G1.2), never a fact.
+    judgement = by_text["The failure was an assembly fault."]
+    assert str(judgement[1]).strip('"') == "judgement"
+    assert str(judgement[2]).strip('"') == "judgement"
+    assert str(judgement[3]).strip('"') == "probable"
+    assert str(judgement[4]).strip('"') == "named-source"
+    # Not self-reported — null until the verify/multi-sample increments compute them.
+    assert judgement[5] is None
+    assert judgement[6] is None
+
+    # An observation → routes to FACT.
+    observation = by_text["The rolling surface shows particle indentations."]
+    assert str(observation[1]).strip('"') == "observation"
+    assert str(observation[2]).strip('"') == "fact"
+    assert observation[5] is None and observation[6] is None

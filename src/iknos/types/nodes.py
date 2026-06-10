@@ -14,6 +14,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from iknos.types.annotations import Annotations
+from iknos.types.epistemic import (
+    Attribution,
+    EpistemicClass,
+    Modality,
+    Polarity,
+    Routing,
+)
 from iknos.types.governance import Sensitivity, SourceInterest
 from iknos.types.temporal import BitemporalFields
 
@@ -74,12 +81,29 @@ class Proposition(BaseModel):
     Provenance is carried by the EVIDENCED_BY edge to the source Span(s), never
     embedded here — so no document_id field (it is reachable via the span). `box`
     is deferred to Phase 2, which owns boxing/tiers (tracked deviation from §10).
+
+    Structured epistemic fields (§3.1, G1.1) are kept distinct, never flattened into
+    ``text`` (see `types/epistemic.py`). Like ``Tier``, they are AGE property strings,
+    so adding them needs no data migration. Two are **schema-contract placeholders**
+    here: ``faithfulness`` (calibrated — owned by the multi-sample/verify increments
+    G1.4/G1.5) and ``provisional`` (the system gate, G1.6) are ``None`` until those
+    land — never a self-reported value (§3.1: confidence is not verbalized self-report).
+    ``routing`` is a cached derivation of ``epistemic_class`` (invariant
+    ``routing == route_for(epistemic_class)``), never set independently.
     """
 
     model_config = ConfigDict(frozen=True)
 
     id: uuid.UUID
     text: str
+    polarity: Polarity = Polarity.ASSERTED
+    modality: Modality = Modality.CATEGORICAL
+    attribution: Attribution = Attribution.DOCUMENT
+    scope: str = ""
+    epistemic_class: EpistemicClass = EpistemicClass.OBSERVATION
+    routing: Routing = Routing.FACT
+    faithfulness: float | None = None
+    provisional: bool | None = None
 
 
 class Box(BaseModel):
