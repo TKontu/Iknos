@@ -141,6 +141,9 @@ failure here changes the design, not just the code.
   Phase 1; the planted-contradiction corpus from the gate kept as a regression suite.
 - **Licensing/compliance** — track dependency licenses; keep the fully-open stack
   (Postgres + AGE + pgvector, igraph, clingo) viable; isolate any GPL reference code.
+  **MinerU (parse front-end) is AGPL-3.0 — invoke it as a separate hosted service
+  (CLI/HTTP), never vendor/link it into the codebase**, so the copyleft stops at the
+  service edge (§1).
 - **Governance (§9.1)** — sensitivity labels propagate over provenance and gate views by
   clearance; source credibility is conditional (base × interest, against-interest boost)
   and track-record-revised; corroboration is independence-aware; packs are versioned/

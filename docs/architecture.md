@@ -52,6 +52,24 @@ Each stage references offsets produced upstream. Nothing is re-stored.
 
 ## 1. Embedding substrate
 
+**Stage 0 — document parsing (front-end).** Real case documents are PDFs and scans
+with multi-column layout, tables, figures, and OCR-only content, not clean text. A
+**document parser** front-ends the pipeline, producing the structured input the rest
+assumes: reading-order text, document structure (headings/lists/paragraphs), tables as
+structured data, located figures with captions, formulas, and **per-element layout
+coordinates (page + bounding box)**. This is a *swappable component behind a fixed
+contract* (like the LLM): the default implementation is **MinerU** (self-hosted,
+open-source, OCR in many languages, layout + table + figure extraction). Three
+integration rules: (a) **tables ingest as structured observations** (rows/cells →
+propositions with column semantics, §3), not flattened prose — they are observation-class
+evidence (§3.1); (b) figures are *located* here and *interpreted* by a vision `extract`
+operator downstream (§3), flagged provisional; (c) layout coordinates flow into `Span`
+(§10) for **visual provenance** — a claim resolves to a region on the original page.
+Parse quality is a faithfulness input: scanned / handwritten / complex-table parses are
+marked lower-faithfulness → provisional → triage. **License boundary:** MinerU is
+AGPL-3.0, so it is invoked as a **separate hosted service** (CLI/HTTP), never vendored
+into the codebase — the copyleft stops at the service edge.
+
 - Run a long-context embedding model over the whole document once. Cache the
   contextualized token embeddings.
 - Boundary detection, multi-level pooling, and semantic search all run over these
@@ -757,12 +775,15 @@ tables in the same Postgres instance, joined to the graph by id.
 
 - **`Document`** — an ingested source. Properties: `id`, `box` (id of the box it
   belongs to), `uri`/`title`, `ingested_at`, `sensitivity` (lattice label +
-  compartment tags, §9.1), and the source's `interest`/role (for conditional
-  credibility, §9.1). Raw text and offsets live in PostgreSQL, keyed by `Document.id`;
+  compartment tags, §9.1). The source's reliability and interest are carried by its
+  `Box` (§9.1); a `Document` may override `source_interest` only when a box spans
+  multiple sources. Raw text and offsets live in PostgreSQL, keyed by `Document.id`;
   the graph holds the node, not the text.
 - **`Span`** — a contiguous source range, the unit of provenance. Properties: `id`,
   `document_id`, `start` and `end` (character offsets into that document's text),
-  `level` (segmentation level that produced it). A Span is the *only* thing that
+  `level` (segmentation level that produced it), and optional **`layout` {page, bbox}**
+  from the parse front-end (§1) for visual provenance — resolving a claim to a region on
+  the original page image, not just a character offset. A Span is the *only* thing that
   points at raw text; every provenance reference resolves to one or more Span ids.
 - **`Proposition`** — a decontextualized atomic statement (the §3 unit). Properties:
   `id`, `text` (the rewritten, self-contained form), `box`; the structured epistemic
@@ -802,6 +823,7 @@ tables in the same Postgres instance, joined to the graph by id.
   tree.
 - **`Box`** — the registry node (§9). Properties: `id`, `tier`
   ∈ {schema, reference, case, working}, `version`, `source`, `reliability_prior`,
+  `source_interest` {role, stake} (the §9.1 input for conditional credibility),
   `valid_from`, `valid_to`, `status` ∈ {active, deprecated}.
 
 Every node except `Box` and `Document` carries `box` (its lifecycle unit) and, where
@@ -880,11 +902,15 @@ unless explicitly overridden (e.g., a promoted node).
   On a derived node it is the **least upper bound** of its antecedents' sensitivity
   (propagated along provenance, never set below an antecedent). Drives access-control
   projection and clearance-relative auditability.
-- **`credibility`** (effective, on a fact/edge from a source) — **conditional**: the
-  source's base `reliability_prior` (§9) modified by the alignment between the claim and
-  the source's `interest` (§9.1) — self-serving discounted, against-interest boosted.
-  Belief-revised by the source's track record. Distinct from `faithfulness` (§3.1) and
-  from edge `strength` (§8).
+- **`credibility`** (effective, per claim) — **derived, never a flat stored scalar.**
+  Computed = the source's base `reliability_prior` (§9) × `f(interest_alignment,
+  epistemic_class)` (§9.1) — self-serving discounted, against-interest boosted, and
+  near source-independent for observations. The stored *inputs* are `reliability_prior`
+  + `source_interest` (on `Box`), `epistemic_class` (on `Proposition`), and a derived
+  per-claim `interest_alignment` annotation; effective credibility is computed at
+  use-time (optionally materialized for query perf, recomputed on input change — like
+  abstraction level, §14). Belief-revised by the source's track record. Distinct from
+  `faithfulness` (§3.1) and from edge `strength` (§8).
 
 ### Resolution rule
 
@@ -1576,6 +1602,9 @@ resourced with evaluation gates, not routine engineering — see §13.
   (decision-theoretic); sensitivity analysis over the argumentation graph; active
   learning for query prioritization. Computed from existing annotations, no LLM in the
   ranking (§11.1).
+- Document parsing (front-end) — layout analysis + reading-order + OCR + table/figure/
+  formula extraction with per-element bounding boxes (MinerU, default; Docling/Marker as
+  alternatives). Swappable behind a fixed contract; AGPL → run as a service (§1).
 - Goal-directed inquiry — hypothesis-driven / abductive reasoning; inference to the best
   explanation; task decomposition. Hypothesis seeding from domain failure-mode libraries
   (FMEA, ISO 14224) and differential-diagnosis sets (§11.2).

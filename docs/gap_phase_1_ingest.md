@@ -40,6 +40,31 @@ layer on top** and **reverses one non-goal** (multi-sample — see G1.3).
 
 ## Gaps to close
 
+### G1.0 — Document parse front-end (Stage 0, §1) *(new in revised plan; precedes G1.9)*
+The revised §1 adds a **Stage 0** that the original Phase 1 lacked: real case
+documents are PDFs/scans (multi-column, tables, figures, OCR-only), not clean text.
+Nothing in the codebase parses documents today (no MinerU/parser/PDF/OCR path); the
+integration test feeds text directly. This is the new pipeline entry point and gates
+ingest of any real document.
+
+- [ ] **Parser behind a fixed contract** (swappable like the LLM): input PDF/scan/doc →
+      reading-order text + structure + tables + located figures + formulas +
+      per-element `{page, bbox}`. Default impl **MinerU**; Docling/Marker as alternates.
+- [ ] **MinerU as a separate hosted service (CLI/HTTP), never vendored** — it is
+      AGPL-3.0; the copyleft must stop at the service edge (`config.py` endpoint, like
+      the LLM/verifier). See the licensing note in `todo.md`.
+- [ ] **`Span.layout {page, bbox}`** — extend `types/nodes.py::Span` (optional `layout`)
+      and the span ORM/AGE persistence so a claim resolves to a *region on the page
+      image*, not just a character offset. Schema-contract field (§10); see
+      `todo_phase_0_foundations.md` Span note. **Wire the write path in G1.9.**
+- [ ] **Tables → structured observations:** rows/cells → propositions with column
+      semantics preserved, observation-class (§3.1) — not flattened to prose.
+- [ ] **Figures located, interpreted later:** store figure region + caption + bbox; a
+      Phase-2 vision `extract` operator reads propositions off the figure, provisional.
+- [ ] **Parse quality → faithfulness input:** scanned / handwritten / complex-table
+      parses marked lower-faithfulness → provisional → triage (feeds G1.5/G1.6); surface
+      MinerU's layout visualization for expert QA against the original.
+
 ### G1.1 — Structured epistemic fields on `Proposition` (§3.1) *(core)*
 Today `Proposition = {id, text}`. `architecture.md` §10 (lines ~771–775) requires
 structured, **non-flattened** epistemic fields:
@@ -115,6 +140,8 @@ integration test hand-creates them).
       output. **This is the blocker for true end-to-end ingest** and the natural
       next increment — close it before the §3.1 faithfulness work can be tested
       on a real document.
+- [ ] Persist the optional `Span.layout {page, bbox}` (from G1.0) on the same write
+      path when the parse front-end supplied it (null when ingesting plain text).
 
 ### G1.10 — Multi-level spans + RAPTOR summaries (§2)
 - [ ] Length penalty as the **level knob** → multiple abstraction levels stored as
@@ -134,7 +161,12 @@ integration test hand-creates them).
 
 ## Sequencing
 
-1. **G1.9 span persistence** first — unblocks real end-to-end ingest.
+0. **G1.0 parse front-end** is the new Stage 0. The `Span.layout` field-add lands
+   with it; its write path merges into G1.9. The MinerU *service* integration can
+   proceed in parallel (text ingest already works without it), but `Span.layout`
+   must exist before G1.9 persists it.
+1. **G1.9 span persistence** — unblocks real end-to-end ingest (now also persists
+   `Span.layout` when present).
 2. **G1.1 epistemic fields** + **G1.4 verify** + **G1.5 faithfulness** —
    the §3.1 perception-hardening core.
 3. **G1.3 multi-sample** + **G1.6 quarantine** — calibration + stakes gating.
@@ -144,10 +176,14 @@ integration test hand-creates them).
 
 ## Revised exit criteria (delta over the originals)
 
-- [ ] A document ingests end-to-end **including span persistence**: cached
-      embeddings → multi-level spans (written to AGE) → propositions with
-      epistemic fields + faithfulness → dense + sparse indexes, span references
-      retained.
+- [ ] A real PDF/scan ingests end-to-end **through the parse front-end**: MinerU
+      service → reading-order text + tables + figures + `{page, bbox}` → cached
+      embeddings → multi-level spans (written to AGE, carrying `layout`) →
+      propositions with epistemic fields + faithfulness → dense + sparse indexes,
+      span references retained.
+- [ ] A claim resolves back to a **region on the original page** (`Span.layout`),
+      not just a character offset; table cells ingest as observation-class
+      propositions with column semantics.
 - [ ] Each proposition carries `polarity/modality/attribution/scope/
       epistemic_class/faithfulness/provisional`; a low-faithfulness proposition is
       quarantined from driving a `REFUTES`.
