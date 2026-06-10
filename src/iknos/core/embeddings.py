@@ -55,6 +55,9 @@ class DocumentContext:
 class EmbeddingSubstrate:
     def __init__(self, model_name_or_path: str = "BAAI/bge-m3", device: str | None = None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        # Self-describing: the model identity feeds the segmentation content hash and
+        # the Action audit row (core/ingest.py), so consumers don't re-specify it.
+        self.model_name = model_name_or_path
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         self.model = AutoModel.from_pretrained(model_name_or_path).to(self.device)
         self.model.eval()

@@ -46,11 +46,24 @@ class Document(BaseModel):
 
 
 class Span(BaseModel):
+    """A contiguous source range — the unit of provenance (§10).
+
+    ``start``/``end`` are character offsets into the document's text; ``level`` is
+    the segmentation level that produced the span (single-level=0 for now; G1.10
+    adds coarser levels). ``layout`` is the optional visual-provenance handle from
+    the parse front-end (§1, G1.0): the ``{page, bbox}`` region(s) on the original
+    page image so a claim resolves to a place on the page, not just a char offset.
+    It is ``None`` when ingesting plain text (no parser); the parser owns its
+    internal shape, so it is stored opaquely here.
+    """
+
     model_config = ConfigDict(frozen=True)
     id: uuid.UUID
     document_id: uuid.UUID
     start: int = Field(..., ge=0)
     end: int = Field(..., ge=0)
+    level: int = Field(default=0, ge=0)
+    layout: dict[str, Any] | None = None
     # Lattice origin (§9.1); may differ from its Document (e.g. a redacted span).
     sensitivity: Sensitivity = Field(default_factory=Sensitivity)
 

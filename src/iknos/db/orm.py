@@ -59,6 +59,17 @@ class Action(Base):
 
 class DocumentEmbedding(Base):
     __tablename__ = "document_embeddings"
+    # Idempotency key for span persistence (G1.9): one dense row per Span vertex.
+    # Partial (span_id NOT NULL) leaves future level-less / doc-level embeddings
+    # unconstrained. Declared here so the migrations autogenerate-drift gate passes.
+    __table_args__ = (
+        Index(
+            "uq_document_embeddings_span_id",
+            "span_id",
+            unique=True,
+            postgresql_where=text("span_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
