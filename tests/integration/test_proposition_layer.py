@@ -34,6 +34,32 @@ def _mock_propositionizer(llm_return: dict, n_vectors: int) -> Propositionizer:
     return Propositionizer(llm, substrate, context_window=8, concurrency=4)
 
 
+# 1024-dim toy vectors for clustering: A ⟂ B (cosine 0), so candidates with the same letter
+# cluster and different letters split — independent of the real embedding model.
+_VEC_A = [1.0] + [0.0] * 1023
+_VEC_B = [0.0, 1.0] + [0.0] * 1022
+
+
+def _multi_sample_propositionizer(
+    side_effect: list[dict], embed_return: list[list[float]]
+) -> Propositionizer:
+    """A Propositionizer that returns a different extraction per sample (G1.3). n_samples is the
+    number of side_effect entries; sampling is non-greedy so the multi-sample guard is satisfied."""
+    llm = MagicMock()
+    llm.model = "test-model"
+    llm.guided_complete = AsyncMock(side_effect=side_effect)
+    substrate = MagicMock()
+    substrate.embed_passages = MagicMock(return_value=embed_return)
+    return Propositionizer(
+        llm,
+        substrate,
+        context_window=8,
+        concurrency=4,
+        sampling={"temperature": 0.7},
+        n_samples=len(side_effect),
+    )
+
+
 def _with_verifier(p: Propositionizer, verdict_for: Callable[[str], dict]) -> Propositionizer:
     """Attach a real Verifier whose LLM returns a verdict chosen from the proposition text.
 
@@ -342,6 +368,117 @@ async def test_verify_action_is_recorded(session: AsyncSession) -> None:
         {"sid": str(span.id)},
     )
     assert verdicts[0]["proposition"] in ext.scalar_one()["propositions"]
+
+
+async def test_multi_sample_agreement_combines_into_faithfulness(session: AsyncSession) -> None:
+    """G1.3: with N samples, a proposition produced in every sample is stable (agreement 1.0,
+    faithfulness == verify component); one produced in a single sample is unstable (agreement 1/3),
+    and the multiplicative combine drops its faithfulness below the threshold → provisional. The
+    extract Action audits the regime (n_samples) and the per-proposition agreement."""
+    await bootstrap_session(session)
+    raw = "The bearing failed under load."
+    doc_id, span = await _seed_one_span_doc(session, raw)
+
+    # 3 samples: "The bearing failed." in all three (→ vec A), one one-off claim (→ vec B).
+    p = _multi_sample_propositionizer(
+        side_effect=[
+            {
+                "propositions": [
+                    {"text": "The bearing failed."},
+                    {"text": "An assembly fault occurred."},
+                ]
+            },
+            {"propositions": [{"text": "The bearing failed."}]},
+            {"propositions": [{"text": "The bearing failed."}]},
+        ],
+        embed_return=[
+            _VEC_A,
+            _VEC_B,
+            _VEC_A,
+            _VEC_A,
+        ],  # flatten order: (s0,p0),(s0,p1),(s1,p0),(s2,p0)
+    )
+    # always entailed + preserved → verify component 1.0, so faithfulness == agreement
+    _with_verifier(
+        p,
+        lambda _user: {
+            "entailment": "entailed",
+            "polarity_preserved": True,
+            "modality_preserved": True,
+            "attribution_preserved": True,
+        },
+    )
+    await p.propositionize_document(session, doc_id, [span], raw)
+
+    rows = await execute_cypher(
+        session,
+        f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span.id)})}) "
+        "RETURN p.text, p.agreement, p.faithfulness, p.provisional",
+        returns="text agtype, agr agtype, faith agtype, prov agtype",
+    )
+    by_text = {str(r[0]).strip('"'): r for r in rows}
+    assert len(by_text) == 2  # the two stable duplicates collapsed into one proposition
+
+    stable = by_text["The bearing failed."]
+    assert float(str(stable[1])) == pytest.approx(1.0)  # agreement 3/3
+    assert float(str(stable[2])) == pytest.approx(1.0)  # faithfulness = 1.0 × 1.0
+    assert str(stable[3]).strip('"').lower() == "false"
+
+    unstable = by_text["An assembly fault occurred."]
+    assert float(str(unstable[1])) == pytest.approx(1 / 3)  # agreement 1/3
+    assert float(str(unstable[2])) == pytest.approx(1 / 3)  # faithfulness = 1.0 × 1/3 → quarantined
+    assert str(unstable[3]).strip('"').lower() == "true"
+
+    # The extract Action records the multi-sample regime + per-proposition agreement (Trial A5).
+    ext = await session.execute(
+        text(
+            "SELECT sampling, outputs FROM actions "
+            "WHERE actor = 'propositionizer' AND inputs->>'target_span' = :sid"
+        ),
+        {"sid": str(span.id)},
+    )
+    rec = ext.one()
+    assert rec.sampling["n_samples"] == 3
+    agreements = sorted(a["agreement"] for a in rec.outputs["agreements"])
+    assert agreements[0] == pytest.approx(1 / 3)
+    assert agreements[1] == pytest.approx(1.0)
+
+
+async def test_multi_sample_without_verifier_sets_agreement_only(session: AsyncSession) -> None:
+    """G1.3 degraded mode: multi-sample on but verifier off → agreement is still computed and
+    persisted, while faithfulness/provisional stay null (faithfulness needs verification too)."""
+    await bootstrap_session(session)
+    raw = "The bearing failed under load."
+    doc_id, span = await _seed_one_span_doc(session, raw)
+
+    p = _multi_sample_propositionizer(
+        side_effect=[
+            {
+                "propositions": [
+                    {"text": "The bearing failed."},
+                    {"text": "An assembly fault occurred."},
+                ]
+            },
+            {"propositions": [{"text": "The bearing failed."}]},
+            {"propositions": [{"text": "The bearing failed."}]},
+        ],
+        embed_return=[_VEC_A, _VEC_B, _VEC_A, _VEC_A],
+    )
+    assert p.verifier is None
+    await p.propositionize_document(session, doc_id, [span], raw)
+
+    rows = await execute_cypher(
+        session,
+        f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span.id)})}) "
+        "RETURN p.text, p.agreement, p.faithfulness, p.provisional",
+        returns="text agtype, agr agtype, faith agtype, prov agtype",
+    )
+    by_text = {str(r[0]).strip('"'): r for r in rows}
+    stable = by_text["The bearing failed."]
+    assert float(str(stable[1])) == pytest.approx(1.0)  # agreement persisted
+    assert (
+        stable[2] is None and stable[3] is None
+    )  # faithfulness/provisional null without a verifier
 
 
 async def test_verifier_absent_leaves_faithfulness_null(session: AsyncSession) -> None:

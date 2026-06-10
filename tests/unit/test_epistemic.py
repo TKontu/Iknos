@@ -16,6 +16,7 @@ from iknos.types.epistemic import (
     Modality,
     Polarity,
     Routing,
+    combine_faithfulness,
     faithfulness_from_verdict,
     is_provisional,
     route_for,
@@ -115,6 +116,40 @@ def test_faithfulness_fail_loud_on_unknown_entailment() -> None:
     # value — so an unmapped string is the real fail-loud case.)
     with pytest.raises(KeyError):
         faithfulness_from_verdict("bogus", True, True)  # type: ignore[arg-type]
+
+
+# --- combine verify × multi-sample agreement (G1.3) ---
+
+
+def test_combine_agreement_one_is_identity() -> None:
+    # Single-pass / N=1 (agreement 1.0) → faithfulness == the verify component, unchanged.
+    assert combine_faithfulness(0.70, 1.0) == pytest.approx(0.70)
+    assert combine_faithfulness(1.0, 1.0) == pytest.approx(1.0)
+
+
+def test_combine_is_multiplicative() -> None:
+    assert combine_faithfulness(1.0, 2 / 3) == pytest.approx(2 / 3)
+    assert combine_faithfulness(0.7, 1.0) == pytest.approx(0.7)
+
+
+def test_combine_unstable_but_verified_becomes_provisional() -> None:
+    # Verifier passes it (1.0) but it appeared in only 1 of 3 samples → quarantined.
+    score = combine_faithfulness(1.0, 1 / 3)
+    assert score == pytest.approx(1 / 3)
+    assert is_provisional(score) is True
+
+
+def test_combine_stable_and_verified_stays_above_threshold() -> None:
+    score = combine_faithfulness(1.0, 2 / 3)
+    assert is_provisional(score) is False
+
+
+@pytest.mark.parametrize("bad", [-0.01, 1.01, 2.0])
+def test_combine_rejects_out_of_range(bad: float) -> None:
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        combine_faithfulness(bad, 1.0)
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        combine_faithfulness(1.0, bad)
 
 
 # --- enum value strings are exactly the spec strings (guards silent drift) ---

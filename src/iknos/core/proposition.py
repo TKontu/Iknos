@@ -25,6 +25,13 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from iknos.core.consistency import (
+    DEFAULT_AGREEMENT_THRESHOLD,
+    Candidate,
+    agreement_of,
+    canonical_of,
+    cluster_candidates,
+)
 from iknos.core.embeddings import EmbeddingSubstrate
 from iknos.core.llm import LLMClient
 from iknos.core.prompts import vocab
@@ -36,6 +43,7 @@ from iknos.types.epistemic import (
     Modality,
     Polarity,
     Routing,
+    combine_faithfulness,
     faithfulness_from_verdict,
     is_provisional,
     route_for,
@@ -119,9 +127,12 @@ EXTRACTION_SCHEMA = PropositionExtraction.model_json_schema()
 class PropositionResult:
     """One extracted proposition with its provenance, epistemic fields, and vector.
 
-    ``faithfulness``/``provisional`` stay ``None`` in this increment — calibration
-    is G1.4/G1.5 and the provisional gate is G1.6 (§3.1: confidence is not
-    self-reported). ``routing`` is derived from ``epistemic_class`` (G1.2).
+    ``routing`` is derived from ``epistemic_class`` (G1.2). ``faithfulness``/``provisional`` are
+    set by the verify fan-out (G1.4/G1.5) — null when no verifier is configured. ``agreement`` is
+    the multi-sample consistency signal (G1.3): the fraction of the N samples that produced this
+    proposition; ``None`` in single-sample mode (N=1), where it would be a trivial 1.0. It is
+    persisted on the node regardless of the verifier; when a verifier *is* present it also folds
+    into ``faithfulness`` via :func:`~iknos.types.epistemic.combine_faithfulness`.
     """
 
     id: uuid.UUID
@@ -137,6 +148,7 @@ class PropositionResult:
     routing: Routing
     faithfulness: float | None = None
     provisional: bool | None = None
+    agreement: float | None = None
 
 
 def span_text(raw_text: str, span: Span) -> str:
@@ -174,6 +186,8 @@ class Propositionizer:
         concurrency: int = 8,
         sampling: dict[str, object] | None = None,
         verifier: "Verifier | None" = None,
+        n_samples: int = 1,
+        agreement_threshold: float = DEFAULT_AGREEMENT_THRESHOLD,
     ) -> None:
         self.llm = llm
         self.substrate = substrate
@@ -183,40 +197,110 @@ class Propositionizer:
         # Optional independent verifier (G1.4). Absent → faithfulness/provisional stay null
         # (the documented G1.1 state); production wires it from settings when configured.
         self.verifier = verifier
+        # Multi-sample extraction (G1.3): sample the extractor n_samples times and score each
+        # proposition by cross-sample agreement. n_samples=1 is a strict no-op (no clustering,
+        # agreement null) — byte-identical to single-pass. n_samples>1 with a greedy regime is a
+        # misconfiguration (the N samples would be identical → no signal), so fail loud.
+        if n_samples < 1:
+            raise ValueError(f"n_samples must be >= 1, got {n_samples!r}")
+        if (
+            n_samples > 1
+            and self.sampling.get("temperature", 0) == 0
+            and "top_p" not in self.sampling
+        ):
+            raise ValueError(
+                f"multi-sample extraction (n_samples={n_samples}) needs a temperature>0 sampling "
+                f"regime; got greedy sampling {self.sampling!r}"
+            )
+        self.n_samples = n_samples
+        self.agreement_threshold = agreement_threshold
 
     async def _infer_span(
-        self, spans: list[Span], index: int, raw_text: str
+        self, sem: asyncio.Semaphore, spans: list[Span], index: int, raw_text: str
     ) -> list[PropositionResult]:
-        """LLM + embedding for one span. No DB access (safe to run concurrently)."""
+        """Extract one span's propositions, scoring each by cross-sample agreement (G1.3).
+
+        Samples the extractor ``n_samples`` times, embeds every candidate, then clusters
+        semantically-equivalent extractions; each cluster becomes one proposition carrying its
+        medoid's text+operators and the fraction of samples that produced it (``agreement``). No
+        DB access — concurrent-phase safe. The semaphore wraps each *individual* sample call (not
+        the whole span), so the N samples of one span share the global budget with every other
+        in-flight call and never deadlock by holding an outer permit while awaiting inner ones —
+        the same permit discipline as ``_verify_all``.
+
+        n_samples=1 short-circuits the clustering (1:1 candidate→proposition, ``agreement`` null),
+        so single-pass behavior is byte-identical to pre-G1.3.
+        """
         target = spans[index]
         _, context_text = build_context(spans, index, raw_text, self.context_window)
         messages = build_messages(context_text, span_text(raw_text, target))
 
-        raw = await self.llm.guided_complete(messages, EXTRACTION_SCHEMA, self.sampling)
-        extraction = PropositionExtraction.model_validate(raw)
-        props = extraction.propositions
-        if not props:
+        async def sample_once() -> list[_PropositionOut]:
+            async with sem:
+                raw = await self.llm.guided_complete(messages, EXTRACTION_SCHEMA, self.sampling)
+            return PropositionExtraction.model_validate(raw).propositions
+
+        samples = await asyncio.gather(*(sample_once() for _ in range(self.n_samples)))
+
+        # Flatten the N samples into candidates, preserving (sample_index, position) so the
+        # downstream clustering/medoid order is deterministic.
+        flat = [
+            (s_idx, pos, p) for s_idx, props in enumerate(samples) for pos, p in enumerate(props)
+        ]
+        if not flat:
             return []
 
-        # Sync torch forward pass — run off the event loop so concurrent LLM calls flow.
-        vectors = await asyncio.to_thread(self.substrate.embed_passages, [p.text for p in props])
-        return [
-            PropositionResult(
-                id=uuid.uuid4(),
+        # One batched torch forward pass over every candidate (off the event loop so concurrent
+        # LLM calls keep flowing). The medoid's vector is reused at persist time — no re-embed.
+        vectors = await asyncio.to_thread(
+            self.substrate.embed_passages, [p.text for _, _, p in flat]
+        )
+        candidates = [
+            Candidate(
                 text=p.text,
-                span_id=target.id,
-                document_id=target.document_id,
-                embedding=v,
                 polarity=p.polarity,
                 modality=p.modality,
                 attribution=p.attribution,
                 scope=p.scope,
                 epistemic_class=p.epistemic_class,
-                # Derived now (G1.2); faithfulness/provisional default None (G1.4/G1.5/G1.6).
-                routing=route_for(p.epistemic_class),
+                embedding=v,
+                sample_index=s_idx,
+                position=pos,
             )
-            for p, v in zip(props, vectors, strict=True)
+            for (s_idx, pos, p), v in zip(flat, vectors, strict=True)
         ]
+
+        # Single-pass: no clustering — each extraction is its own proposition (agreement null),
+        # exactly as before G1.3. Multi-sample: cluster equivalent extractions and score agreement.
+        if self.n_samples == 1:
+            clusters = [[c] for c in candidates]
+        else:
+            clusters = cluster_candidates(candidates, threshold=self.agreement_threshold)
+
+        results: list[PropositionResult] = []
+        for cluster in clusters:
+            canonical = canonical_of(cluster)
+            agreement = (
+                agreement_of(cluster, n_samples=self.n_samples) if self.n_samples > 1 else None
+            )
+            results.append(
+                PropositionResult(
+                    id=uuid.uuid4(),
+                    text=canonical.text,
+                    span_id=target.id,
+                    document_id=target.document_id,
+                    embedding=canonical.embedding,
+                    polarity=canonical.polarity,
+                    modality=canonical.modality,
+                    attribution=canonical.attribution,
+                    scope=canonical.scope,
+                    epistemic_class=canonical.epistemic_class,
+                    # Derived now (G1.2); faithfulness/provisional set by the verify pass (G1.4).
+                    routing=route_for(canonical.epistemic_class),
+                    agreement=agreement,
+                )
+            )
+        return results
 
     async def _verify_all(
         self,
@@ -241,9 +325,13 @@ class Propositionizer:
         ) -> tuple[PropositionResult, "_VerifyOut"]:
             async with sem:
                 verdict = await verifier.verify_proposition(source, r)
-            faith = faithfulness_from_verdict(
+            verify_component = faithfulness_from_verdict(
                 verdict.entailment, verdict.polarity_preserved, verdict.modality_preserved
             )
+            # Fold in the multi-sample agreement signal (G1.3). None ⇒ single-pass (N=1) ⇒
+            # factor 1.0 ⇒ faithfulness == the verify component (unchanged from G1.4/G1.5).
+            agreement = r.agreement if r.agreement is not None else 1.0
+            faith = combine_faithfulness(verify_component, agreement)
             # PropositionResult is frozen — rebuild with the scored fields, never mutate.
             scored = replace(r, faithfulness=faith, provisional=is_provisional(faith))
             return scored, verdict
@@ -302,6 +390,9 @@ class Propositionizer:
                 "routing": r.routing,
                 "faithfulness": r.faithfulness,
                 "provisional": r.provisional,
+                # Multi-sample consistency (G1.3): null in single-pass mode, so this serializes
+                # exactly as before until LLM_EXTRACT_SAMPLES is raised.
+                "agreement": r.agreement,
             }
             await execute_cypher(
                 session,
@@ -330,14 +421,25 @@ class Propositionizer:
             prop_ids.append(str(r.id))
             edge_ids.append(f"{r.id}->{r.span_id}")
 
+        # Multi-sample audit (G1.3): record N in the sampling regime and the per-proposition
+        # agreement, so the consistency signal is replayable and feeds Trial A5 straight from
+        # actions.outputs. Single-pass (N=1) keeps the Action byte-identical to pre-G1.3.
+        extract_outputs: dict[str, object] = {"propositions": prop_ids, "edges": edge_ids}
+        extract_sampling: dict[str, object] = dict(self.sampling)
+        if self.n_samples > 1:
+            extract_sampling["n_samples"] = self.n_samples
+            extract_outputs["agreements"] = [
+                {"proposition": str(r.id), "agreement": r.agreement} for r in results
+            ]
+
         action_id = await record_action(
             session,
             actor="propositionizer",
             action_type="extract",
             inputs={"target_span": str(span_id), "context_spans": context_span_ids},
-            outputs={"propositions": prop_ids, "edges": edge_ids},
+            outputs=extract_outputs,
             model=self.llm.model,
-            sampling=self.sampling,
+            sampling=extract_sampling,
         )
 
         # The verify pass is a distinct judgement by a distinct model (§13) — record it as
@@ -383,12 +485,14 @@ class Propositionizer:
         # Phase 1: idempotency filter (serial reads on the shared session).
         pending = [i for i, s in enumerate(spans) if not await self._already_done(session, s.id)]
 
-        # Phase 2: concurrent inference, bounded by a semaphore, with no DB access.
+        # Phase 2: concurrent inference, bounded by a semaphore, with no DB access. The permit is
+        # acquired *inside* _infer_span around each individual sample call (G1.3 fans out N per
+        # span), so this coroutine must not hold one itself — that would deadlock at low
+        # concurrency. Same permit discipline as the verify fan-out below.
         sem = asyncio.Semaphore(self.concurrency)
 
         async def infer(i: int) -> tuple[int, list[PropositionResult]]:
-            async with sem:
-                return i, await self._infer_span(spans, i, raw_text)
+            return i, await self._infer_span(sem, spans, i, raw_text)
 
         inferred = await asyncio.gather(*(infer(i) for i in pending))
 
