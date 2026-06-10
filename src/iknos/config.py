@@ -30,5 +30,15 @@ class Settings(BaseSettings):
     )
     llm_verifier_model: str = Field("", alias="LLM_VERIFIER_MODEL")
 
+    # Multi-sample extraction for the consistency half of faithfulness (§3.1, G1.3). The
+    # extractor is sampled llm_extract_samples times; a proposition reproduced across samples is
+    # stable (high agreement), one emitted rarely is unstable → provisional. Default 1 is a strict
+    # no-op (agreement always 1.0, faithfulness == the verify component) — the documented current
+    # behavior. Raising it requires a temperature>0 sampling regime (the Propositionizer enforces
+    # this), else the N samples are identical and carry no signal. prop_agreement_threshold is the
+    # cosine cutoff at which two extractions count as the same claim (a Trial-A5 tunable).
+    llm_extract_samples: int = Field(1, alias="LLM_EXTRACT_SAMPLES")
+    prop_agreement_threshold: float = Field(0.86, alias="PROP_AGREEMENT_THRESHOLD")
+
 
 settings = Settings()

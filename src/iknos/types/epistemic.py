@@ -177,9 +177,9 @@ def faithfulness_from_verdict(
     entailment check alone would miss. Multiplicative so a ``NEUTRAL``/``CONTRADICTED`` verdict
     cannot be rescued by preserved operators.
 
-    **G1.3 seam:** this is the *verify component* of faithfulness. The deferred multi-sample
-    agreement signal (G1.3) will combine with this value (a future ``combine_faithfulness``),
-    so callers must treat this as one input, not the final word.
+    **G1.3 seam:** this is the *verify component* of faithfulness. The multi-sample agreement
+    signal (G1.3) combines with this value via :func:`combine_faithfulness`, so callers must
+    treat this as one input, not the final word.
     """
     score = _ENTAILMENT_BASE[entailment]  # fail-loud on an unmapped verdict
     if not polarity_preserved:
@@ -187,3 +187,26 @@ def faithfulness_from_verdict(
     if not modality_preserved:
         score *= _MODALITY_FLATTEN_FACTOR
     return score
+
+
+def combine_faithfulness(verify: float, agreement: float) -> float:
+    """Combine the verify component (:func:`faithfulness_from_verdict`) with the multi-sample
+    agreement signal (G1.3, :func:`~iknos.core.consistency.agreement_of`) into the final
+    faithfulness ∈ [0, 1] (§3.1: "confidence comes from consistency *and* verification").
+
+    **Multiplicative**, mirroring the operator penalties in :func:`faithfulness_from_verdict`:
+    the two signals are independent faithfulness defects, so a verified-but-*unstable*
+    proposition (e.g. emitted in only 1 of 3 samples → agreement ≈ 0.33) is pulled below the
+    provisional threshold even though the verifier passed it — instability is a real defect, not
+    forgiven by content support. Degenerate: agreement 1.0 (single-sample / N=1 mode) → identity,
+    so this reduces exactly to the verify component. Both inputs are defined on [0, 1]; an
+    out-of-range value is a caller bug, surfaced rather than silently clamped.
+
+    **Calibration seam:** the raw product is the pre-calibration default. Trial A3 fits a
+    per-model consistency-vs-correctness map that swaps in here without a contract change.
+    """
+    if not 0.0 <= verify <= 1.0:
+        raise ValueError(f"verify must be in [0, 1], got {verify!r}")
+    if not 0.0 <= agreement <= 1.0:
+        raise ValueError(f"agreement must be in [0, 1], got {agreement!r}")
+    return verify * agreement

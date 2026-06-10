@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -98,7 +99,7 @@ async def test_infer_span_maps_propositions_to_target_span():
         embed_return=[[1.0, 0.0], [0.0, 1.0]],
     )
 
-    results = await p._infer_span(spans, index=1, raw_text=raw)
+    results = await p._infer_span(asyncio.Semaphore(2), spans, index=1, raw_text=raw)
 
     assert [r.text for r in results] == [
         "Smith argued the budget was insufficient.",
@@ -121,7 +122,7 @@ async def test_infer_span_empty_returns_no_results_and_skips_embedding():
     spans = [_span(doc, 0, 13)]
     p = _propositionizer(llm_return={"propositions": []}, embed_return=[])
 
-    results = await p._infer_span(spans, index=0, raw_text=raw)
+    results = await p._infer_span(asyncio.Semaphore(2), spans, index=0, raw_text=raw)
 
     assert results == []
     p.substrate.embed_passages.assert_not_called()
@@ -180,7 +181,7 @@ async def test_infer_span_populates_epistemic_fields_and_routing():
         embed_return=[[1.0, 0.0], [0.0, 1.0]],
     )
 
-    results = await p._infer_span(spans, index=1, raw_text=raw)
+    results = await p._infer_span(asyncio.Semaphore(2), spans, index=1, raw_text=raw)
 
     judgement, observation = results
     assert judgement.epistemic_class is EpistemicClass.JUDGEMENT
@@ -289,3 +290,97 @@ async def test_verify_all_modality_flatten_stays_above_threshold() -> None:
     results = verified[0][1]
     assert results[0].faithfulness == pytest.approx(0.70)
     assert results[0].provisional is False
+
+
+@pytest.mark.asyncio
+async def test_verify_all_folds_in_agreement() -> None:
+    # Verifier passes it (component 1.0) but it appeared in only 1/3 samples → combine pulls
+    # faithfulness to 1/3 → provisional. (None agreement would leave it at 1.0; see G1.4 tests.)
+    doc = uuid.uuid4()
+    raw = "The rolling surface shows particle indentations."
+    spans = [_span(doc, 0, len(raw))]
+    p = _propositionizer_with_verifier(_verdict())
+    unstable = replace(
+        _result("The surface shows indentations.", spans[0].id, doc), agreement=1 / 3
+    )
+
+    verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, [(0, [unstable])])
+
+    results = verified[0][1]
+    assert results[0].faithfulness == pytest.approx(1 / 3)
+    assert results[0].provisional is True
+
+
+# --- multi-sample extraction (G1.3) ---
+
+
+def _multi_propositionizer(sample_returns, embed_return, *, n_samples, threshold=0.86):
+    """A Propositionizer whose extractor returns a *different* set per sample (side_effect)."""
+    llm = MagicMock()
+    llm.model = "test-model"
+    llm.guided_complete = AsyncMock(side_effect=sample_returns)
+    substrate = MagicMock()
+    substrate.embed_passages = MagicMock(return_value=embed_return)
+    return Propositionizer(
+        llm,
+        substrate,
+        context_window=8,
+        concurrency=4,
+        sampling={"temperature": 0.7},
+        n_samples=n_samples,
+        agreement_threshold=threshold,
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_sample_clusters_and_scores_agreement() -> None:
+    doc = uuid.uuid4()
+    raw = "The bearing failed under load."
+    spans = [_span(doc, 0, len(raw))]
+    # 3 samples: two produce claim "A", one produces "B". Candidates flatten in sample order.
+    p = _multi_propositionizer(
+        sample_returns=[
+            {"propositions": [{"text": "A"}]},
+            {"propositions": [{"text": "A"}]},
+            {"propositions": [{"text": "B"}]},
+        ],
+        embed_return=[[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+        n_samples=3,
+    )
+
+    results = await p._infer_span(asyncio.Semaphore(4), spans, index=0, raw_text=raw)
+
+    assert p.llm.guided_complete.call_count == 3  # the extractor was sampled N times
+    p.substrate.embed_passages.assert_called_once()  # one batched pass over all candidates
+    assert [r.text for r in results] == ["A", "B"]
+    assert results[0].agreement == pytest.approx(2 / 3)  # A: 2 of 3 samples
+    assert results[1].agreement == pytest.approx(1 / 3)  # B: 1 of 3 → unstable
+
+
+@pytest.mark.asyncio
+async def test_single_sample_leaves_agreement_null() -> None:
+    # N=1 default: no clustering, agreement stays None (byte-identical to pre-G1.3).
+    doc = uuid.uuid4()
+    raw = "The bearing failed."
+    spans = [_span(doc, 0, len(raw))]
+    p = _propositionizer(llm_return={"propositions": [{"text": "A"}]}, embed_return=[[1.0, 0.0]])
+
+    results = await p._infer_span(asyncio.Semaphore(2), spans, index=0, raw_text=raw)
+
+    assert p.n_samples == 1
+    assert results[0].agreement is None
+
+
+def test_multi_sample_rejects_greedy_sampling() -> None:
+    llm, substrate = MagicMock(), MagicMock()
+    llm.model = "m"
+    # Default sampling is greedy (temperature 0.0) — N identical samples carry no signal.
+    with pytest.raises(ValueError, match="temperature>0"):
+        Propositionizer(llm, substrate, n_samples=3)
+
+
+def test_rejects_nonpositive_samples() -> None:
+    llm, substrate = MagicMock(), MagicMock()
+    llm.model = "m"
+    with pytest.raises(ValueError, match=">= 1"):
+        Propositionizer(llm, substrate, n_samples=0)
