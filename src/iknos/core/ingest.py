@@ -42,7 +42,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.core.embeddings import EmbeddingSubstrate
-from iknos.core.parse import NullParser, layouts_for_spans, parse_content_hash
+from iknos.core.parse import (
+    NullParser,
+    Parser,
+    ParseResult,
+    layouts_for_spans,
+    parse_content_hash,
+)
 from iknos.core.segmentation import SegmentationBackbone
 from iknos.db.orm import DocumentEmbedding
 from iknos.provenance.action_log import record_action
@@ -318,33 +324,36 @@ async def persist_spans(
     )
 
 
-async def ingest_document(
+async def _ingest_parsed(
     session: AsyncSession,
     document_id: uuid.UUID,
-    raw_text: str,
+    parse_result: ParseResult,
+    *,
+    parse_ch: str,
+    media_type: str,
     substrate: EmbeddingSubstrate,
     segmenter: SegmentationBackbone,
-    *,
     title: str | None = None,
     source_uri: str | None = None,
 ) -> SpanPersistResult:
-    """End-to-end ingest for one document: text → spans, in one transaction.
+    """The Stage-0-onward tail shared by every ingest entry point (text or bytes).
 
-    Sequence (caller commits once on success): upsert ``document_content`` →
-    MERGE the ``:Document`` vertex → **Stage 0 parse** (record the parse Action) →
-    embed (the single torch forward pass) → split → segment → pool each span →
-    derive per-span ``layout`` → ``persist_spans``. ``document_content`` is written
-    **before** the dense rows because of the embedding → content FK; on a raised
-    resegmentation guard the caller's rollback reverts the text update *and* the parse
-    Action too.
+    Given a :class:`~iknos.core.parse.ParseResult` and its precomputed ``parse_ch``
+    (the parse-input content hash), runs the rest of ingest in one caller-owned
+    transaction: upsert ``document_content`` (from ``parse_result.text``, the single
+    reading-order source) → MERGE the ``:Document`` vertex → record the parse Action
+    (idempotent) → embed → split → segment → pool → derive per-span ``layout`` →
+    ``persist_spans``. ``document_content`` is written **before** the dense rows (the
+    embedding → content FK); on a raised resegmentation guard the caller's rollback
+    reverts the text update *and* the parse Action together.
 
-    Stage 0 (G1.0) here is the **identity/null parser**: plain text in, no page geometry,
-    ``layout=None`` on every span — reproducing the pre-Stage-0 behaviour exactly while
-    establishing the seam. A real parser (MinerU behind ``config.parser_base_url``) and a
-    bytes-in entry point are later increments; ``raw_text`` and a real parser are never
-    both passed (two sources of truth for one string).
+    Both entry points funnel here so the parser path (real geometry) and the text path
+    (null parser, ``layout=None``) cannot drift apart — the only difference between them
+    is which ``ParseResult``/hash/media_type they hand in.
     """
     from iknos.db.age import cypher_map, execute_cypher
+
+    raw_text = parse_result.text
 
     # document_content first (FK target for document_embeddings; source for
     # resolve_span_text). Idempotent upsert keyed on the document id.
@@ -365,16 +374,6 @@ async def ingest_document(
         session, f"MERGE (d:Document {{id: '{document_id}'}}) SET d = {cypher_map(doc_props)}"
     )
 
-    # Stage 0 — parse front-end. The null parser is the identity transform, so
-    # ``parse_result.text == raw_text`` and char offsets / document_content are unchanged.
-    parse_result = NullParser().parse_text(raw_text)
-    parse_ch = parse_content_hash(
-        input_sha256=hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
-        media_type="text/plain",
-        parser_name=parse_result.parser_name,
-        parser_version=parse_result.parser_version,
-        parse_schema_version=parse_result.parse_schema_version,
-    )
     # Record the parse Action only when new/changed (idempotent like the segment Action).
     # On a *changed* parse the segmentation guard below raises and the caller's rollback
     # reverts this write too, so a stale re-parse aborts atomically with no partial state.
@@ -388,7 +387,7 @@ async def ingest_document(
                 "content_hash": parse_ch,
                 "parser_name": parse_result.parser_name,
                 "parser_version": parse_result.parser_version,
-                "media_type": "text/plain",
+                "media_type": media_type,
                 "schema_version": parse_result.parse_schema_version,
             },
             outputs={"elements": len(parse_result.elements)},
@@ -422,4 +421,92 @@ async def ingest_document(
         segmenter_params=segmenter_params,
         model=substrate.model_name,
         layouts=layouts,
+    )
+
+
+async def ingest_document(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    raw_text: str,
+    substrate: EmbeddingSubstrate,
+    segmenter: SegmentationBackbone,
+    *,
+    title: str | None = None,
+    source_uri: str | None = None,
+) -> SpanPersistResult:
+    """End-to-end ingest for a **plain-text** document: text → spans, in one transaction.
+
+    Stage 0 here is the **identity/null parser**: plain text in, no page geometry,
+    ``layout=None`` on every span — reproducing the pre-Stage-0 behaviour exactly. The null
+    parser is the identity transform, so ``parse_result.text == raw_text`` and char offsets /
+    ``document_content`` are unchanged. For a real document (PDF/scan) with page geometry, use
+    :func:`ingest_document_bytes` with a configured parser; the two never both run on one
+    document (two sources of truth for one string). The shared tail lives in
+    :func:`_ingest_parsed`.
+    """
+    parse_result = NullParser().parse_text(raw_text)
+    parse_ch = parse_content_hash(
+        input_sha256=hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        media_type="text/plain",
+        parser_name=parse_result.parser_name,
+        parser_version=parse_result.parser_version,
+        parse_schema_version=parse_result.parse_schema_version,
+    )
+    return await _ingest_parsed(
+        session,
+        document_id,
+        parse_result,
+        parse_ch=parse_ch,
+        media_type="text/plain",
+        substrate=substrate,
+        segmenter=segmenter,
+        title=title,
+        source_uri=source_uri,
+    )
+
+
+async def ingest_document_bytes(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    document_bytes: bytes,
+    substrate: EmbeddingSubstrate,
+    segmenter: SegmentationBackbone,
+    *,
+    media_type: str,
+    parser: Parser,
+    title: str | None = None,
+    source_uri: str | None = None,
+) -> SpanPersistResult:
+    """End-to-end ingest for a **document file**: bytes → parse → spans, in one transaction.
+
+    The bytes-in counterpart to :func:`ingest_document`. The injected ``parser`` (built by
+    ``core/mineru.make_parser`` — a real ``MinerUParser`` when ``PARSER_BASE_URL`` is set,
+    else the ``NullParser``) turns the bytes into a :class:`~iknos.core.parse.ParseResult`
+    carrying reading-order text + per-element ``{page, bbox}`` geometry; ``raw_text`` is then
+    *derived* from ``parse_result.text`` (never passed alongside — one source of truth). The
+    parse-input hash is keyed on the **bytes digest** (``sha256(document_bytes)``), not the
+    derived text, so a non-deterministic OCR re-render of the same bytes is still a cache hit.
+
+    Everything after the parse is identical to the text path (see :func:`_ingest_parsed`),
+    so spans, layouts, idempotency and the resegmentation guard behave the same — only the
+    geometry differs (real regions here, ``None`` under the null parser).
+    """
+    parse_result = await parser.parse(document_bytes, media_type=media_type)
+    parse_ch = parse_content_hash(
+        input_sha256=hashlib.sha256(document_bytes).hexdigest(),
+        media_type=media_type,
+        parser_name=parse_result.parser_name,
+        parser_version=parse_result.parser_version,
+        parse_schema_version=parse_result.parse_schema_version,
+    )
+    return await _ingest_parsed(
+        session,
+        document_id,
+        parse_result,
+        parse_ch=parse_ch,
+        media_type=media_type,
+        substrate=substrate,
+        segmenter=segmenter,
+        title=title,
+        source_uri=source_uri,
     )
