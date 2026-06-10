@@ -35,6 +35,16 @@ class Action(Base):
     __table_args__ = (
         Index("ix_actions_timestamp", "timestamp"),
         Index("ix_actions_actor_type", "actor", "action_type"),
+        # Backs the propositionizer's per-span idempotency lookup (G1.7,
+        # Propositionizer._extracted_hash): newest extract Action for a target_span. Functional
+        # (the span id lives in JSONB inputs) + partial on the extract actor; declared here so the
+        # autogenerate-drift gate sees it. The id is fetched newest-first, hence the timestamp leg.
+        Index(
+            "ix_actions_extract_target_span",
+            text("(inputs->>'target_span')"),
+            text("timestamp DESC"),
+            postgresql_where=text("actor = 'propositionizer'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

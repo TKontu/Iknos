@@ -9,12 +9,14 @@ backbone), §3 (proposition layer), §4 (indexing), principles 1–3.
 
 **Status:** embedding substrate, segmentation (single-level), proposition layer +
 dense/sparse indexes, span persistence (#18), epistemic fields + routing (#20),
-extract-then-verify + faithfulness (#21), and multi-sample extraction (#23) are shipped.
+extract-then-verify + faithfulness (#21), multi-sample extraction (#23), and version-aware
+content-addressed extraction idempotency (G1.7 core, #25) are shipped.
 Plain-text ingest runs end-to-end (spans → propositions → indexes → faithfulness from
-consistency *and* verification). Open: parse front-end (G1.0, MinerU), quarantine
-enforcement (G1.6), multi-level/RAPTOR (G1.10), box scoping (G1.11), content-addressed
-cache (G1.7). See `gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state below;
-not every box maps 1:1 to a gap ID.)*
+consistency *and* verification), re-running unchanged content as a no-op and re-extracting a
+changed pipeline. Open: parse front-end (G1.0, MinerU), quarantine enforcement (G1.6),
+multi-level/RAPTOR (G1.10), box scoping (G1.11), cross-document cache reuse (G1.7b). See
+`gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state below; not every box maps 1:1
+to a gap ID.)*
 
 ## Document parsing — front-end (§1, Stage 0)
 
@@ -110,8 +112,12 @@ not every box maps 1:1 to a gap ID.)*
 
 ## Cost & incrementality (§6.1)
 
-- [ ] **Content-addressed cache** for LLM outputs (propositions, extractions) keyed by
+- [~] **Content-addressed cache** for LLM outputs (propositions, extractions) keyed by
       content + model version; unchanged spans are never re-inferred ("extract once").
+      *(G1.7 core, #25: extraction idempotency is version-aware — keyed on `(span_id,
+      content_hash)` over the extractor model/prompt/regime/verifier (`core/cache.py`).
+      Unchanged content no-ops; a changed pipeline re-extracts (or fails loud). Cross-document
+      output reuse — "extract once" across docs/re-segmentation — is the remaining G1.7b.)*
 - [ ] **Amortize reference processing:** reference-corpus / domain-pack boxes are ingested
       **once** and persisted read-only for reuse across investigations; only case
       documents are processed per investigation (§9).

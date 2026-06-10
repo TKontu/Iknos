@@ -19,12 +19,13 @@ concurrently; each span's writes commit in their own short transaction.
 import asyncio
 import uuid
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from iknos.core.cache import extraction_content_hash
 from iknos.core.consistency import (
     DEFAULT_AGREEMENT_THRESHOLD,
     Candidate,
@@ -121,6 +122,26 @@ class PropositionExtraction(BaseModel):
 
 
 EXTRACTION_SCHEMA = PropositionExtraction.model_json_schema()
+
+# Bump on any change that alters extractor output — the SYSTEM_PROMPT wording, the build_messages
+# template, the EXTRACTION_SCHEMA fields, or the epistemic enum sets interpolated into the prompt.
+# It is part of the G1.7 content-addressed cache key (core/cache.py): bumping it deliberately
+# invalidates every prior extraction so changed-prompt spans re-extract. Mirrors
+# core/ingest.py::SEGMENT_SCHEMA_VERSION.
+EXTRACT_SCHEMA_VERSION = 1
+
+
+class StaleExtractionError(Exception):
+    """A span was re-run under a different extraction pipeline than its prior run (G1.7).
+
+    The idempotency key is ``(span_id, content_hash)``, where the hash covers the extractor
+    model, prompt/schema version, sampling regime, verifier signature and context (core/cache.py).
+    An identical re-run is a true no-op; a span whose stored hash differs from the current one
+    means the model/prompt/regime/verifier changed since it was extracted. Re-extracting in place
+    would leave the old propositions orphaned alongside the new ones, so until cascade
+    re-extraction lands (G1.7b) this fails loud — mirrors
+    ``core/ingest.py::DocumentResegmentationError``.
+    """
 
 
 @dataclass(frozen=True)
@@ -345,16 +366,23 @@ class Propositionizer:
 
         return list(await asyncio.gather(*(verify_group(i, results) for i, results in inferred)))
 
-    async def _already_done(self, session: AsyncSession, span_id: uuid.UUID) -> bool:
-        """True if this span was already propositionized (Action-based, covers empty spans)."""
+    async def _extracted_hash(self, session: AsyncSession, span_id: uuid.UUID) -> str | None:
+        """The content_hash of this span's most recent extraction, or ``None`` if never extracted.
+
+        Action-table backed (single source of truth), mirroring ``ingest._segmented_hash``. The
+        stored value drives the G1.7 idempotency decision in :meth:`propositionize_document`; it is
+        ``None`` for a span with no prior extract Action (covers empty spans — they still record an
+        Action) and for pre-G1.7 Actions that predate the ``content_hash`` input (none in practice).
+        """
         row = await session.execute(
             text(
-                "SELECT 1 FROM actions WHERE actor = 'propositionizer' "
-                "AND inputs->>'target_span' = :sid LIMIT 1"
+                "SELECT inputs->>'content_hash' FROM actions "
+                "WHERE actor = 'propositionizer' AND inputs->>'target_span' = :sid "
+                "ORDER BY timestamp DESC LIMIT 1"
             ),
             {"sid": str(span_id)},
         )
-        return row.first() is not None
+        return row.scalar_one_or_none()
 
     async def _persist(
         self,
@@ -362,6 +390,7 @@ class Propositionizer:
         document_id: uuid.UUID,
         span_id: uuid.UUID,
         context_span_ids: list[str],
+        content_hash: str,
         results: list[PropositionResult],
         verdicts: "list[_VerifyOut] | None" = None,
     ) -> uuid.UUID:
@@ -436,7 +465,15 @@ class Propositionizer:
             session,
             actor="propositionizer",
             action_type="extract",
-            inputs={"target_span": str(span_id), "context_spans": context_span_ids},
+            inputs={
+                "target_span": str(span_id),
+                "context_spans": context_span_ids,
+                # G1.7 content-addressed idempotency key — compared on the next run to decide
+                # no-op vs re-extract vs StaleExtractionError. schema_version stored alongside so
+                # a stale span is debuggable without recomputing the hash.
+                "content_hash": content_hash,
+                "schema_version": EXTRACT_SCHEMA_VERSION,
+            },
             outputs=extract_outputs,
             model=self.llm.model,
             sampling=extract_sampling,
@@ -474,6 +511,26 @@ class Propositionizer:
         await session.commit()
         return action_id
 
+    def _pipeline_hash(
+        self, spans: list[Span], index: int, raw_text: str, verifier_sig: dict[str, Any] | None
+    ) -> str:
+        """The G1.7 content-addressed idempotency key for one span's extraction (core/cache.py).
+
+        Pure (no DB): the target text, the preceding-window context the extractor actually sees,
+        and the full pipeline identity — model, schema version, sampling regime (incl. n_samples),
+        and verifier signature. Two runs that would produce the same extraction share a key.
+        """
+        _, context_text = build_context(spans, index, raw_text, self.context_window)
+        regime = {**self.sampling, "n_samples": self.n_samples}
+        return extraction_content_hash(
+            target_text=span_text(raw_text, spans[index]),
+            context_text=context_text,
+            model=self.llm.model,
+            schema_version=EXTRACT_SCHEMA_VERSION,
+            sampling=regime,
+            verifier=verifier_sig,
+        )
+
     async def propositionize_document(
         self,
         session: AsyncSession,
@@ -482,8 +539,32 @@ class Propositionizer:
         raw_text: str,
     ) -> list[uuid.UUID]:
         """Run the full pipeline for one document. Returns the Action ids produced."""
-        # Phase 1: idempotency filter (serial reads on the shared session).
-        pending = [i for i, s in enumerate(spans) if not await self._already_done(session, s.id)]
+        # Phase 1: version-aware idempotency (G1.7), serial reads on the shared session. Each
+        # span's pipeline content hash is compared against the one stored on its prior extract
+        # Action: absent → extract; identical → skip (true no-op); different → the extractor
+        # model/prompt/regime/verifier changed since it was extracted, so fail loud rather than
+        # orphan the old propositions (cascade re-extract is G1.7b). The hash is computed once here
+        # and reused at persist time so the stored key can never drift from the decision it drove.
+        verifier_sig = (
+            {"model": self.verifier.llm.model, "schema_version": self.verifier.SCHEMA_VERSION}
+            if self.verifier is not None
+            else None
+        )
+        pending: list[int] = []
+        hash_by_index: dict[int, str] = {}
+        for i, s in enumerate(spans):
+            chash = self._pipeline_hash(spans, i, raw_text, verifier_sig)
+            hash_by_index[i] = chash
+            stored = await self._extracted_hash(session, s.id)
+            if stored is None:
+                pending.append(i)
+            elif stored != chash:
+                raise StaleExtractionError(
+                    f"span {s.id} was extracted under a different pipeline "
+                    f"(stored {stored[:12]}…, now {chash[:12]}…); cascade re-extraction is not "
+                    f"yet supported (G1.7b)."
+                )
+            # stored == chash → already extracted with this exact pipeline: a true no-op.
 
         # Phase 2: concurrent inference, bounded by a semaphore, with no DB access. The permit is
         # acquired *inside* _infer_span around each individual sample call (G1.3 fans out N per
@@ -515,7 +596,13 @@ class Propositionizer:
             context_ids = [str(s.id) for s in context_spans]
             action_ids.append(
                 await self._persist(
-                    session, document_id, spans[i].id, context_ids, results, verdicts
+                    session,
+                    document_id,
+                    spans[i].id,
+                    context_ids,
+                    hash_by_index[i],
+                    results,
+                    verdicts,
                 )
             )
         return action_ids

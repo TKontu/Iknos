@@ -25,9 +25,13 @@ N times, equivalent extractions are clustered, and the cross-sample `agreement` 
 `faithfulness` multiplicatively (`combine_faithfulness`). Default `LLM_EXTRACT_SAMPLES=1` keeps
 it a strict no-op until enabled.
 
+**G1.7** content-addressed cache (#25) shipped its core: extraction idempotency is now
+version-aware — keyed on `(span_id, content_hash)` over the full extractor pipeline, so a changed
+model/prompt/regime/verifier re-extracts (or fails loud) instead of serving a stale extraction.
+
 Remaining (next): **G1.6** quarantine *enforcement* (the `provisional` flag is now set per
 node; gating it at edge-creation is Phase-2-gated), **G1.0** parse front-end (MinerU), then
-G1.7/G1.8/G1.10–G1.12.
+G1.7b (cross-doc reuse)/G1.8/G1.10–G1.12.
 
 ## Current implementation (baseline)
 
@@ -156,14 +160,28 @@ for propositionization" as a non-goal. The revised plan reverses that.
       enforce the gate wherever a proposition feeds an evidential edge. *(Evidential
       edges are Phase 2, so enforcement is gated on that.)*
 
-### G1.7 — Content-addressed cache (§6.1) *(generalizes current idempotency)*
-Current idempotency keys on `Action.inputs.target_span` (a span id) — so a
-re-segmented or duplicated span re-infers.
+### G1.7 — Content-addressed cache (§6.1) *(generalizes current idempotency)* — ✅ core shipped (#25)
+Pre-G1.7 idempotency keyed on `Action.inputs.target_span` (a span id) alone — so a span was
+skipped forever even after the **extractor model / prompt / sampling regime / verifier** changed,
+silently serving a stale extraction (the production-correctness bug).
 
-- [ ] Replace/extend with a **content-addressed cache** keyed by
-      `hash(target_text + context_text + model_version + schema_version)`, so
-      unchanged content is never re-inferred across documents or re-segmentation
-      ("extract once"). Keep the per-span `Action` for audit.
+- [x] **Version-aware, per-span key.** Idempotency now keys on `(span_id, content_hash)`, where
+      `content_hash` = `sha256(target_text + context_text + model + EXTRACT_SCHEMA_VERSION +
+      sampling[incl. n_samples] + verifier_sig)` — `core/cache.py::extraction_content_hash` (pure,
+      mirrors `ingest.span_content_hash`). Same span + same pipeline → true no-op; **changed**
+      pipeline → loud `StaleExtractionError` (mirrors `DocumentResegmentationError`; cascade
+      re-extract deferred — G1.7b), so a model upgrade can never serve a stale extraction. The hash
+      + `schema_version` persist on the extract `Action.inputs` (per-span Action kept for audit);
+      `EXTRACT_SCHEMA_VERSION`/`VERIFY_SCHEMA_VERSION` are manually-bumped contract versions. A
+      partial functional index on `actions((inputs->>'target_span'), timestamp DESC)` keeps the
+      lookup O(log n) (migration `0006`).
+- [ ] **G1.7b — cross-document "extract once" reuse.** Reuse the extraction *output* across
+      documents / re-segmentation (identical text anywhere skips the LLM and replays cached
+      propositions into the new span) — needs a content-addressed output store + replay +
+      verify/faithfulness cache design. Soundness note: this is why the shipped key is per-span,
+      **not** purely content (a pure-content skip would drop a second span carrying identical text).
+- [ ] Cascade re-extraction: on a stale span, purge its old propositions/edges/index rows and
+      recreate (pairs with the resegmentation-cascade deferral in `ingest.py`).
 
 ### G1.8 — Amortize reference processing (§6.1)
 - [ ] Reference-corpus / domain-pack boxes are ingested **once** and persisted
@@ -210,10 +228,12 @@ integration test hand-creates them).
 2. ~~**G1.1 epistemic fields** + **G1.2 routing** (#20) + **G1.4 verify** +
    **G1.5 faithfulness** (#21) + **G1.3 multi-sample** (#23)~~ — ✅ the §3.1
    perception-hardening core (consistency *and* verification).
-3. **G1.6 quarantine enforcement** — stakes gating (G1.6 flag is set per node;
+3. ~~**G1.7 content-addressed cache** (core)~~ — ✅ #25: version-aware per-span
+   idempotency (`core/cache.py`, migration `0006`). Cross-doc reuse is G1.7b.
+4. **G1.6 quarantine enforcement** — stakes gating (G1.6 flag is set per node;
    edge-time enforcement gated on Phase 2) + **G1.0 parse front-end**. ← **next**
-4. **G1.7 content-addressed cache** + **G1.8 reference amortization** — cost.
-5. **G1.10 multi-level/summaries**, **G1.11 box**, **G1.12 multi-span** —
+5. **G1.7b cross-doc reuse** + **G1.8 reference amortization** — remaining cost work.
+6. **G1.10 multi-level/summaries**, **G1.11 box**, **G1.12 multi-span** —
    incremental, some gated on Phase 2.
 
 ## Revised exit criteria (delta over the originals)
@@ -231,5 +251,8 @@ integration test hand-creates them).
       quarantined from driving a `REFUTES`.
 - [ ] `verify` runs on a different model family from the extractor.
 - [ ] Re-ingesting unchanged content hits the **content-addressed** cache (not just
-      same-span-id); a static reference corpus is processed once and reused.
+      same-span-id); a static reference corpus is processed once and reused. *(Partial,
+      #25: re-ingest of unchanged content is a true no-op and a changed pipeline correctly
+      re-extracts — keyed on `(span_id, content_hash)`. Cross-content reuse "not just
+      same-span-id" is G1.7b; reference-corpus amortization is G1.8.)*
 - [ ] The faithfulness gate metric is wired for Trial A5.
