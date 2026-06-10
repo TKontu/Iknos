@@ -35,8 +35,11 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from iknos.db.age import cypher_map, execute_cypher
+from iknos.boxes.registry import deprecate_box
+from iknos.boxes.serde import box_to_props
+from iknos.db.age import execute_cypher, merge_edge, merge_vertex, unquote_agtype
 from iknos.domain.pack import DomainPack
+from iknos.provenance.action_log import record_action
 
 # Box property marking a registry vertex as a domain pack — the reliable
 # discriminator for active-pack queries (a plain Box has no `kind`).
@@ -88,7 +91,7 @@ async def _loaded_box_state(session: AsyncSession, box_id: uuid.UUID) -> _BoxSta
     if not rows:
         return None
     raw = rows[0][0]
-    return _BoxState(content_hash=None if raw is None else _unquote(raw))
+    return _BoxState(content_hash=None if raw is None else unquote_agtype(raw))
 
 
 def _loaded_result(
@@ -163,18 +166,11 @@ async def load_pack(
     when = stamp.isoformat()
     box = pack.to_box(stamp)
 
-    # --- Box registry vertex: core Box props + pack metadata (extra AGE props) ---
-    box_props: dict[str, Any] = {
-        "id": str(box.id),
-        "name": box.name,
-        "tier": str(box.tier),
-        "version": box.version,
-        "source": box.source,
-        "reliability_prior": box.reliability_prior,
-        "valid_from": when,
-        "valid_to": None,
-        "status": str(box.status),
-        # Pack-layer metadata — not on the domain-agnostic core Box model (§9, §10).
+    # --- Box registry vertex: shared core serialization (box_to_props) + pack extras ---
+    # The core Box properties go through the same contract the box registry uses, so the
+    # pack and general box-write paths cannot diverge (the G0.R1 divergence class). The
+    # pack-only metadata below is *not* on the domain-agnostic Box model (§9, §10).
+    extra: dict[str, Any] = {
         "kind": PACK_KIND,
         # Content hash anchoring per-version immutability (G0.R1, see load_pack).
         "content_hash": content_hash,
@@ -184,12 +180,21 @@ async def load_pack(
         "entity_types": [t.model_dump(exclude_none=True) for t in pack.entity_types],
     }
     if pack.description is not None:
-        box_props["description"] = pack.description
-    await _merge_node(session, "Box", box_props)
+        extra["description"] = pack.description
+    await merge_vertex(session, "Box", box_to_props(box, extra=extra))
+    # Box creation is an auditable lifecycle event (§10.1), uniform with the registry's
+    # create-box Action — emitted only on a real first load (this branch).
+    await record_action(
+        session,
+        actor="pack-loader",
+        action_type="create-box",
+        inputs={"name": box.name, "tier": str(box.tier), "version": box.version},
+        outputs={"box": str(box.id)},
+    )
 
     # --- taxonomy entities as Object vertices, box-tagged ---
     for e in pack.entities:
-        await _merge_node(
+        await merge_vertex(
             session,
             "Object",
             {
@@ -202,7 +207,7 @@ async def load_pack(
 
     # --- directPartOf edges (the declared steps; anchored provenance, §14) ---
     for rel in pack.part_of:
-        await _merge_edge(
+        await merge_edge(
             session,
             src_id=entity_ids[rel.part],
             dst_id=entity_ids[rel.whole],
@@ -218,7 +223,7 @@ async def load_pack(
     # --- partOf closure (derived; materialized for query, recompute on change) ---
     closure = pack.transitive_closure()
     for edge in closure:
-        await _merge_edge(
+        await merge_edge(
             session,
             src_id=entity_ids[edge.part],
             dst_id=entity_ids[edge.whole],
@@ -242,57 +247,22 @@ async def list_active_packs(session: AsyncSession) -> list[dict[str, str]]:
         f"MATCH (b:Box {{kind: '{PACK_KIND}', status: 'active'}}) RETURN b.id, b.name, b.version",
         returns="id agtype, name agtype, version agtype",
     )
-    return [{"id": _unquote(r[0]), "name": _unquote(r[1]), "version": _unquote(r[2])} for r in rows]
+    return [
+        {
+            "id": unquote_agtype(r[0]),
+            "name": unquote_agtype(r[1]),
+            "version": unquote_agtype(r[2]),
+        }
+        for r in rows
+    ]
 
 
 async def deprecate_pack(
     session: AsyncSession, box_id: uuid.UUID, *, valid_to: datetime | None = None
 ) -> None:
     """Flip a pack Box to deprecated (§9). Belief revision on dependents is the
-    governance track's job; here we only close the box (caller commits)."""
-    when = (valid_to or datetime.now(UTC)).isoformat()
-    await execute_cypher(
-        session,
-        f"MATCH (b:Box {{id: '{box_id}'}}) SET b.status = 'deprecated', b.valid_to = '{when}'",
-    )
+    governance track's job; here we only close the box (caller commits).
 
-
-# --- AGE helpers (MERGE-on-id keeps loads idempotent) ---
-
-
-async def _merge_node(session: AsyncSession, label: str, props: dict[str, Any]) -> None:
-    """``MERGE (n:Label {id}) SET n = {...}`` — upsert keyed on id."""
-    body = cypher_map(props)
-    await execute_cypher(
-        session,
-        f"MERGE (n:{label} {{id: '{props['id']}'}}) SET n = {body}",
-    )
-
-
-async def _merge_edge(
-    session: AsyncSession,
-    *,
-    src_id: uuid.UUID,
-    dst_id: uuid.UUID,
-    label: str,
-    props: dict[str, Any],
-) -> None:
-    """MERGE one edge of ``label`` between two id-identified nodes, then set props.
-
-    The pack guarantees at most one edge of a given label per (part, whole) pair,
-    so merging on endpoints+label (not on properties) is the correct idempotent key.
-    """
-    body = cypher_map(props)
-    await execute_cypher(
-        session,
-        f"MATCH (a {{id: '{src_id}'}}), (b {{id: '{dst_id}'}}) "
-        f"MERGE (a)-[r:{label}]->(b) SET r = {body}",
-    )
-
-
-def _unquote(v: Any) -> str:
-    """AGE returns agtype strings double-quoted (``\"foo\"``); strip to plain str."""
-    s = str(v)
-    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
-        return s[1:-1]
-    return s
+    Delegates to the box registry so pack and general boxes deprecate through one path
+    (status + ``valid_to`` close, plus the ``deprecate-box`` Action)."""
+    await deprecate_box(session, box_id, valid_to=valid_to, actor="pack-loader")

@@ -73,3 +73,69 @@ async def execute_cypher(
     conn = await session.connection()
     result = await conn.exec_driver_sql(cypher(query, returns))
     return list(result.all())
+
+
+# --- shared write/read primitives (idempotent MERGE-on-id; agtype parsing) ---
+
+
+async def merge_vertex(session: AsyncSession, label: str, props: dict[str, Any]) -> None:
+    """``MERGE (n:Label {id}) SET n = {...}`` — upsert a vertex keyed on ``id``.
+
+    The single MERGE-on-id implementation reused by every writer (the box registry,
+    the domain-pack loader, later operators) so the upsert discipline cannot diverge
+    across call sites. ``SET n = {...}`` is full-replace: callers that must preserve a
+    create-only field (e.g. bitemporal ``valid_from``) read-first and skip the write
+    when the vertex already exists rather than re-issuing it (the G0.R1 discipline).
+    ``props`` must carry ``id``; only values are escaped, never keys/labels.
+    """
+    body = cypher_map(props)
+    await execute_cypher(
+        session,
+        f"MERGE (n:{label} {{id: '{props['id']}'}}) SET n = {body}",
+    )
+
+
+async def merge_edge(
+    session: AsyncSession,
+    *,
+    src_id: Any,
+    dst_id: Any,
+    label: str,
+    props: dict[str, Any],
+) -> None:
+    """MERGE one edge of ``label`` between two id-identified vertices, then set props.
+
+    Merges on endpoints + label (not on properties), so it is the correct idempotent
+    key only when at most one edge of ``label`` exists per (src, dst) pair — the
+    caller's invariant. Both endpoints must already exist (MATCH), or the MERGE
+    silently no-ops.
+    """
+    body = cypher_map(props)
+    await execute_cypher(
+        session,
+        f"MATCH (a {{id: '{src_id}'}}), (b {{id: '{dst_id}'}}) "
+        f"MERGE (a)-[r:{label}]->(b) SET r = {body}",
+    )
+
+
+def unquote_agtype(v: Any) -> str:
+    """AGE returns agtype strings double-quoted (``\"foo\"``); strip to plain str."""
+    s = str(v)
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return s[1:-1]
+    return s
+
+
+def parse_agtype_map(v: Any) -> dict[str, Any]:
+    """Parse an agtype map (e.g. from ``RETURN properties(n)``) into a Python dict.
+
+    AGE renders a property map as JSON text; the driver hands it back as a string
+    (or, defensively, an already-parsed dict). List/dict-valued properties were
+    JSON-encoded into string properties by :func:`cypher_map`, so they come back as
+    JSON strings — readers decode those a second time (see the box ``*_from_props``).
+    """
+    if v is None:
+        return {}
+    if isinstance(v, dict):
+        return v
+    return json.loads(str(v))  # type: ignore[no-any-return]
