@@ -140,7 +140,7 @@ async def _segmented_hash(session: AsyncSession, document_id: uuid.UUID) -> str 
     """The ``content_hash`` of this document's most recent segmentation, or ``None``.
 
     Action-table backed (single source of truth), mirroring
-    ``Propositionizer._already_done``.
+    ``Propositionizer._extracted_hash`` (G1.7).
     """
     row = await session.execute(
         text(

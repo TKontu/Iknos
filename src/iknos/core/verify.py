@@ -51,9 +51,19 @@ class VerifyVerdict(BaseModel):
 
 VERIFY_SCHEMA = VerifyVerdict.model_json_schema()
 
+# Bump on any change that alters verifier output — the SYSTEM_PROMPT wording, the message
+# template, or the VERIFY_SCHEMA fields. Folded into the extraction cache key (G1.7) via the
+# verifier signature, so toggling/upgrading the verifier re-derives faithfulness instead of
+# silently serving the old verdict. Mirrors core/ingest.py::SEGMENT_SCHEMA_VERSION.
+VERIFY_SCHEMA_VERSION = 1
+
 
 class Verifier:
     """Judges whether a source span entails a proposition with its operators preserved (G1.4)."""
+
+    # Surfaced on the instance so the propositionizer can fold the verifier's version into its
+    # extraction cache key (G1.7) without a circular import back into verify.py.
+    SCHEMA_VERSION = VERIFY_SCHEMA_VERSION
 
     # Generated from the enum (not hand-typed) so the prompt vocabulary can never drift from
     # the guided-decode schema — exactly the discipline the extractor's prompt follows.
