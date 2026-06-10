@@ -5,10 +5,48 @@
 the merged implementation looked for residual defects that would punish later
 development. Each candidate was checked against the actual code to confirm it
 **realizes** on a supported path rather than being theoretical. This file records
-the **one confirmed issue** plus the candidates that were examined and dismissed
-(so they are not re-raised).
+the **confirmed issues** plus the candidates that were examined and dismissed
+(so they are not re-raised). The 2026-06 architecture/code review
+(`review_2026-06_architecture_plan.md`) added G0.R2.
 
 **Refs:** §7.4 (bitemporal), §9 (boxes/tiers), §14 (part-whole). G0.7 (domain packs).
+
+## Confirmed — open
+
+### G0.R2 — No property indexes on any AGE label table *(2026-06 review C3 — scale cliff before Phase 2)*
+
+**Symptom.** Migrations 0001–0006 create relational indexes (actions, embeddings,
+lexical) but **zero indexes on AGE label tables**. AGE stores all vertex/edge
+properties in a single `agtype` column, so every `MERGE (n {id: ...})`, every
+box-scoped `MATCH`, and every future bitemporal as-of filter is a **sequential scan
+of the label's heap table**.
+
+**Why it realizes.** Phase 1 volumes hide it; it becomes a cliff exactly where the
+plan leans on AGE hardest: idempotent re-ingest does a MERGE per span (O(spans²)
+per corpus re-run as the table grows), and Phase 2 entity resolution runs
+*continuous* per-mention candidate lookups and `SAME_AS` component queries.
+§6 (storage) now states the requirement; this gap implements it.
+
+**Fix tasks (one migration + one verification test):**
+
+- [ ] Migration: for **each** vertex/edge label created in 0001/0004, add a btree
+      expression index on the `id` property access — e.g.
+      `CREATE INDEX ... ON iknos."Span" (agtype_access_operator(properties, '"id"'::agtype))`
+      — and on `"box"` for the labels queried box-scoped (Proposition, Fact, Span,
+      Actor, Object, …). Add GIN on `properties` for labels that get ad-hoc
+      filters (start with Proposition, Fact). Use the exact property-access
+      expression the `cypher()` query plans produce, or the index will exist and
+      never be used.
+- [ ] Bitemporal prep: expression indexes on `valid_from`/`valid_to` for the labels
+      that carry them today (Box, directPartOf/partOf edges).
+- [ ] **Verification test (integration, ephemeral DB):** `EXPLAIN (FORMAT JSON)`
+      through the *actual* `execute_cypher` call path for (a) MERGE-by-id, (b)
+      box-scoped MATCH — assert an Index Scan appears. Index existence is not index
+      use; the AGE SQL-wrapping has sharp edges, and this assertion is the point of
+      the task.
+- [ ] Gate: **merge before Phase 2 starts** (it is a Phase 2 entry criterion in
+      `todo_phase_2_graph_construction.md`); pair with the pulled-forward Trial C3
+      density benchmark (`todo_trials.md`).
 
 ## Confirmed — fixed
 

@@ -72,6 +72,19 @@ into the codebase — the copyleft stops at the service edge.
 
 - Run a long-context embedding model over the whole document once. Cache the
   contextualized token embeddings.
+- **Documents longer than the model context are windowed, never truncated.** The
+  embedding context (e.g. 8k tokens for bge-m3) is far smaller than a real case
+  document, so "the whole document once" is implemented as **overlapping
+  macro-windows**: embed consecutive max-length windows with a fixed overlap, and
+  pool each span from the window where it sits furthest from a window edge (late
+  chunking over windows). **Silent truncation is forbidden** — an ingest that cannot
+  cover the full document must fail loudly, not index a prefix; the window layout is
+  recorded in the segment Action so coverage is provable from provenance.
+- **"Cache" is scoped honestly.** Token embeddings are cached per ingest run (in
+  memory) for deriving all granularities of that run. If a later pass (multi-level
+  re-derivation, §2 summaries) needs them again, either persist them keyed by
+  `(document, embedding-model)` or budget the re-embedding cost explicitly — never
+  assume a persistent token-embedding cache that has not been built.
 - Boundary detection, multi-level pooling, and semantic search all run over these
   cached vectors. Re-embedding each level separately would cost roughly L× and
   discard cross-unit context; this avoids both. (Technique: *late chunking*.)
@@ -179,7 +192,16 @@ never to score them.
 
 **Confidence comes from consistency and verification, not verbalized self-report.**
 Reuse the §8 machinery: multi-sample extraction (stable extractions are high-confidence;
-unstable ones flagged), and an **extract-then-verify** pass — an entailment/NLI check
+unstable ones flagged), and an **extract-then-verify** pass. **Agreement must be
+computed within identical epistemic-field partitions** — embedding similarity cannot
+distinguish polarity (a claim and its negation embed nearly identically, typically
+above any usable equivalence threshold), so equivalence clusters are formed only
+among candidates sharing `polarity` (and `epistemic_class`); a near-identical pair
+that splits across polarities is a **negative** consistency signal — the extractor
+is unstable on the claim's direction — and must drive agreement *down* and mark the
+proposition provisional, never be averaged into a single high-agreement cluster.
+Multi-sample also requires nonzero sampling temperature, or N identical samples make
+agreement trivially perfect; the configuration must enforce this, not document it — an entailment/NLI check
 that the source span actually supports the proposition *with its polarity and modality*
 (the perception-layer analogue of ensemble contradiction). Verification catches both
 hallucinated content (not in the source) and distortion (operator dropped).
@@ -207,13 +229,23 @@ attachment (§14) and surfaced cyclic regions (§13).
 Three indexes over the same shared offsets — no duplicated text.
 
 - **Dense** — the cached embeddings, for semantic similarity.
-- **Sparse lexical** — a TF-IDF / BM25 term index. Catches exact tokens that
+- **Sparse lexical** — an exact-token term index. Catches exact tokens that
   embeddings blur: names, codes, acronyms, rare jargon. Word-frequency keywording
-  belongs here, **not** in the graph.
+  belongs here, **not** in the graph. **Implementation honesty:** the self-hosted
+  engine is Postgres FTS (`simple` tsvector + GIN), and `ts_rank` is **neither
+  TF-IDF nor BM25** (no IDF term, no document-length normalization). Exact-token
+  *recall* — the job above — is unaffected; *ranking* semantics are not BM25's, so
+  nothing downstream may be tuned against BM25 score assumptions. True-BM25
+  Postgres extensions (ParadeDB `pg_search`, VectorChord-BM25) are AGPL and would
+  need the same service-edge isolation as MinerU (§1); adopt one only if rank
+  fusion over FTS measurably under-ranks in Trial A1.
 - **Graph nodes** — see §5.
 
 Retrieval is **hybrid** (dense + sparse): semantic recall plus exact-match
-precision.
+precision. **Fusion is rank-based (Reciprocal Rank Fusion)** — never a weighted
+sum of raw scores, because cosine and `ts_rank` live on incomparable scales; RRF
+is insensitive to score semantics, which is exactly what the FTS caveat above
+requires.
 
 **Keyword note.** Word-frequency keyworders (raw counts, RAKE, YAKE, TextRank,
 KeyBERT) serve the lexical index, not the graph — they emit strings, not typed
@@ -405,6 +437,16 @@ pgvector**.
 - **Apache AGE** (Postgres extension, Apache-2.0) holds the reasoning graph as a
   single property graph: typed vertices, evidential edges. One graph, not one per
   box — cross-box edges and entity deduplication require it (see §9).
+- **AGE property indexes are mandatory, not an optimization.** AGE stores
+  properties in an `agtype` column; without explicit indexes every
+  `MERGE`/`MATCH` on `id` or `box` is a **sequential scan of the label table**.
+  Every vertex/edge label carries a btree expression index on its `id` property
+  access (and on `box` where box-scoped queries run), plus GIN on `properties`
+  for ad-hoc filters; bitemporal as-of queries need expression indexes on
+  `valid_from`/`valid_to` for the labels that use them. Index *use* must be
+  verified with `EXPLAIN` through the actual query path (the `cypher()` SQL
+  wrapping has sharp edges) — existence is not use. This ships before Phase 2's
+  continuous entity-resolution lookups, not after they hit the cliff (Trial C3).
 - **PostgreSQL** (same instance) holds source text, span offsets, auth, and
   metadata as relational tables; `pgvector` holds the dense embedding index.
   Provenance resolution (Span → text) is therefore a local join, not a cross-engine
@@ -1214,6 +1256,19 @@ the delta-affected sub-graph Layer A reports as changed. **Never use the
 probabilistic sum-product semiring here** unless derivations are provably
 independent — it double-counts and can diverge on cycles.
 
+**The Viterbi-vs-Gödel choice is an explicit Phase-3-entry decision, not a default.**
+Viterbi `max-·` carries a structural **depth bias**: confidence decays geometrically
+with derivation depth (five 0.9-confidence steps → 0.59 regardless of evidence
+quality), so deep, careful derivations are punished relative to shallow ones and the
+meaning of any acceptability band (§11.2) varies with chain length. Gödel `max-min`
+is depth-neutral — a chain is as strong as its weakest link — which matches the
+ordinal, ordering-driven use the QBAF makes of these scores. Decide with a fixture
+demonstrating both behaviours on a deep chain vs a shallow one before Layer B is
+built; if Viterbi is kept, the banding must be made depth-aware (strictly more
+machinery). The same depth-compounding concern applies at the perception layer,
+where `faithfulness = verify × agreement` and credibility multiply in series —
+Trial A5 should evaluate `min` as the combiner alongside the product.
+
 **Foundedness gates confidence — and that ordering is what makes cycles safe.** Layer B
 *converges* on a cycle but convergence is not foundedness: alone it would assign a
 confidence to an ungrounded loop. Because Layer A decides membership *before* Layer B
@@ -1555,6 +1610,10 @@ resourced with evaluation gates, not routine engineering — see §13.
   domains (§9).
 - [ ] **Re-evaluation trigger policy** — eager propagation vs lazy recompute-on-read,
   and the propagation bound.
+- [ ] **Layer B semiring (Viterbi vs Gödel)** — decide at Phase 3 entry with a
+  depth-bias fixture (§12); if Viterbi is kept, make acceptability banding
+  depth-aware. Same question for the perception-layer combiner (`×` vs `min`) in
+  Trial A5.
 - [x] **Knowledge tiering** — resolved; see §9 (tier × box axes, source vs working,
   gated promotion).
 - [ ] **LLM→QBAF mapping** — turning calibrated LLM judgments into intrinsic weights

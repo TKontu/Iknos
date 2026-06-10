@@ -149,17 +149,31 @@ failure here changes the design, not just the code.
   and track-record-revised; corroboration is independence-aware; packs are versioned/
   bitemporal; cold-start runs induce-mode + promotion-bootstrap. Present from the schema
   up, not bolted on.
+- **Operations & security** *(added by the 2026-06 review — previously absent from every
+  phase)* — the §9.1 clearance projection presupposes **authentication/authorization**
+  that no phase builds: scope authn/z with the API (Phase 6) so clearance filtering has
+  an identity to filter on. Plus: containerized packaging incl. the MinerU AGPL
+  service-edge enforced in build tooling (not just prose); Postgres **backup/restore**
+  for what is the durable record of investigations; basic observability (structured
+  logs, LLM-call metrics, queue depth). Concrete deliverables land in Phases 6–7; the
+  track exists so they are scoped, not discovered.
 
 ## Open questions & risks
 
 Tracked in `architecture.md` Open items and §13. The live, build-time/empirical ones
-are surfaced in the phase that must resolve them:
+are surfaced in the phase that must resolve them. The **2026-06 review**
+(`review_2026-06_architecture_plan.md`) is folded into the plan as: G1.13–G1.19
+(`gap_phase_1_ingest.md`), G0.R2 (`gap_phase_0_residual.md`), Phase 2 entry criteria,
+the Phase 3 semiring decision, and the A0/C3/E1 scheduling deltas (`todo_trials.md`):
 
 - Re-evaluation trigger policy (eager vs lazy) → Phase 5
 - LLM→QBAF weight mapping → Phase 4 + gate
 - Candidate-generation recall tuning, dissimilar-refuter recall → Phase 4 + gate
 - Cyclic-region presentation policy → Phase 6
 - Truth-maintenance placement (in-Postgres vs alongside via DBSP) → Phase 3 (MVP), revisit at scale
+- Layer B semiring: Viterbi depth-bias vs Gödel depth-neutral → Phase 3 entry (fixture-decided, §12)
+- Long-document windowed embedding (no silent truncation) → Phase 1 (G1.13)
+- AGE viability under schema density + property indexes → Phase 2 entry (C3 + G0.R2)
 - LLM judging bias / correlated error → Phase 4 (disciplines) + Phase 7 (expert calibration loop)
 - Part-whole hierarchy acquisition quality (taxonomy anchor / meronymy / relative ordering) → Phase 2 + gate
 - Mixed-level frontier rendering (adaptive abstraction per audience/region) → Phase 6

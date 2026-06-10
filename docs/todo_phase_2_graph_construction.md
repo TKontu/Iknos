@@ -7,6 +7,31 @@ organized into boxes/tiers, each traceable to source and logged.
 **Architecture refs:** §5 (reasoning graph nodes), §9 (tiers & boxes), §6 (operators,
 `extract`), §10 (`INVOLVES`, `EVIDENCED_BY`), §10.1 (action log).
 
+## Entry criteria (do not start node extraction before these)
+
+*Added by the 2026-06 review (`review_2026-06_architecture_plan.md`); each exists
+because Phase 2 is where its absence turns from latent to expensive.*
+
+- [ ] **AGE property indexes merged (G0.R2, `gap_phase_0_residual.md`).** Entity
+      resolution runs continuous per-mention MERGE/MATCH lookups; without expression
+      indexes every one is a label-table seq scan. Verified by `EXPLAIN` through the
+      real `cypher()` path, not by index existence.
+- [ ] **Trial C3 density benchmark run early** (`todo_trials.md` C3 — pulled forward):
+      a synthetic graph at target schema density, on the four real query patterns,
+      *before* building heavily on AGE. If AGE fails here, the fallback decision
+      (separate graph store) must be made now, not after Phases 2–5 are built on it.
+- [ ] **Quarantine enforcement lands with the first evidential edges (G1.6).** The
+      `provisional` flag is already set per proposition; the §3.1 rule "provisional
+      atoms cannot drive high-stakes moves (e.g. a `REFUTES`)" is enforced at
+      edge-creation time — which begins in this phase. Until enforced, the flag is
+      decorative.
+- [ ] **Polarity-aware agreement (G1.14) and the truncation guard (G1.13 slice 1)
+      shipped** — Phase 2 consumes propositions and their faithfulness; both fixes
+      change what reaches it.
+- [ ] **Structured table payload available (G1.18)** if table extraction is in this
+      phase's scope — the "rows/cells → propositions with column semantics" task
+      below has nothing to read without it.
+
 ## Boxes & tiers (§9)
 
 - [ ] Operationalize the **tier** axis (schema → reference → case → working) as the

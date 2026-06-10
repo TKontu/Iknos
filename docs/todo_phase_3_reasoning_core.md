@@ -53,10 +53,21 @@ Phase 2 adapter that maps the active AGE subgraph into a `DerivationGraph`.
 
 ## Layer B — confidence valuation over an absorptive semiring (owns strength)
 
-- [ ] Confidence as a **least fixpoint** over the **Viterbi** semiring
-      `([0,1], max, ·, 0, 1)` — multiply along a rule body, max across alternative
-      derivations (best-derivation confidence). (Gödel `max-min` as the ordinal
-      alternative.)
+- [ ] **Semiring decision first (Phase-3-entry, before any Layer B code; §12, review
+      A6).** Viterbi `max-·` has a structural **depth bias**: confidence decays
+      geometrically with derivation depth (five 0.9 steps → 0.59 regardless of
+      evidence quality), so deep derivations are punished and acceptability-band
+      thresholds mean different things at different chain lengths. Gödel `max-min`
+      is depth-neutral (weakest link). Build a small fixture — one deep chain vs one
+      shallow chain from equal-confidence facts, plus a multi-path graph — compute
+      both semirings over it, and decide with eyes open. If Viterbi is chosen, the
+      §11.2 banding must be made depth-aware (note the extra machinery in the
+      decision record). Both are absorptive/ω-continuous, so cycle convergence is
+      unaffected either way.
+- [ ] Confidence as a **least fixpoint** over the chosen semiring — Viterbi
+      `([0,1], max, ·, 0, 1)`: multiply along a rule body, max across alternative
+      derivations (best-derivation confidence); or Gödel `max-min` (ordinal,
+      depth-neutral).
 - [ ] Compute only over nodes Layer A certifies as **well-founded**-supported (so an
       unfounded cycle never receives a confidence — foundedness gates scoring).
 - [ ] Recompute incrementally on the **delta-affected sub-graph** Layer A reports.
@@ -113,3 +124,7 @@ Phase 2 adapter that maps the active AGE subgraph into a `DerivationGraph`.
 - Negation/aggregation in rules breaks plain provenance — restrict to stratified
   negation evaluated by clingo (or a recursion-safe IVM algorithm — not plain Counting)
   (§13).
+- **Viterbi's depth bias is a real epistemic choice, not a tuning detail** (§12,
+  review A6): under `max-·`, "confidence" partly measures derivation depth. Decide
+  the semiring with the fixture before Layer B exists; switching later re-scores
+  every conclusion and invalidates any fitted band thresholds.

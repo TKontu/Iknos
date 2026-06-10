@@ -35,6 +35,16 @@ service + table/figure interpretation (Phase 2) remain. Remaining (next): **G1.6
 *enforcement* (the `provisional` flag is now set per node; gating it at edge-creation is
 Phase-2-gated), then G1.7b (cross-doc reuse)/G1.8/G1.10–G1.12.
 
+**2026-06 review** (`review_2026-06_architecture_plan.md`) added **G1.13–G1.19**: two
+critical correctness fixes (G1.13 long-document truncation, G1.14 polarity-blind
+agreement clustering — both currently silent-wrong on real inputs), two
+silent-staleness closures (G1.15 prompt-hash cache key, G1.16 embedding-model
+identity), a robustness batch (G1.17), the structured-table contract slot (G1.18,
+time-sensitive while the wire schema is on a branch), and the RRF fusion decision
+(G1.19). G1.13 slice 1 + G1.14 jump the queue: they are cheap and stop silent data
+corruption; do them **before** any further perception-layer tuning and before Trial
+A5 fits thresholds.
+
 ## Current implementation (baseline)
 
 The built proposition layer is sound and retained — its design is captured here
@@ -241,6 +251,203 @@ integration test hand-creates them).
       reference resolution (today: target span only; context ids live in
       `Action.inputs`).
 
+---
+
+*G1.13–G1.19 originate in the 2026-06 architecture/code review
+(`review_2026-06_architecture_plan.md`); each entry names its review finding.*
+
+### G1.13 — Long-document coverage: truncation guard, then windowed embedding (§1) *(review C1 — **critical**, silent data loss)*
+
+**Why.** `EmbeddingSubstrate.embed_document` (`core/embeddings.py`) tokenizes with
+`truncation=True, max_length=8192` and returns no signal that truncation happened.
+For any document past ~8k tokens (≈12–20 PDF pages — i.e. *most real case
+documents*): `pool_span` finds no overlapping tokens for spans beyond the cutoff and
+returns a zero vector; `persist_spans` skips those dense rows; the content is
+**silently invisible** to dense retrieval and the §5.1 candidate funnel — the exact
+"silent false negative" §5.1 warns about. Segmentation similarity past the cutoff is
+likewise undefined. Two slices, shippable independently:
+
+- [ ] **Slice 1 — fail-loud guard (do first; tiny).** In `embed_document`, detect
+      truncation (tokenize without truncation and compare length, or check
+      `seq_len == max_length`) and raise a new `DocumentTooLongError` (same
+      pattern/placement as `DocumentResegmentationError`). No partial index may be
+      written. Unit test: text tokenizing past the limit raises; text under it does
+      not. This converts silent data loss into a loud refusal until Slice 2 lands.
+- [ ] **Slice 2 — overlapping macro-windows ("late chunking over windows").**
+      Embed consecutive max-length windows with a fixed token overlap (start at
+      1024; make it a constant, not config). `DocumentContext` becomes a list of
+      windows, each with its own `token_embeddings` + char-offset mapping;
+      `pool_span(start_char, end_char)` selects the window where the span sits
+      **furthest from a window edge** and pools there (never average across
+      windows). Callers (`ingest.py`, `segmentation.py`) keep their current API.
+- [ ] **Provenance + idempotency:** record the window layout (window count,
+      boundaries, overlap, model max length) in the segment `Action.inputs`, and
+      fold it into the `span_content_hash` inputs so a changed windowing policy
+      re-segments instead of silently reusing spans.
+- [ ] **Segmentation across windows:** compute adjacent-window similarities within
+      each macro-window; in overlap zones take the values from the window where both
+      compared positions are interior. Boundary placement must be identical for a
+      document that happens to fit one window.
+- [ ] **Tests:** a synthetic document spanning >2 windows gets a non-zero dense
+      vector for *every* span; a span straddling a window seam pools from the
+      interior window; ingest of the same long document twice is a no-op; the
+      single-window path is byte-identical to today's behaviour.
+
+### G1.14 — Polarity-aware agreement clustering + degenerate-sampling guard (§3.1) *(review C2 — **critical**, inflated confidence on negation flips)*
+
+**Why.** `core/consistency.py::cluster_candidates` forms clusters by embedding
+cosine alone (`threshold 0.86`). Sentence embeddings place a claim and its negation
+nearly on top of each other (typically cosine > 0.9), so asserted and negated
+variants of the same claim co-cluster: 3-assert/2-negate across 5 samples yields
+**agreement 1.0** — maximum confidence on precisely the polarity instability §3.1
+exists to catch — and `canonical_of` makes the persisted polarity a sample-
+distribution coin flip. The `Candidate` dataclass already carries the fields; they
+are just unused for identity.
+
+- [ ] **Hard-partition before clustering:** run cosine clustering only *within*
+      groups of identical `(polarity, epistemic_class)`. Modality stays soft (it
+      varies legitimately across phrasings); polarity and epistemic class are
+      identity. Implement as a `groupby` wrapper around the existing
+      `cluster_candidates` — keep the inner algorithm untouched.
+- [ ] **Cross-polarity instability is a negative signal, not noise:** after
+      partitioned clustering, detect **polarity twins** — clusters in opposite
+      polarity partitions whose representatives' cosine ≥ threshold. For twins:
+      each side's `agreement` stays its own distinct-sample fraction of N (so
+      3-assert/2-negate → 0.6 / 0.4, never 1.0), both canonical propositions are
+      marked `provisional` (reason: polarity-unstable), and the twin pairing is
+      recorded in the extract `Action.outputs` for Trial A5.
+- [ ] **Degenerate-sampling guard (review P4):** fail config validation (or warn
+      loudly at `Propositionizer` construction) when `LLM_EXTRACT_SAMPLES > 1`
+      while sampling temperature is 0 — N greedy samples are (near-)identical and
+      agreement is trivially 1.0 while measuring nothing.
+- [ ] **Tests (pure, hand-built vectors):** near-identical asserted+negated
+      candidates land in separate clusters whose agreements sum to ≤ 1; twin
+      detection sets `provisional` on both; same-polarity candidates cluster as
+      before; the temperature guard fires.
+- [ ] **Ordering note for Trial A5:** land this **before** A5 fits
+      `PROP_AGREEMENT_THRESHOLD` — fitting the threshold against the polarity-blind
+      clusterer bakes the bug into the calibration.
+
+### G1.15 — Cache key: hash the actual prompt + schema, not a hand-bumped constant (§6.1) *(review A4)*
+
+**Why.** `extraction_content_hash` (`core/cache.py`) discriminates on
+`EXTRACT_SCHEMA_VERSION`, a constant whose docstring says "bumped on any prompt /
+schema / enum change" — a human-discipline guard on exactly the staleness class
+G1.7 was built to close. Edit the prompt, forget the bump, and every cached span
+silently replays the old extraction.
+
+- [ ] Add to the hash payload: `prompt_sha` = SHA-256 of the rendered system-prompt
+      template (the string `build_messages` interpolates, before per-span
+      substitution) and `schema_sha` = SHA-256 of the canonical JSON
+      (`sort_keys=True`, compact separators) of the guided-decoding schema. Do the
+      same inside the verifier signature (verifier prompt + `VerifyVerdict`
+      schema).
+- [ ] Keep `schema_version` in the key as a *semantic* version of the output shape;
+      it no longer carries invalidation alone.
+- [ ] **Tests:** changing one character of the prompt template changes the hash;
+      re-ordering schema keys does not; toggling the verifier still does.
+- [ ] **Expected effect:** one-time full re-extraction on the next run after this
+      lands (the key changes). That is correct and loud, not a regression.
+
+### G1.16 — Embedding-model identity on dense rows + reindex path (§4) *(review A5)*
+
+**Why.** `document_embeddings` / `proposition_embeddings` rows carry no record of
+which model produced them. Swap or upgrade the embedding model and the ANN index
+becomes a mixed-space soup — cosine across spaces is meaningless — and *nothing can
+even detect* the condition.
+
+- [ ] **Migration:** add `model TEXT NOT NULL` to both tables; backfill existing
+      rows with `'BAAI/bge-m3'`; include `model` in the table comment as the vector
+      space identifier. (Dimension is implicit in the pgvector column; a model
+      change that alters dimension fails loudly already — same-dimension swaps are
+      the silent case this closes.)
+- [ ] **Ingest guard** (mirror `DocumentResegmentationError`): before upserting,
+      if rows exist for this document (or proposition set) under a *different*
+      `model`, raise `EmbeddingModelMismatchError` — never mix spaces in place.
+- [ ] **Reindex path:** `scripts/reembed.py` — for a target model: re-run
+      `embed_document`+`pool_span` over each document's raw text to refresh span
+      vectors, and `embed_passages` over proposition texts; batched, idempotent
+      (skip rows already on the target model), caller owns transaction per batch.
+- [ ] **Tests:** mismatch guard raises (integration, ephemeral DB); reembed script
+      converges to all-rows-on-target-model and is re-runnable.
+
+### G1.17 — Ingest robustness hardening *(review R1–R8 — one batch PR)*
+
+- [ ] **Per-span error isolation** (`core/proposition.py`): the span-level
+      `asyncio.gather` must not let one failing span (or one failing sample) abort
+      the document. Use `return_exceptions=True` (or a per-span try), record failed
+      spans `(span_id, error)` on the run result, continue, and let the next run
+      pick them up via idempotency — the content-addressed cache makes resume
+      cheap; lean on it.
+- [ ] **Verifier failure = verdict unavailable, not a crash:** a `None`/unparseable
+      verifier response leaves `faithfulness`/`provisional` null (the documented
+      degraded G1.1 mode) and logs the failure on the verify `Action`, instead of
+      surfacing an enum-cast exception mid-batch.
+- [ ] **Kill the zero-vector sentinel** (`core/embeddings.py::pool_span`): return
+      `None` for no-token spans instead of `[0.0]*hidden`; update callers to skip
+      explicitly. Invariant after this: **no zero vector can reach pgvector** (the
+      sentinel currently relies on every caller remembering to check — and G1.13's
+      truncated spans took this same path).
+- [ ] **Action-lookup indexes:** partial functional indexes on
+      `actions((inputs->>...), timestamp DESC)` for the parser and segmenter
+      idempotency lookups, mirroring migration `0006` (which covered only
+      `actor='propositionizer'`). Note in the migration that `actions` is
+      append-only and on the hot path of every ingest decision; partitioning is
+      deferred until volume warrants.
+- [ ] **Overall per-call deadline:** wrap each LLM/verifier call in
+      `asyncio.timeout` slightly above the tenacity retry ceiling so a hung
+      endpoint cannot hold a semaphore permit through ~5×30 s of backoff and starve
+      the batch.
+- [ ] **`EmbeddingSubstrate` lifecycle:** add `close()` / context-manager support
+      releasing model + tokenizer; document that long-running workers hold one
+      instance, not one per document.
+- [ ] **`cypher_map` fuzzing** (`db/age.py`): property-based tests (hypothesis)
+      round-tripping hostile strings — quotes, backslashes, unicode escapes,
+      agtype-syntax fragments — through `cypher_map` → AGE → read-back. Document
+      text and LLM output flow through this hand-rolled escaping at an adversarial
+      trust boundary; prefer AGE prepared-statement params where the call path
+      allows.
+
+### G1.18 — Structured table payload in the parse wire contract (§1 rule a) *(review A1 — do while the wire schema is still on a branch)*
+
+**Why.** §1 promises "tables ingest as structured observations (rows/cells →
+propositions with column semantics)". But `ParseResult` is one reading-order text
+blob + linear `[start, end)` ranges; a `ParseKind.TABLE` element is just a char
+range, so the 2-D structure (rows, headers, cell adjacency) is destroyed at the
+trust boundary and Phase 2's table extractor would have nothing to read.
+Retrofitting a wire contract after the MinerU service adapter ships is strictly
+more work than adding the slot now.
+
+- [ ] Add an optional `table` payload to `ParseElement` (only valid when
+      `kind == TABLE`): `{n_rows, n_cols, cells: [{row, col, row_span, col_span,
+      is_header, start, end, bbox?}]}` — each cell's `[start, end)` indexes into
+      the **same** reading-order blob, so cell provenance still resolves to spans
+      and visual provenance still works.
+- [ ] **Validation (in `ParseResult.from_offsets` / a table validator):** cell
+      offsets lie within the parent element's range; `(row, col)` within bounds; no
+      two cells claim the same grid position. Cells need *not* tile the element
+      range (separators/whitespace between cells are fine) — do not reuse the
+      strict element-tiling rule here.
+- [ ] Thread through the wire schema (`mineru.py::_WireResponse`), and persist on
+      the span `layout` dict (it is versioned — bump `layout_schema_version`).
+- [ ] **Consumer stays Phase 2** (cells → observation-class propositions with
+      column semantics). This task only makes the structure *survive Stage 0*.
+
+### G1.19 — Hybrid-retrieval rank fusion (RRF) + sparse-ranking decision (§4) *(review A3)*
+
+**Why.** The lexical index is Postgres FTS; `ts_rank` is neither TF-IDF nor BM25
+(no IDF, no length normalization), so the §4 "BM25" assumption did not hold
+(architecture §4 now corrected). Recall of exact tokens is unaffected; score
+*fusion* must not trust the scores.
+
+- [ ] When hybrid retrieval is wired (Phase-2/4 consumer), fuse dense + sparse by
+      **Reciprocal Rank Fusion** over the two result lists — never a weighted sum
+      of cosine and `ts_rank` (incomparable scales).
+- [ ] Re-evaluate only if Trial A1 shows the funnel under-recalling on
+      lexical-ranked candidates; the upgrade path (ParadeDB `pg_search` /
+      VectorChord-BM25) is **AGPL** and requires MinerU-style service-edge
+      isolation — flag for the licensing track before adopting.
+
 ## Sequencing
 
 0. ~~**G1.0/G1.0b parse front-end**~~ — ✅ the new Stage 0: contract + null parser +
@@ -254,11 +461,21 @@ integration test hand-creates them).
    perception-hardening core (consistency *and* verification).
 3. ~~**G1.7 content-addressed cache** (core)~~ — ✅ #25: version-aware per-span
    idempotency (`core/cache.py`, migration `0006`). Cross-doc reuse is G1.7b.
-4. **G1.6 quarantine enforcement** — stakes gating (G1.6 flag is set per node;
-   edge-time enforcement gated on Phase 2). ← **next**
-5. **G1.7b cross-doc reuse** + **G1.8 reference amortization** — remaining cost work.
-6. **G1.10 multi-level/summaries**, **G1.11 box**, **G1.12 multi-span** —
-   incremental, some gated on Phase 2.
+4. **G1.13 slice 1 (truncation guard) + G1.14 (polarity-aware clustering +
+   temperature guard)** — ← **next**: small, stop silent corruption; G1.14 must
+   precede Trial A5 threshold fitting.
+5. **G1.15 (prompt-hash cache key) + G1.16 (embedding-model column)** — two small
+   silent-staleness closures; G1.15 triggers one loud full re-extraction.
+6. **G1.18 (table payload in wire contract)** — while the MinerU wire schema is
+   still on a branch / before the service adapter hardens.
+7. **G1.13 slice 2 (windowed embedding)** — before the MinerU service starts
+   feeding real multi-page PDFs.
+8. **G1.6 quarantine enforcement** — stakes gating (G1.6 flag is set per node;
+   edge-time enforcement gated on Phase 2 — make it a Phase 2 *entry* item).
+9. **G1.17 robustness batch** — one hardening PR.
+10. **G1.7b cross-doc reuse** + **G1.8 reference amortization** — remaining cost work.
+11. **G1.10 multi-level/summaries**, **G1.11 box**, **G1.12 multi-span**,
+    **G1.19 RRF fusion** — incremental, some gated on Phase 2.
 
 ## Revised exit criteria (delta over the originals)
 
@@ -280,3 +497,10 @@ integration test hand-creates them).
       re-extracts — keyed on `(span_id, content_hash)`. Cross-content reuse "not just
       same-span-id" is G1.7b; reference-corpus amortization is G1.8.)*
 - [ ] The faithfulness gate metric is wired for Trial A5.
+- [ ] A document **longer than the embedding context** ingests with full dense
+      coverage — no silent truncation, no zero vectors in pgvector; window layout
+      auditable from the segment Action (G1.13).
+- [ ] Mixed-polarity extractions can never report full agreement; a
+      polarity-unstable span yields `provisional` propositions (G1.14).
+- [ ] A prompt-template edit alone invalidates the extraction cache (G1.15); an
+      embedding-model swap is refused, not silently mixed (G1.16).
