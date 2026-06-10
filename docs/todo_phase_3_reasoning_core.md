@@ -8,23 +8,46 @@ off-the-shelf system packages this — it is the substance of the project.
 **Architecture refs:** §12 (two-layer model), §8 (decisions, staged build 1–2), §7.1
 (edge confidence), §6 (`deduce`, `induce`).
 
+**Status — 🟡 G3.1 shipped (Layer A definitional core).** Well-founded support is
+implemented as the **definitional least-fixpoint** (`well_founded_support`) over an
+abstract derivation graph — a pure, in-memory recompute that is correct on acyclic
+*and* cyclic graphs for the membership question — in `core/truth_maintenance.py`, with
+the §12 must-pass correctness tests passing deterministically. It deliberately does
+**not** yet build the *incremental* mechanisms: integer support-count Counting over
+acyclic regions (**G3.2**) and DRed/clingo over cyclic SCCs (**G3.3**) are the next
+slices and are diff-tested against this recompute oracle. Also open: Layer B confidence
+(Viterbi), the `deduce`/`induce` operators, `SAME_AS`-component aggregation, and the
+Phase 2 adapter that maps the active AGE subgraph into a `DerivationGraph`.
+
 ## Layer A — truth maintenance over a commutative group (owns retraction)
 
-- [ ] **Well-founded support is the definition:** a node is supported iff it is in the
+- [x] **Well-founded support is the definition:** a node is supported iff it is in the
       least fixpoint grounded in **base facts** (`EVIDENCED_BY` leaves / axiomatic rules)
       and closed under derivations (§12). Mark base facts explicitly as the grounding
       anchor. The integer support-count is the incremental *implementation*, not the
-      definition.
+      definition. *(G3.1 — `core/truth_maintenance.py`: `DerivationGraph.base_facts` is
+      the explicit grounding anchor, empty-body `Derivation`s model axiomatic rules; the
+      integer support-count itself is deferred to the G3.2 incremental impl.)*
 - [ ] **Acyclic regions:** Counting over `DERIVED_FROM` (cheap, correct here);
       retraction via `WITH RECURSIVE` closure; a conclusion survives if support remains.
+      *(G3.2 — open. G3.1's recompute already gives **correct** acyclic retraction
+      (rebuild-without-fact → recompute); this item is the **incremental** Counting +
+      `WITH RECURSIVE` mechanism over the persisted graph, validated against recompute.)*
 - [ ] **Cyclic regions (nontrivial `DERIVED_FROM` SCCs):** detect SCCs and route them to
       a cycle-safe algorithm — **DRed (over-delete reachable, then re-derive only what
       re-grounds in base facts)** — or hand foundedness to **clingo** (ASP unfounded-set
-      elimination). Plain Counting is **not** correct here.
-- [ ] **Correctness tests (must-pass, deterministic):** an *ungrounded* derivation cycle
+      elimination). Plain Counting is **not** correct here. *(G3.3 — open. G3.1's
+      recompute is already **correct** on cyclic membership (a monotone least fixpoint
+      never reaches an unfounded cycle); this item is the SCC detection + **incremental**
+      DRed/clingo path that the cycle-safety requirement applies to.)*
+- [x] **Correctness tests (must-pass, deterministic):** an *ungrounded* derivation cycle
       retracts fully when its external base support is removed; a *grounded* mutual-
-      support pair (also reaching base) is correctly kept.
-- [ ] Exactness check: deletion of one of several supports does **not** drop a node.
+      support pair (also reaching base) is correctly kept. *(G3.1 —
+      `tests/unit/test_truth_maintenance.py`: `test_ungrounded_cycle_is_unsupported`,
+      `test_cycle_retracts_fully_when_external_base_support_removed`,
+      `test_grounded_cycle_is_kept`.)*
+- [x] Exactness check: deletion of one of several supports does **not** drop a node.
+      *(G3.1 — `test_retracting_one_of_several_supports_keeps_conclusion`.)*
 - [ ] (Scale path noted, not built: Differential Dataflow / DBSP fed by Postgres CDC —
       recursive retraction correct by construction.)
 
@@ -43,7 +66,8 @@ off-the-shelf system packages this — it is the substance of the project.
 ## Two-layer integration
 
 - [ ] Clean interface: Layer A decides membership → Layer B scores it. Two annotations,
-      never merged (§12).
+      never merged (§12). *(Layer A side in place — G3.1 defines the `SupportOracle`
+      contract returning the certified well-founded set; Layer B is the open consumer.)*
 - [ ] Confirm idempotent confidence is *not* subtracted; retraction lives only in the
       group/count layer.
 - [ ] **Aggregate evidence over `SAME_AS` components (§5.2):** support counts and
