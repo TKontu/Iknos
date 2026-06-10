@@ -29,9 +29,11 @@ it a strict no-op until enabled.
 version-aware — keyed on `(span_id, content_hash)` over the full extractor pipeline, so a changed
 model/prompt/regime/verifier re-extracts (or fails loud) instead of serving a stale extraction.
 
-Remaining (next): **G1.6** quarantine *enforcement* (the `provisional` flag is now set per
-node; gating it at edge-creation is Phase-2-gated), **G1.0** parse front-end (MinerU), then
-G1.7b (cross-doc reuse)/G1.8/G1.10–G1.12.
+**G1.0/G1.0b** parse front-end shipped: the contract, null parser, `Span.layout` wiring, and
+the **MinerU HTTP client** + bytes-in entry point are in; only standing up the live MinerU
+service + table/figure interpretation (Phase 2) remain. Remaining (next): **G1.6** quarantine
+*enforcement* (the `provisional` flag is now set per node; gating it at edge-creation is
+Phase-2-gated), then G1.7b (cross-doc reuse)/G1.8/G1.10–G1.12.
 
 ## Current implementation (baseline)
 
@@ -62,25 +64,36 @@ layer on top** and **reverses one non-goal** (multi-sample — see G1.3).
 
 ## Gaps to close
 
-### G1.0 — Document parse front-end (Stage 0, §1) *(new in revised plan; precedes G1.9)* — 🟡 contract slice shipped
+### G1.0 — Document parse front-end (Stage 0, §1) *(new in revised plan; precedes G1.9)* — 🟡 contract + MinerU client shipped (G1.0/G1.0b)
 The revised §1 adds a **Stage 0** that the original Phase 1 lacked: real case
 documents are PDFs/scans (multi-column, tables, figures, OCR-only), not clean text.
 This is the new pipeline entry point and gates ingest of any real document.
 
-**Shipped (first slice):** the parse **contract** + the identity **null parser** +
+**Shipped (G1.0 contract slice):** the parse **contract** + the identity **null parser** +
 the wiring that threads parser output onto `Span.layout` through G1.9's
 `persist_spans(layouts=...)` seam, plus a `parse` provenance Action and parse-identity
-folded into the segmentation hash. Plain-text ingest is now a first-class Stage-0 mode
-(layout `None`), unchanged in behaviour. **Open:** the real MinerU HTTP service, and
-table/figure interpretation.
+folded into the segmentation hash. Plain-text ingest is a first-class Stage-0 mode
+(layout `None`), unchanged in behaviour.
+**Shipped (G1.0b MinerU client):** `core/mineru.py::MinerUParser` — an httpx `Parser` over
+our **own versioned text+offsets wire schema** (a service-side adapter maps MinerU → it, so
+the AGPL coupling stays on the service edge), validated in two fail-loud gates (pydantic
+envelope + `ParseResult.from_offsets`, which slices element text from the blob and rejects
+out-of-range / overlapping / out-of-order offsets and dropped text); retries transport/5xx
+only; `parser_version` comes from the service so an upgrade auto-invalidates the parse hash.
+Plus the bytes-in `ingest.ingest_document_bytes` entry point (parse hash keyed on the bytes
+digest), `make_parser` factory, `NullParser.parse`, and `PARSER_TIMEOUT_S`.
+**Open:** standing up the actual MinerU **service** (ops/AGPL-side adapter that emits the
+wire schema) and table/figure interpretation (Phase 2).
 
 - [x] **Parser behind a fixed contract** (swappable like the LLM): `core/parse.py`
       (`ParseElement`/`ParseResult`/`Parser` protocol). Reading-order `text` and per-element
       char ranges are *derived* (offset drift impossible); `{page, bbox}` geometry carried
-      per element. *(Contract shipped; default **MinerU** impl below still open.)*
-- [ ] **MinerU as a separate hosted service (CLI/HTTP), never vendored** — it is
-      AGPL-3.0; the copyleft must stop at the service edge. *(Config seam in place:
-      `config.parser_base_url` / `parser_kind`, empty ⇒ null parser. HTTP client = next slice.)*
+      per element. `ParseResult.from_offsets` (G1.0b) is the real-parser entry — slices
+      element text from the parser's blob at supplied offsets, validating the tiling.
+- [x] **MinerU as a separate hosted service (HTTP), never vendored** — it is
+      AGPL-3.0; the copyleft stops at the service edge. *(G1.0b: `MinerUParser` client +
+      versioned wire contract shipped behind `config.parser_base_url` / `parser_kind`, empty
+      ⇒ null parser. Remaining: stand up the service that speaks the wire schema.)*
 - [x] **`Span.layout {page, bbox}`** — `types/nodes.py::Span.layout` (G1.9) is now **fed**
       by `parse.layouts_for_spans` through `persist_spans(layouts=...)`. The persisted dict
       is versioned + **multi-region** (a span straddling a column/page break carries several
@@ -230,10 +243,11 @@ integration test hand-creates them).
 
 ## Sequencing
 
-0. **G1.0 parse front-end** is the new Stage 0. The `Span.layout` field-add lands
-   with it; its write path merges into G1.9 (seam already present). The MinerU
-   *service* integration can proceed in parallel (text ingest already works without
-   it). *(not started)*
+0. ~~**G1.0/G1.0b parse front-end**~~ — ✅ the new Stage 0: contract + null parser +
+   `Span.layout` write path (G1.0), then the **MinerU HTTP client** + `from_offsets`
+   validated slicer + bytes-in `ingest_document_bytes` (G1.0b). Standing up the live
+   MinerU *service* (it speaks our wire schema) + table/figure interpretation (Phase 2)
+   are the only remainders.
 1. ~~**G1.9 span persistence**~~ — ✅ #18.
 2. ~~**G1.1 epistemic fields** + **G1.2 routing** (#20) + **G1.4 verify** +
    **G1.5 faithfulness** (#21) + **G1.3 multi-sample** (#23)~~ — ✅ the §3.1
@@ -241,7 +255,7 @@ integration test hand-creates them).
 3. ~~**G1.7 content-addressed cache** (core)~~ — ✅ #25: version-aware per-span
    idempotency (`core/cache.py`, migration `0006`). Cross-doc reuse is G1.7b.
 4. **G1.6 quarantine enforcement** — stakes gating (G1.6 flag is set per node;
-   edge-time enforcement gated on Phase 2) + **G1.0 parse front-end**. ← **next**
+   edge-time enforcement gated on Phase 2). ← **next**
 5. **G1.7b cross-doc reuse** + **G1.8 reference amortization** — remaining cost work.
 6. **G1.10 multi-level/summaries**, **G1.11 box**, **G1.12 multi-span** —
    incremental, some gated on Phase 2.

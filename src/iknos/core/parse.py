@@ -34,6 +34,7 @@ Two structural decisions guard against silent corruption later:
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
@@ -107,11 +108,48 @@ class ParseElement:
         # A region is all-or-nothing: a bbox without a page (or vice versa) is unrenderable.
         if (self.page is None) != (self.bbox is None):
             raise ValueError("ParseElement page and bbox must be set together")
+        # A bbox is meaningless without the frame it lives in: a re-rasterized page can only
+        # be hit if we know the coordinate origin, the page extent, and the unit. That frame
+        # is *not recoverable* once the parse is discarded, so it is mandatory the moment a
+        # bbox exists — refuse a half-specified region rather than persist an unrenderable one
+        # (the silent-corruption class G1.0 exists to prevent).
+        if self.bbox is not None and (
+            self.origin is None or self.page_size is None or self.unit is None
+        ):
+            raise ValueError(
+                "ParseElement with a bbox must also set origin, page_size and unit "
+                "(a bbox is unrenderable without its coordinate frame, which is not "
+                "recoverable later)"
+            )
 
     @property
     def has_region(self) -> bool:
         """True iff this element carries page geometry (→ contributes a layout region)."""
         return self.page is not None and self.bbox is not None
+
+
+@dataclass(frozen=True)
+class OffsetSpec:
+    """A parser-supplied element described by a char range into the parser's text + geometry.
+
+    The text+offsets shape a *real* parser emits: one reading-order text blob plus, per
+    element, the ``[start, end)`` slice of that blob it occupies and the page region it came
+    from — **not** a standalone text string (that would be a second, drift-prone source for
+    the same characters). :meth:`ParseResult.from_offsets` slices the element text out of the
+    blob at these offsets, so the element text and the offsets cannot disagree by construction.
+    Geometry mirrors :class:`ParseElement` and is validated identically (all-or-nothing region,
+    bbox implies its full coordinate frame).
+    """
+
+    kind: ParseKind
+    start: int
+    end: int
+    page: int | None = None
+    bbox: tuple[float, float, float, float] | None = None
+    origin: str | None = None
+    page_size: tuple[float, float] | None = None
+    unit: str | None = None
+    source_quality: SourceQuality | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +195,81 @@ class ParseResult:
             for e in self.elements
         )
 
+    @classmethod
+    def from_offsets(
+        cls,
+        text: str,
+        specs: Sequence[OffsetSpec],
+        *,
+        parser_name: str,
+        parser_version: str,
+        parse_schema_version: int = PARSE_SCHEMA_VERSION,
+    ) -> "ParseResult":
+        """Build a result from a parser's reading-order text blob + per-element offsets.
+
+        This is the entry point for a *real* parser (MinerU/Docling/Marker): it hands back
+        one text blob plus, per element, the slice of that blob the element occupies and the
+        page region it came from. We **slice** each element's text out of ``text`` at its
+        offsets — never trust a separately-supplied element string — so element text and
+        offsets are one source by construction, and the returned result behaves exactly like
+        any other (``.text`` is the element-join, ``char_ranges()`` are re-derived).
+
+        Validation is **fail-loud at the trust boundary** (a parser is external/untrusted):
+
+        - each ``[start, end)`` lies within ``text`` with ``start < end`` (no empty element);
+        - specs are in reading order and **non-overlapping** (``start >= previous end``);
+        - every inter-element gap (and any head/tail remainder) is **whitespace-only** — a gap
+          holding real characters means the parser left text unassigned to any element, which
+          would silently vanish from the reading-order text and from every span's provenance;
+        - geometry completeness is enforced by :class:`ParseElement` (a bbox implies its frame).
+
+        Raises :class:`ValueError` on any violation; the caller (the HTTP client) surfaces it
+        as a hard parse failure rather than persisting a subtly-wrong parse.
+        """
+        elements: list[ParseElement] = []
+        cursor = 0
+        for i, spec in enumerate(specs):
+            if not 0 <= spec.start < spec.end <= len(text):
+                raise ValueError(
+                    f"OffsetSpec[{i}] range ({spec.start}, {spec.end}) is out of bounds or "
+                    f"empty for text of length {len(text)}"
+                )
+            if spec.start < cursor:
+                raise ValueError(
+                    f"OffsetSpec[{i}] starts at {spec.start} before the previous element ended "
+                    f"at {cursor} — specs must be in reading order and non-overlapping"
+                )
+            if text[cursor : spec.start].strip():
+                raise ValueError(
+                    f"non-whitespace text between OffsetSpec[{i - 1}] and OffsetSpec[{i}] "
+                    "would be dropped from the reading-order text — the parser left it "
+                    "unassigned to any element"
+                )
+            elements.append(
+                ParseElement(
+                    kind=spec.kind,
+                    text=text[spec.start : spec.end],
+                    page=spec.page,
+                    bbox=spec.bbox,
+                    origin=spec.origin,
+                    page_size=spec.page_size,
+                    unit=spec.unit,
+                    source_quality=spec.source_quality,
+                )
+            )
+            cursor = spec.end
+        if text[cursor:].strip():
+            raise ValueError(
+                "non-whitespace text after the last element would be dropped from the "
+                "reading-order text — the parser left a trailing remainder unassigned"
+            )
+        return cls(
+            elements=tuple(elements),
+            parser_name=parser_name,
+            parser_version=parser_version,
+            parse_schema_version=parse_schema_version,
+        )
+
 
 class Parser(Protocol):
     """The swappable parse contract (cf. ``core/llm.py::LLMClient``).
@@ -180,6 +293,17 @@ class NullParser:
 
     parser_name: str = field(default=_NULL_PARSER_NAME)
     parser_version: str = field(default=_NULL_PARSER_VERSION)
+
+    async def parse(self, document_bytes: bytes, *, media_type: str) -> ParseResult:
+        """Satisfy the :class:`Parser` protocol: decode UTF-8 bytes and wrap as text.
+
+        Lets the bytes-in ingest path degrade to the identity parser when no parse service is
+        configured (``parser_base_url`` empty) — plain-text files still ingest. ``media_type``
+        is accepted for protocol parity but not consulted: the null parser only does text, so
+        non-text bytes raise :class:`UnicodeDecodeError` (fail loud) rather than producing
+        mojibake. The decode is strict for exactly that reason.
+        """
+        return self.parse_text(document_bytes.decode("utf-8"))
 
     def parse_text(self, text: str) -> ParseResult:
         """Wrap raw text as a single text-only element (or zero elements if empty)."""

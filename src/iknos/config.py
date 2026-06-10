@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     # first-class supported mode, not degradation. The real HTTP client is a later slice.
     parser_base_url: str = Field("", alias="PARSER_BASE_URL")
     parser_kind: str = Field("null", alias="PARSER_KIND")
+    # Wall-clock budget for one parse request (seconds). Generous by default: a real parser
+    # OCRs scanned pages, which is minutes for a large document — a short timeout would turn a
+    # slow-but-healthy service into spurious ingest failures. Retries (transport/5xx only) sit
+    # *inside* this budget per attempt in the MinerU client.
+    parser_timeout_s: float = Field(300.0, alias="PARSER_TIMEOUT_S")
 
 
 settings = Settings()

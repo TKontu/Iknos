@@ -21,9 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from iknos.core.ingest import (
     DocumentResegmentationError,
     ingest_document,
+    ingest_document_bytes,
     persist_spans,
     span_content_hash,
 )
+from iknos.core.parse import NullParser, OffsetSpec, ParseKind, ParseResult, SourceQuality
 from iknos.db.age import bootstrap_session, execute_cypher
 from iknos.db.spans import resolve_span_text
 
@@ -184,3 +186,124 @@ async def test_parse_hash_participates_in_resegmentation_guard(session: AsyncSes
             model=_MODEL,
         )
     await session.rollback()
+
+
+class _StubLocatedParser:
+    """A real-parser stand-in: returns two located elements via ``from_offsets`` (no MinerU
+    service needed to prove the bytes path threads real ``{page, bbox}`` geometry through)."""
+
+    async def parse(self, document_bytes: bytes, *, media_type: str) -> ParseResult:
+        blob = "Region one block.\n\nRegion two block."  # ranges: [0,17) gap [17,19) [19,36)
+        specs = [
+            OffsetSpec(
+                kind=ParseKind.PARAGRAPH,
+                start=0,
+                end=17,
+                page=1,
+                bbox=(10, 20, 100, 40),
+                origin="top-left",
+                page_size=(612.0, 792.0),
+                unit="pt",
+                source_quality=SourceQuality.DIGITAL,
+            ),
+            OffsetSpec(
+                kind=ParseKind.PARAGRAPH,
+                start=19,
+                end=36,
+                page=2,
+                bbox=(10, 60, 100, 80),
+                origin="top-left",
+                page_size=(612.0, 792.0),
+                unit="pt",
+                source_quality=SourceQuality.OCR,
+            ),
+        ]
+        return ParseResult.from_offsets(blob, specs, parser_name="mineru", parser_version="2.1.0")
+
+
+async def test_ingest_document_bytes_persists_real_layout(session: AsyncSession) -> None:
+    """The bytes-in path: a located parser → spans carry real multi-page layout regions."""
+    await bootstrap_session(session)
+    doc_id = uuid.uuid4()
+    blob = "Region one block.\n\nRegion two block."
+    char_spans = [(0, 17), (19, 36)]  # one per located element
+
+    result = await ingest_document_bytes(
+        session,
+        doc_id,
+        b"%PDF-1.7 fake bytes",
+        _mock_substrate([_VEC, _VEC]),
+        _mock_segmenter(char_spans),
+        media_type="application/pdf",
+        parser=_StubLocatedParser(),
+    )
+    await session.commit()
+
+    assert len(result.spans) == 2
+    # raw_text is *derived* from the parse result (== the reading-order blob), so span text
+    # resolves against it exactly.
+    for s in result.spans:
+        assert await resolve_span_text(session, doc_id, s.start, s.end) == blob[s.start : s.end]
+
+    # Each span carries the right region: page + geometry + source quality.
+    layout0 = result.spans[0].layout
+    layout1 = result.spans[1].layout
+    assert layout0 is not None and layout1 is not None
+    assert layout0["parser"] == "mineru"
+    assert layout0["regions"][0]["page"] == 1
+    assert layout0["regions"][0]["source_quality"] == "digital"
+    assert layout1["regions"][0]["page"] == 2
+    assert layout1["regions"][0]["source_quality"] == "ocr"
+    assert layout1["regions"][0]["unit"] == "pt"
+
+    # The layout round-trips through the AGE graph (stored as a JSON property).
+    rows = await execute_cypher(
+        session,
+        f"MATCH (s:Span {{id: '{result.spans[0].id}'}}) RETURN s.layout",
+        returns="layout agtype",
+    )
+    assert rows[0][0] is not None
+
+    # The parse Action records the *real* parser identity + media type (not text/plain).
+    parse_row = await session.execute(
+        text(
+            "SELECT inputs->>'parser_name', inputs->>'parser_version', inputs->>'media_type' "
+            "FROM actions WHERE actor='parser' AND inputs->>'document_id'=:d"
+        ),
+        {"d": str(doc_id)},
+    )
+    parser_name, parser_version, media_type = parse_row.one()
+    assert (parser_name, parser_version, media_type) == ("mineru", "2.1.0", "application/pdf")
+
+
+async def test_ingest_document_bytes_null_parser_degrades_to_no_layout(
+    session: AsyncSession,
+) -> None:
+    """No service configured → the injected NullParser handles bytes: text ingests, no layout."""
+    await bootstrap_session(session)
+    doc_id = uuid.uuid4()
+    raw = "Plain claim one. Plain claim two."
+    char_spans = [(0, 16), (16, len(raw))]
+
+    result = await ingest_document_bytes(
+        session,
+        doc_id,
+        raw.encode("utf-8"),
+        _mock_substrate([_VEC, _VEC]),
+        _mock_segmenter(char_spans),
+        media_type="text/plain",
+        parser=NullParser(),
+    )
+    await session.commit()
+
+    assert len(result.spans) == 2
+    assert all(s.layout is None for s in result.spans)
+    assert await _action_count(session, "parser", doc_id) == 1
+    parse_row = await session.execute(
+        text(
+            "SELECT inputs->>'parser_name' FROM actions "
+            "WHERE actor='parser' AND inputs->>'document_id'=:d"
+        ),
+        {"d": str(doc_id)},
+    )
+    assert parse_row.scalar_one() == "null"

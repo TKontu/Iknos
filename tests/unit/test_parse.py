@@ -15,6 +15,7 @@ import pytest
 from iknos.core.parse import (
     LAYOUT_SCHEMA_VERSION,
     NullParser,
+    OffsetSpec,
     ParseElement,
     ParseKind,
     ParseResult,
@@ -242,3 +243,139 @@ def test_source_quality_carried_into_region() -> None:
     [layout] = layouts_for_spans([(0, 13)], r)
     assert layout is not None
     assert layout["regions"][0]["source_quality"] == "ocr"
+
+
+# --- ParseElement geometry-frame invariant (G1.0b: a bbox needs its full frame) ---
+
+
+def test_bbox_requires_full_coordinate_frame() -> None:
+    # A bbox is unrenderable without origin/page_size/unit, and that frame is unrecoverable
+    # later — so a half-specified region is refused at construction, not persisted.
+    for missing in ("origin", "page_size", "unit"):
+        frame: dict[str, object] = {
+            "origin": "top-left",
+            "page_size": (612.0, 792.0),
+            "unit": "pt",
+        }
+        del frame[missing]
+        with pytest.raises(ValueError, match="coordinate frame"):
+            ParseElement(kind=ParseKind.PARAGRAPH, text="x", page=1, bbox=(0, 0, 1, 1), **frame)  # type: ignore[arg-type]
+
+
+def test_full_frame_bbox_is_accepted() -> None:
+    el = _located("x", page=1, bbox=(0, 0, 1, 1))
+    assert el.has_region is True
+
+
+# --- NullParser as a Parser (bytes-in degradation path) ---
+
+
+@pytest.mark.asyncio
+async def test_null_parser_parse_bytes_decodes_utf8() -> None:
+    result = await NullParser().parse(b"Plain bytes in.", media_type="text/plain")
+    assert result.text == "Plain bytes in."
+    assert result.parser_name == "null"
+    assert result.elements[0].has_region is False
+
+
+@pytest.mark.asyncio
+async def test_null_parser_parse_rejects_non_utf8_loudly() -> None:
+    # Feeding real document bytes (a PDF) to the null parser must fail, not make mojibake.
+    with pytest.raises(UnicodeDecodeError):
+        await NullParser().parse(b"\xff\xfe\x00\x01PDF", media_type="application/pdf")
+
+
+# --- ParseResult.from_offsets: the real-parser entry point (slice + fail-loud tiling) ---
+
+
+def _spec(start: int, end: int, **kw: object) -> OffsetSpec:
+    return OffsetSpec(kind=ParseKind.PARAGRAPH, start=start, end=end, **kw)  # type: ignore[arg-type]
+
+
+def _from_offsets(text: str, specs: list[OffsetSpec]) -> ParseResult:
+    return ParseResult.from_offsets(text, specs, parser_name="mineru", parser_version="2.1.0")
+
+
+def test_from_offsets_slices_element_text_from_blob() -> None:
+    blob = "Heading here\n\nFirst paragraph body."
+    r = _from_offsets(blob, [_spec(0, 12), _spec(14, 35)])
+    # Element text is sliced from the blob — never a separately-supplied string.
+    assert [e.text for e in r.elements] == ["Heading here", "First paragraph body."]
+    # And the derived result behaves like any other: text[start:end] recovers each element.
+    for el, (s, e) in zip(r.elements, r.char_ranges(), strict=True):
+        assert r.text[s:e] == el.text
+
+
+def test_from_offsets_carries_geometry_into_elements() -> None:
+    blob = "Located block."
+    r = _from_offsets(
+        blob,
+        [
+            OffsetSpec(
+                kind=ParseKind.PARAGRAPH,
+                start=0,
+                end=14,
+                page=3,
+                bbox=(10, 20, 100, 40),
+                origin="top-left",
+                page_size=(612.0, 792.0),
+                unit="pt",
+                source_quality=SourceQuality.OCR,
+            )
+        ],
+    )
+    [layout] = layouts_for_spans([(0, 14)], r)
+    assert layout is not None
+    assert layout["regions"][0]["page"] == 3
+    assert layout["regions"][0]["source_quality"] == "ocr"
+
+
+def test_from_offsets_empty_specs_is_empty_result() -> None:
+    r = _from_offsets("", [])
+    assert r.text == "" and r.elements == ()
+
+
+def test_from_offsets_rejects_out_of_range() -> None:
+    with pytest.raises(ValueError, match="out of bounds"):
+        _from_offsets("short", [_spec(0, 99)])
+
+
+def test_from_offsets_rejects_empty_element() -> None:
+    with pytest.raises(ValueError, match="out of bounds or empty"):
+        _from_offsets("abc", [_spec(1, 1)])
+
+
+def test_from_offsets_rejects_overlap() -> None:
+    blob = "abcdefghij"
+    with pytest.raises(ValueError, match="reading order and non-overlapping"):
+        _from_offsets(blob, [_spec(0, 6), _spec(4, 10)])
+
+
+def test_from_offsets_rejects_out_of_order() -> None:
+    # Whitespace prefix so the first (positionally-later) element clears the dropped-text
+    # guard; the second element going backwards is what must trip the ordering check.
+    blob = "     Beta"
+    with pytest.raises(ValueError, match="reading order and non-overlapping"):
+        _from_offsets(blob, [_spec(5, 9), _spec(0, 4)])
+
+
+def test_from_offsets_rejects_dropped_text_in_gap() -> None:
+    # Real characters between two elements would silently vanish from reading order.
+    blob = "Alpha DROPPED Beta"
+    with pytest.raises(ValueError, match="dropped"):
+        _from_offsets(blob, [_spec(0, 5), _spec(14, 18)])
+
+
+def test_from_offsets_rejects_trailing_dropped_text() -> None:
+    blob = "Alpha trailing-junk"
+    with pytest.raises(ValueError, match="trailing remainder"):
+        _from_offsets(blob, [_spec(0, 5)])
+
+
+def test_from_offsets_allows_whitespace_gaps() -> None:
+    # Whitespace between/around elements is fine (it carries no claim) and is normalized away
+    # by the element-join in the derived text.
+    blob = "  Alpha   Beta  "
+    r = _from_offsets(blob, [_spec(2, 7), _spec(10, 14)])
+    assert [e.text for e in r.elements] == ["Alpha", "Beta"]
+    assert r.text == "Alpha\n\nBeta"
