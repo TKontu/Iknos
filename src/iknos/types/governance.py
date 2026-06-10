@@ -96,3 +96,18 @@ class SourceInterest(BaseModel):
 
     role: str | None = None
     stake: frozenset[str] = frozenset()
+
+    def flatten(self) -> dict[str, Any]:
+        """Canonical flat graph properties for ``cypher_map`` (queryable in Cypher).
+
+        Returns ``interest_role`` (str | None) and ``interest_stake`` (sorted list),
+        mirroring :meth:`Sensitivity.flatten` — flat, named properties rather than a
+        nested ``model_dump`` blob, so the conditional-credibility track (§9.1) can
+        read a stable contract. A caller that holds ``None`` (interest unknown) must
+        omit these keys entirely; emitting them implies a *known* (possibly empty)
+        stake — the ``None`` vs ``SourceInterest()`` distinction this class preserves.
+        """
+        return {
+            "interest_role": self.role,
+            "interest_stake": sorted(self.stake),
+        }
