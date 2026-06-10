@@ -42,6 +42,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.core.embeddings import EmbeddingSubstrate
+from iknos.core.parse import NullParser, layouts_for_spans, parse_content_hash
 from iknos.core.segmentation import SegmentationBackbone
 from iknos.db.orm import DocumentEmbedding
 from iknos.provenance.action_log import record_action
@@ -52,11 +53,19 @@ logger = logging.getLogger(__name__)
 
 # Bump to deliberately invalidate prior segmentations (forces the resegmentation
 # guard to treat old spans as stale). Part of the content hash, never the span id.
-SEGMENT_SCHEMA_VERSION = 1
+# v2 (G1.0): the content hash now folds in the parse front-end's content hash, so a
+# re-parse with a different parser (even one yielding identical reading-order text but
+# different layout) correctly invalidates downstream spans instead of silently serving
+# stale layouts.
+SEGMENT_SCHEMA_VERSION = 2
 
 # Action actor for segmentation runs — the idempotency/guard discriminator, exactly
 # as the propositionizer uses actor='propositionizer'.
 _ACTOR = "segmenter"
+
+# Action actor for the Stage 0 parse front-end (§1, G1.0) — gives "parse once" (§6.1)
+# its enforcement point and a future content-addressed parse cache its key.
+_PARSE_ACTOR = "parser"
 
 # Sentence-ending punctuation followed by whitespace/end, OR a trailing fragment.
 _SENTENCE_RE = re.compile(r"[^.!?\n]+(?:[.!?]+(?=\s|$)|$)")
@@ -113,19 +122,32 @@ def span_id_for(document_id: uuid.UUID, start: int, end: int, level: int) -> uui
     return uuid.uuid5(document_id, f"{start}:{end}:{level}")
 
 
-def span_content_hash(raw_text: str, *, segmenter_params: dict[str, Any], model: str) -> str:
+def span_content_hash(
+    raw_text: str,
+    *,
+    segmenter_params: dict[str, Any],
+    model: str,
+    parse_content_hash: str | None = None,
+) -> str:
     """SHA-256 over the segmentation **inputs** — the immutability discriminator.
 
-    Inputs only (raw text + params + model + schema version), never the *derived*
-    char-spans or embeddings: torch/CUDA float drift in pooling must not spuriously
-    trip the resegmentation guard (cf. ``DomainPack.content_hash`` hashes the
-    declaration, not the computed closure).
+    Inputs only (raw text + params + model + schema version + the upstream parse hash),
+    never the *derived* char-spans or embeddings: torch/CUDA float drift in pooling must
+    not spuriously trip the resegmentation guard (cf. ``DomainPack.content_hash`` hashes
+    the declaration, not the computed closure).
+
+    ``parse_content_hash`` (G1.0) folds the Stage 0 parse identity into the segmentation
+    identity: two parsers yielding *identical* reading-order text but different layout
+    must still re-segment (else the stale layouts are served silently). ``None`` is the
+    legacy/no-parse value for direct ``persist_spans`` callers; ``ingest_document``
+    always threads the real (null-parser) hash.
     """
     payload = {
         "raw_text": raw_text,
         "segmenter": segmenter_params,
         "model": model,
         "schema_version": SEGMENT_SCHEMA_VERSION,
+        "parse_content_hash": parse_content_hash,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -146,6 +168,24 @@ async def _segmented_hash(session: AsyncSession, document_id: uuid.UUID) -> str 
         text(
             "SELECT inputs->>'content_hash' FROM actions "
             f"WHERE actor = '{_ACTOR}' AND inputs->>'document_id' = :did "
+            "ORDER BY timestamp DESC LIMIT 1"
+        ),
+        {"did": str(document_id)},
+    )
+    return row.scalar_one_or_none()
+
+
+async def _parsed_hash(session: AsyncSession, document_id: uuid.UUID) -> str | None:
+    """The ``content_hash`` of this document's most recent parse, or ``None``.
+
+    Action-table backed, mirroring :func:`_segmented_hash` — the single source of truth
+    for "has this document been parsed, and with what inputs". Used to keep the parse
+    Action idempotent (record only on a new/changed parse).
+    """
+    row = await session.execute(
+        text(
+            "SELECT inputs->>'content_hash' FROM actions "
+            f"WHERE actor = '{_PARSE_ACTOR}' AND inputs->>'document_id' = :did "
             "ORDER BY timestamp DESC LIMIT 1"
         ),
         {"did": str(document_id)},
@@ -291,10 +331,18 @@ async def ingest_document(
     """End-to-end ingest for one document: text → spans, in one transaction.
 
     Sequence (caller commits once on success): upsert ``document_content`` →
-    MERGE the ``:Document`` vertex → embed (the single torch forward pass) → split →
-    segment → pool each span → ``persist_spans``. ``document_content`` is written
+    MERGE the ``:Document`` vertex → **Stage 0 parse** (record the parse Action) →
+    embed (the single torch forward pass) → split → segment → pool each span →
+    derive per-span ``layout`` → ``persist_spans``. ``document_content`` is written
     **before** the dense rows because of the embedding → content FK; on a raised
-    resegmentation guard the caller's rollback reverts the text update too.
+    resegmentation guard the caller's rollback reverts the text update *and* the parse
+    Action too.
+
+    Stage 0 (G1.0) here is the **identity/null parser**: plain text in, no page geometry,
+    ``layout=None`` on every span — reproducing the pre-Stage-0 behaviour exactly while
+    establishing the seam. A real parser (MinerU behind ``config.parser_base_url``) and a
+    bytes-in entry point are later increments; ``raw_text`` and a real parser are never
+    both passed (two sources of truth for one string).
     """
     from iknos.db.age import cypher_map, execute_cypher
 
@@ -317,10 +365,41 @@ async def ingest_document(
         session, f"MERGE (d:Document {{id: '{document_id}'}}) SET d = {cypher_map(doc_props)}"
     )
 
+    # Stage 0 — parse front-end. The null parser is the identity transform, so
+    # ``parse_result.text == raw_text`` and char offsets / document_content are unchanged.
+    parse_result = NullParser().parse_text(raw_text)
+    parse_ch = parse_content_hash(
+        input_sha256=hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        media_type="text/plain",
+        parser_name=parse_result.parser_name,
+        parser_version=parse_result.parser_version,
+        parse_schema_version=parse_result.parse_schema_version,
+    )
+    # Record the parse Action only when new/changed (idempotent like the segment Action).
+    # On a *changed* parse the segmentation guard below raises and the caller's rollback
+    # reverts this write too, so a stale re-parse aborts atomically with no partial state.
+    if await _parsed_hash(session, document_id) != parse_ch:
+        await record_action(
+            session,
+            actor=_PARSE_ACTOR,
+            action_type="parse",
+            inputs={
+                "document_id": str(document_id),
+                "content_hash": parse_ch,
+                "parser_name": parse_result.parser_name,
+                "parser_version": parse_result.parser_version,
+                "media_type": "text/plain",
+                "schema_version": parse_result.parse_schema_version,
+            },
+            outputs={"elements": len(parse_result.elements)},
+            model=parse_result.parser_name,
+        )
+
     context = substrate.embed_document(raw_text)
     sentences = split_sentences(raw_text)
     char_spans = segmenter.segment_document(sentences, context)
     embeddings = [context.pool_span(start, end) for start, end in char_spans]
+    layouts = layouts_for_spans(char_spans, parse_result)
 
     segmenter_params = {
         "max_len": segmenter.max_len,
@@ -328,7 +407,10 @@ async def ingest_document(
         "density_weight": segmenter.density_weight,
     }
     content_hash = span_content_hash(
-        raw_text, segmenter_params=segmenter_params, model=substrate.model_name
+        raw_text,
+        segmenter_params=segmenter_params,
+        model=substrate.model_name,
+        parse_content_hash=parse_ch,
     )
 
     return await persist_spans(
@@ -339,4 +421,5 @@ async def ingest_document(
         content_hash=content_hash,
         segmenter_params=segmenter_params,
         model=substrate.model_name,
+        layouts=layouts,
     )

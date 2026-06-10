@@ -13,28 +13,36 @@ extract-then-verify + faithfulness (#21), multi-sample extraction (#23), and ver
 content-addressed extraction idempotency (G1.7 core, #25) are shipped.
 Plain-text ingest runs end-to-end (spans → propositions → indexes → faithfulness from
 consistency *and* verification), re-running unchanged content as a no-op and re-extracting a
-changed pipeline. Open: parse front-end (G1.0, MinerU), quarantine enforcement (G1.6),
+changed pipeline. The G1.0 parse front-end **contract slice** (swappable parser contract +
+identity null parser + `Span.layout` write path + parse provenance) is shipped; the real
+MinerU service is the next slice. Open: MinerU HTTP service (G1.0), quarantine enforcement (G1.6),
 multi-level/RAPTOR (G1.10), box scoping (G1.11), cross-document cache reuse (G1.7b). See
 `gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state below; not every box maps 1:1
 to a gap ID.)*
 
-## Document parsing — front-end (§1, Stage 0)
+## Document parsing — front-end (§1, Stage 0) — 🟡 contract slice shipped (G1.0)
 
-- [ ] **Parser behind a fixed contract** (swappable, like the LLM): input a PDF/scan/doc,
-      output reading-order text + structure + tables + located figures + formulas +
-      per-element `{page, bbox}`. Default impl: **MinerU**.
+- [x] **Parser behind a fixed contract** (swappable, like the LLM): `core/parse.py` —
+      `ParseElement`/`ParseResult`/`Parser` protocol, reading-order `text` + per-element
+      `{page, bbox}`, char ranges derived (no offset drift). *(Contract + identity null
+      parser shipped; **MinerU** impl below open.)*
 - [ ] **Invoke MinerU as a separate hosted service** (CLI/HTTP), **not vendored** — it is
-      AGPL-3.0; keep the copyleft at the service edge (§1, licensing track).
+      AGPL-3.0; keep the copyleft at the service edge (§1, licensing track). *(Config seam
+      `PARSER_BASE_URL`/`PARSER_KIND` in place, empty ⇒ null parser; HTTP client next slice.)*
 - [ ] **Tables → structured observations:** ingest table rows/cells as propositions with
       column semantics preserved (observation-class, §3.1); do not flatten to prose.
+      *(Phase 2; `ParseKind.TABLE` reserved.)*
 - [ ] **Figures located here, interpreted later:** store figure region + caption + bbox;
       a vision `extract` operator (Phase 2/§3) reads propositions off the figure, flagged
-      provisional.
-- [ ] **Carry `{page, bbox}` into `Span`** for visual provenance (claim → region on the
-      original page).
+      provisional. *(Phase 2; `ParseKind.FIGURE`/`CAPTION` reserved.)*
+- [x] **Carry `{page, bbox}` into `Span`** for visual provenance (claim → region on the
+      original page). *(`parse.layouts_for_spans` → `persist_spans(layouts=...)`; versioned
+      multi-region layout dict; parse identity folded into the segmentation hash so a
+      re-parse correctly invalidates downstream spans.)*
 - [ ] **Parse quality = faithfulness input:** mark scanned / handwritten / complex-table
       parses lower-faithfulness → provisional → triage; surface MinerU's span/layout
-      visualization for expert QA against the original.
+      visualization for expert QA against the original. *(`SourceQuality` carried now;
+      consumed in G1.5/G1.6.)*
 
 ## Embedding substrate (§1) — built (increment 1)
 
