@@ -20,10 +20,14 @@ proposition now carries `polarity/modality/attribution/scope/epistemic_class/rou
 and — when an independent verifier is configured — a derived `faithfulness ∈ [0,1]` and
 `provisional` flag, with the verify verdict recorded as its own auditable `Action`.
 
-Remaining (next): **G1.3** multi-sample (the agreement signal that combines into
-`faithfulness` via the seam `faithfulness_from_verdict()` left open), **G1.6** quarantine
-*enforcement* (the `provisional` flag is now set per node; gating it at edge-creation is
-Phase-2-gated), **G1.0** parse front-end (MinerU), then G1.7/G1.8/G1.10–G1.12.
+**G1.3** multi-sample extraction (#23) closed the consistency half: the extractor is sampled
+N times, equivalent extractions are clustered, and the cross-sample `agreement` folds into
+`faithfulness` multiplicatively (`combine_faithfulness`). Default `LLM_EXTRACT_SAMPLES=1` keeps
+it a strict no-op until enabled.
+
+Remaining (next): **G1.6** quarantine *enforcement* (the `provisional` flag is now set per
+node; gating it at edge-creation is Phase-2-gated), **G1.0** parse front-end (MinerU), then
+G1.7/G1.8/G1.10–G1.12.
 
 ## Current implementation (baseline)
 
@@ -104,13 +108,20 @@ structured, **non-flattened** epistemic fields:
       Phase 2, so emit the class and the routing decision now. *(`route_for()` +
       cached `Routing` property on each `Proposition`; consumed in Phase 2.)*
 
-### G1.3 — Multi-sample extraction *(reverses an old non-goal)*
+### G1.3 — Multi-sample extraction *(reverses an old non-goal)* — ✅ shipped (#23)
 The old `proposition_layer_plan.md` explicitly listed "no multi-sample/calibration
 for propositionization" as a non-goal. The revised plan reverses that.
 
-- [ ] Sample the propositionizer N times (reuse §8 calibration machinery): stable
-      extractions → high `faithfulness`; unstable → `provisional`/flagged. Feed
-      the agreement signal into `faithfulness` (G1.5).
+- [x] Sample the propositionizer N times: stable extractions → high `faithfulness`;
+      unstable → `provisional`/flagged. Feed the agreement signal into `faithfulness`.
+      *(`core/consistency.py` — deterministic greedy-vs-representative clustering, `agreement`
+      = distinct-sample fraction, medoid canonical. `epistemic.combine_faithfulness(verify,
+      agreement) = verify × agreement` realizes the seam — multiplicative, so a verified-but-
+      unstable proposition is quarantined. Per-sample fan-out under the same semaphore as the
+      verifier; `agreement` persists on the node and the extract `Action` audits `n_samples` +
+      per-prop agreement for Trial A5. Config `LLM_EXTRACT_SAMPLES` (default 1 = no-op) /
+      `PROP_AGREEMENT_THRESHOLD`. Degraded mode — verifier off, N>1 — persists `agreement` but
+      leaves `faithfulness`/`provisional` null. No migration — schemaless AGE props.)*
 
 ### G1.4 — `verify` step (entailment/NLI) (§3.1) — ✅ shipped (#21)
 - [x] Add a `verify` step: check the source span entails the proposition **with
@@ -129,7 +140,8 @@ for propositionization" as a non-goal. The revised plan reverses that.
       `strength` (§8). Persist on the node. *(`epistemic.faithfulness_from_verdict()`
       — derived from the verify verdict, never self-reported: per-entailment base ×
       multiplicative polarity/modality penalties; sets `provisional` via
-      `is_provisional()`. The G1.3 agreement signal combines in via a named seam.)*
+      `is_provisional()`. The G1.3 agreement signal now combines in via
+      `combine_faithfulness()` (#23).)*
 - [ ] Wire the faithfulness-gate **metric** (entailment, negation/modality
       preservation accuracy) for **Trial A5** (`todo_trials.md`). *(The decomposed
       verdicts are persisted in `actions.outputs` ready for the metric; computing the
@@ -196,9 +208,10 @@ integration test hand-creates them).
    it). *(not started)*
 1. ~~**G1.9 span persistence**~~ — ✅ #18.
 2. ~~**G1.1 epistemic fields** + **G1.2 routing** (#20) + **G1.4 verify** +
-   **G1.5 faithfulness** (#21)~~ — ✅ the §3.1 perception-hardening core.
-3. **G1.3 multi-sample** + **G1.6 quarantine enforcement** — calibration + stakes
-   gating (G1.6 flag is set; edge-time enforcement gated on Phase 2). ← **next**
+   **G1.5 faithfulness** (#21) + **G1.3 multi-sample** (#23)~~ — ✅ the §3.1
+   perception-hardening core (consistency *and* verification).
+3. **G1.6 quarantine enforcement** — stakes gating (G1.6 flag is set per node;
+   edge-time enforcement gated on Phase 2) + **G1.0 parse front-end**. ← **next**
 4. **G1.7 content-addressed cache** + **G1.8 reference amortization** — cost.
 5. **G1.10 multi-level/summaries**, **G1.11 box**, **G1.12 multi-span** —
    incremental, some gated on Phase 2.
