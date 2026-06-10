@@ -18,8 +18,8 @@ concurrently; each span's writes commit in their own short transaction.
 
 import asyncio
 import uuid
-from dataclasses import dataclass
-from enum import StrEnum
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.core.embeddings import EmbeddingSubstrate
 from iknos.core.llm import LLMClient
+from iknos.core.prompts import vocab
 from iknos.db.orm import PropositionEmbedding
 from iknos.provenance.action_log import record_action
 from iknos.types.epistemic import (
@@ -35,24 +36,21 @@ from iknos.types.epistemic import (
     Modality,
     Polarity,
     Routing,
+    faithfulness_from_verdict,
+    is_provisional,
     route_for,
 )
 from iknos.types.nodes import Span
 
+if TYPE_CHECKING:
+    # Imported under TYPE_CHECKING only: verify.py imports PropositionResult from here,
+    # so a runtime import would be circular. The Verifier is injected and _VerifyOut
+    # objects are only read (attribute access), so neither is needed at runtime.
+    from iknos.core.verify import Verifier, _VerifyOut
+
 # Note: iknos.db.age is imported lazily inside _persist so that importing this
 # module does not pull in the config singleton (DATABASE_URL) — unit tests of the
 # inference path stay DB-free.
-
-
-def _vocab(enum: type[StrEnum]) -> str:
-    """The legal value strings for an epistemic enum, for the prompt.
-
-    Generated from the enum (not hand-typed) so the prompt's vocabulary can never
-    drift from the guided-decode schema — a drift guided decoding would otherwise
-    hide (the model is constrained to the schema's enum, so a stale prompt just
-    biases classification silently).
-    """
-    return " / ".join(e.value for e in enum)
 
 
 SYSTEM_PROMPT = (
@@ -73,12 +71,12 @@ SYSTEM_PROMPT = (
     'denial as affirmative text + polarity=negated (e.g. "the bearing did not fail" '
     '-> text "The bearing failed.", polarity negated) — never double-negate the text.\n'
     "Per-proposition fields:\n"
-    f"- polarity ({_vocab(Polarity)}): whether the content is asserted or denied.\n"
-    f"- modality ({_vocab(Modality)}): the claim's certainty.\n"
-    f"- attribution ({_vocab(Attribution)}): asserted by the document itself, conveyed "
+    f"- polarity ({vocab(Polarity)}): whether the content is asserted or denied.\n"
+    f"- modality ({vocab(Modality)}): the claim's certainty.\n"
+    f"- attribution ({vocab(Attribution)}): asserted by the document itself, conveyed "
     "as reported speech, or a named source's claim.\n"
     "- scope: brief quantifier-scope notes, or empty string if none.\n"
-    f"- epistemic_class ({_vocab(EpistemicClass)}): an objective observation/measurement, "
+    f"- epistemic_class ({vocab(EpistemicClass)}): an objective observation/measurement, "
     "vs testimony of an event, vs a judgement/interpretation. Orthogonal to modality "
     "(a categorical claim can still be a judgement). Extract observations; classify a "
     "source's conclusions as judgement, do not assert them as fact.\n"
@@ -175,12 +173,16 @@ class Propositionizer:
         context_window: int = 8,
         concurrency: int = 8,
         sampling: dict[str, object] | None = None,
+        verifier: "Verifier | None" = None,
     ) -> None:
         self.llm = llm
         self.substrate = substrate
         self.context_window = context_window
         self.concurrency = concurrency
         self.sampling = sampling or {"temperature": 0.0}
+        # Optional independent verifier (G1.4). Absent → faithfulness/provisional stay null
+        # (the documented G1.1 state); production wires it from settings when configured.
+        self.verifier = verifier
 
     async def _infer_span(
         self, spans: list[Span], index: int, raw_text: str
@@ -216,6 +218,45 @@ class Propositionizer:
             for p, v in zip(props, vectors, strict=True)
         ]
 
+    async def _verify_all(
+        self,
+        sem: asyncio.Semaphore,
+        spans: list[Span],
+        raw_text: str,
+        inferred: list[tuple[int, list[PropositionResult]]],
+    ) -> list[tuple[int, list[PropositionResult], list["_VerifyOut"]]]:
+        """Verify each inferred proposition against its source span (G1.4) and attach the
+        derived faithfulness/provisional (G1.5).
+
+        A separate concurrent fan-out, run after extraction completes and bounded by the
+        *same* semaphore — each verify call acquires its own permit, so it never nests
+        inside an extract permit (which would serialize throughput). Returns the results
+        re-scored, paired with the raw verdicts for the verify Action.
+        """
+        verifier = self.verifier
+        assert verifier is not None  # only called when a verifier is configured
+
+        async def verify_one(
+            source: str, r: PropositionResult
+        ) -> tuple[PropositionResult, "_VerifyOut"]:
+            async with sem:
+                verdict = await verifier.verify_proposition(source, r)
+            faith = faithfulness_from_verdict(
+                verdict.entailment, verdict.polarity_preserved, verdict.modality_preserved
+            )
+            # PropositionResult is frozen — rebuild with the scored fields, never mutate.
+            scored = replace(r, faithfulness=faith, provisional=is_provisional(faith))
+            return scored, verdict
+
+        async def verify_group(
+            i: int, results: list[PropositionResult]
+        ) -> tuple[int, list[PropositionResult], list["_VerifyOut"]]:
+            source = span_text(raw_text, spans[i])
+            pairs = await asyncio.gather(*(verify_one(source, r) for r in results))
+            return i, [scored for scored, _ in pairs], [verdict for _, verdict in pairs]
+
+        return list(await asyncio.gather(*(verify_group(i, results) for i, results in inferred)))
+
     async def _already_done(self, session: AsyncSession, span_id: uuid.UUID) -> bool:
         """True if this span was already propositionized (Action-based, covers empty spans)."""
         row = await session.execute(
@@ -234,8 +275,14 @@ class Propositionizer:
         span_id: uuid.UUID,
         context_span_ids: list[str],
         results: list[PropositionResult],
+        verdicts: "list[_VerifyOut] | None" = None,
     ) -> uuid.UUID:
-        """Persist one span's propositions + edges + indexes + Action in a single transaction."""
+        """Persist one span's propositions + edges + indexes + Action in a single transaction.
+
+        When verify verdicts are supplied (G1.4), a second Action (actor ``verifier``) records
+        them in the *same* transaction — so a committed proposition's faithfulness always has
+        an auditable verdict behind it. Returns the extract Action id.
+        """
         from iknos.db.age import cypher_map, execute_cypher
 
         prop_ids: list[str] = []
@@ -292,6 +339,36 @@ class Propositionizer:
             model=self.llm.model,
             sampling=self.sampling,
         )
+
+        # The verify pass is a distinct judgement by a distinct model (§13) — record it as
+        # its own Action so faithfulness is auditable and the decomposed verdicts feed the
+        # faithfulness-gate metric (Trial A5) straight from actions.outputs. Skip when there
+        # are no propositions to verify (empty span).
+        if verdicts:
+            assert self.verifier is not None
+            await record_action(
+                session,
+                actor="verifier",
+                action_type="verify",
+                inputs={"target_span": str(span_id), "propositions": prop_ids},
+                outputs={
+                    "verdicts": [
+                        {
+                            "proposition": str(r.id),
+                            "entailment": v.entailment,
+                            "polarity_preserved": v.polarity_preserved,
+                            "modality_preserved": v.modality_preserved,
+                            "attribution_preserved": v.attribution_preserved,
+                            "faithfulness": r.faithfulness,
+                            "provisional": r.provisional,
+                        }
+                        for r, v in zip(results, verdicts, strict=True)
+                    ]
+                },
+                model=self.verifier.llm.model,
+                sampling=self.verifier.sampling,
+            )
+
         await session.commit()
         return action_id
 
@@ -315,12 +392,26 @@ class Propositionizer:
 
         inferred = await asyncio.gather(*(infer(i) for i in pending))
 
+        # Phase 2b: independent verification (G1.4) — another DB-free LLM call, so it runs
+        # in the concurrent phase under the same budget. Absent verifier → verdicts stay
+        # None and faithfulness/provisional remain null (the documented degraded mode).
+        verified: list[tuple[int, list[PropositionResult], list[_VerifyOut] | None]]
+        if self.verifier is None:
+            verified = [(i, results, None) for i, results in inferred]
+        else:
+            verified = [
+                (i, results, verdicts)
+                for i, results, verdicts in await self._verify_all(sem, spans, raw_text, inferred)
+            ]
+
         # Phase 3: serial persistence — one short transaction per span.
         action_ids: list[uuid.UUID] = []
-        for i, results in inferred:
+        for i, results, verdicts in verified:
             context_spans, _ = build_context(spans, i, raw_text, self.context_window)
             context_ids = [str(s.id) for s in context_spans]
             action_ids.append(
-                await self._persist(session, document_id, spans[i].id, context_ids, results)
+                await self._persist(
+                    session, document_id, spans[i].id, context_ids, results, verdicts
+                )
             )
         return action_ids

@@ -76,6 +76,21 @@ class EpistemicClass(StrEnum):
     JUDGEMENT = "judgement"
 
 
+class Entailment(StrEnum):
+    """The verifier's NLI verdict: does the source span entail the proposition? (§3.1, G1.4).
+
+    Judged against the span alone (the source of truth), not world knowledge — so it
+    catches both hallucinated content (``NEUTRAL`` — not in the source) and a claim the
+    source actively denies (``CONTRADICTED`` — the span says the opposite). Categorical,
+    never a number: faithfulness is *derived* from this verdict (:func:`faithfulness_from_verdict`),
+    never self-reported (§3.1: "confidence comes from consistency and verification").
+    """
+
+    ENTAILED = "entailed"
+    NEUTRAL = "neutral"
+    CONTRADICTED = "contradicted"
+
+
 class Routing(StrEnum):
     """How a proposition ingests into the graph (§3.1/§5, G1.2).
 
@@ -127,3 +142,48 @@ def is_provisional(
     if not 0.0 <= faithfulness <= 1.0:
         raise ValueError(f"faithfulness must be in [0, 1], got {faithfulness!r}")
     return faithfulness < threshold
+
+
+# Single source of truth for the verify-derived faithfulness score (§3.1, G1.4/G1.5).
+# Keyed on **every** Entailment member so adding one raises a KeyError (fail-loud on
+# vocabulary growth) rather than silently defaulting — cf. _ROUTING above. The base is
+# the *content-support* axis: CONTRADICTED is worst (the span asserts the opposite — an
+# actively-wrong atom), NEUTRAL is unsupported/hallucinated (below the provisional
+# threshold by design), ENTAILED earns full marks before operator penalties.
+_ENTAILMENT_BASE: dict[Entailment, float] = {
+    Entailment.CONTRADICTED: 0.0,
+    Entailment.NEUTRAL: 0.30,
+    Entailment.ENTAILED: 1.00,
+}
+
+# The *operator-preservation* axis: even an entailed proposition is corrupted if the
+# verifier finds an operator was dropped. Multiplicative penalties (not additive) so a
+# non-entailed verdict cannot be rescued by preserved operators. A dropped negation
+# inverts the truth value (a sign flip — severe); a flattened hedge only over-states
+# certainty (moderate). Tuned against _FAITHFULNESS_PROVISIONAL_THRESHOLD so a dropped
+# negation falls below it (quarantined) while a flattened hedge stays above it.
+_POLARITY_DROP_FACTOR: float = 0.40
+_MODALITY_FLATTEN_FACTOR: float = 0.70
+
+
+def faithfulness_from_verdict(
+    entailment: Entailment, polarity_preserved: bool, modality_preserved: bool
+) -> float:
+    """Derive faithfulness ∈ [0, 1] from a verifier verdict (§3.1, G1.5).
+
+    Faithfulness is *derived from verification*, never self-reported (§3.1). A per-verdict
+    content-support base (:data:`_ENTAILMENT_BASE`) is scaled by independent multiplicative
+    penalties for dropped polarity / flattened modality — silent operator corruption that an
+    entailment check alone would miss. Multiplicative so a ``NEUTRAL``/``CONTRADICTED`` verdict
+    cannot be rescued by preserved operators.
+
+    **G1.3 seam:** this is the *verify component* of faithfulness. The deferred multi-sample
+    agreement signal (G1.3) will combine with this value (a future ``combine_faithfulness``),
+    so callers must treat this as one input, not the final word.
+    """
+    score = _ENTAILMENT_BASE[entailment]  # fail-loud on an unmapped verdict
+    if not polarity_preserved:
+        score *= _POLARITY_DROP_FACTOR
+    if not modality_preserved:
+        score *= _MODALITY_FLATTEN_FACTOR
+    return score
