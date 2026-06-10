@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -5,13 +6,16 @@ import pytest
 
 from iknos.core.proposition import (
     Propositionizer,
+    PropositionResult,
     _PropositionOut,
     build_context,
     build_messages,
     span_text,
 )
+from iknos.core.verify import _VerifyOut
 from iknos.types.epistemic import (
     Attribution,
+    Entailment,
     EpistemicClass,
     Modality,
     Polarity,
@@ -187,3 +191,101 @@ async def test_infer_span_populates_epistemic_fields_and_routing():
     assert observation.routing is Routing.FACT
     # faithfulness/provisional are not self-reported — null until G1.4/G1.5/G1.6.
     assert all(r.faithfulness is None and r.provisional is None for r in results)
+
+
+# --- extract-then-verify wiring (G1.4/G1.5) ---
+
+
+def _result(text: str, span_id: uuid.UUID, doc_id: uuid.UUID) -> PropositionResult:
+    return PropositionResult(
+        id=uuid.uuid4(),
+        text=text,
+        span_id=span_id,
+        document_id=doc_id,
+        embedding=[1.0, 0.0],
+        polarity=Polarity.ASSERTED,
+        modality=Modality.CATEGORICAL,
+        attribution=Attribution.DOCUMENT,
+        scope="",
+        epistemic_class=EpistemicClass.OBSERVATION,
+        routing=Routing.FACT,
+    )
+
+
+def _verdict(
+    entailment: Entailment = Entailment.ENTAILED,
+    *,
+    polarity_preserved: bool = True,
+    modality_preserved: bool = True,
+) -> _VerifyOut:
+    return _VerifyOut(
+        entailment=entailment,
+        polarity_preserved=polarity_preserved,
+        modality_preserved=modality_preserved,
+        attribution_preserved=True,
+    )
+
+
+def _propositionizer_with_verifier(verdict: _VerifyOut) -> Propositionizer:
+    p = _propositionizer(llm_return={"propositions": []}, embed_return=[])
+    verifier = MagicMock()
+    verifier.llm = MagicMock()
+    verifier.llm.model = "verifier-model"
+    verifier.verify_proposition = AsyncMock(return_value=verdict)
+    p.verifier = verifier
+    return p
+
+
+def test_verifier_defaults_to_none() -> None:
+    p = _propositionizer(llm_return={"propositions": []}, embed_return=[])
+    assert p.verifier is None
+
+
+@pytest.mark.asyncio
+async def test_verify_all_sets_faithfulness_and_provisional() -> None:
+    doc = uuid.uuid4()
+    raw = "The rolling surface shows particle indentations."
+    spans = [_span(doc, 0, len(raw))]
+    p = _propositionizer_with_verifier(_verdict())  # entailed + fully preserved
+    inferred = [(0, [_result("The surface shows indentations.", spans[0].id, doc)])]
+
+    verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, inferred)
+
+    (i, results, verdicts) = verified[0]
+    assert i == 0
+    assert results[0].faithfulness == pytest.approx(1.0)
+    assert results[0].provisional is False
+    assert verdicts[0].entailment is Entailment.ENTAILED
+    # The verifier was handed the source span's text, not the proposition text.
+    p.verifier.verify_proposition.assert_awaited_once()
+    assert p.verifier.verify_proposition.call_args.args[0] == raw
+
+
+@pytest.mark.asyncio
+async def test_verify_all_contradicted_marks_provisional() -> None:
+    doc = uuid.uuid4()
+    raw = "The bearing did not fail."
+    spans = [_span(doc, 0, len(raw))]
+    p = _propositionizer_with_verifier(_verdict(Entailment.CONTRADICTED, polarity_preserved=False))
+    inferred = [(0, [_result("The bearing failed.", spans[0].id, doc)])]
+
+    verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, inferred)
+
+    results = verified[0][1]
+    assert results[0].faithfulness == pytest.approx(0.0)
+    assert results[0].provisional is True
+
+
+@pytest.mark.asyncio
+async def test_verify_all_modality_flatten_stays_above_threshold() -> None:
+    doc = uuid.uuid4()
+    raw = "The bearing probably failed."
+    spans = [_span(doc, 0, len(raw))]
+    p = _propositionizer_with_verifier(_verdict(modality_preserved=False))
+    inferred = [(0, [_result("The bearing failed.", spans[0].id, doc)])]
+
+    verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, inferred)
+
+    results = verified[0][1]
+    assert results[0].faithfulness == pytest.approx(0.70)
+    assert results[0].provisional is False

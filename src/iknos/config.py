@@ -19,5 +19,16 @@ class Settings(BaseSettings):
     llm_base_url: str = Field("http://192.168.0.247:8000/v1", alias="LLM_BASE_URL")
     llm_model: str = Field("", alias="LLM_MODEL")
 
+    # Independent verifier endpoint for extract-then-verify (§3.1/§13, G1.4). A *different
+    # model family* from the extractor cuts correlated error; it may be served by the same
+    # vLLM on a different model id or by a separate server, so base_url and model are
+    # configured separately. An empty llm_verifier_model is the "verifier off" signal —
+    # the propositionizer then runs in degraded mode and faithfulness/provisional stay null
+    # (the documented G1.1 state), so importing the config singleton never requires it.
+    llm_verifier_base_url: str = Field(
+        "http://192.168.0.247:8000/v1", alias="LLM_VERIFIER_BASE_URL"
+    )
+    llm_verifier_model: str = Field("", alias="LLM_VERIFIER_MODEL")
+
 
 settings = Settings()
