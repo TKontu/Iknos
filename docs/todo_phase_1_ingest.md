@@ -8,12 +8,13 @@ indexes — knowledge *in*, with source references retained throughout.
 backbone), §3 (proposition layer), §4 (indexing), principles 1–3.
 
 **Status:** embedding substrate, segmentation (single-level), proposition layer +
-dense/sparse indexes, span persistence (#18), epistemic fields + routing (#20), and
-extract-then-verify + faithfulness (#21) are shipped. Plain-text ingest runs end-to-end
-(spans → propositions → indexes → verified faithfulness). Open: parse front-end (G1.0,
-MinerU), multi-sample (G1.3), quarantine enforcement (G1.6), multi-level/RAPTOR (G1.10),
-box scoping (G1.11), content-addressed cache (G1.7). See `gap_phase_1_ingest.md` for the
-gap-plan IDs. *(Granular state below; not every box maps 1:1 to a gap ID.)*
+dense/sparse indexes, span persistence (#18), epistemic fields + routing (#20),
+extract-then-verify + faithfulness (#21), and multi-sample extraction (#23) are shipped.
+Plain-text ingest runs end-to-end (spans → propositions → indexes → faithfulness from
+consistency *and* verification). Open: parse front-end (G1.0, MinerU), quarantine
+enforcement (G1.6), multi-level/RAPTOR (G1.10), box scoping (G1.11), content-addressed
+cache (G1.7). See `gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state below;
+not every box maps 1:1 to a gap ID.)*
 
 ## Document parsing — front-end (§1, Stage 0)
 
@@ -76,8 +77,10 @@ gap-plan IDs. *(Granular state below; not every box maps 1:1 to a gap ID.)*
       facts and its *conclusions* as defeasible, credibility-weighted judgement-claims —
       never as facts. The engine re-derives conclusions from the observations.
       *(G1.2 routing, #20; the consuming extraction is Phase 2.)*
-- [ ] **Multi-sample extraction** (reuse §8 calibration): stable extractions →
-      high-confidence; unstable → flag. *(G1.3 — next; agreement feeds `faithfulness`.)*
+- [x] **Multi-sample extraction:** sample the extractor N times, cluster equivalent
+      extractions, score each by cross-sample agreement. *(G1.3, #23; `core/consistency.py`
+      + `combine_faithfulness` — agreement folds into `faithfulness` multiplicatively.
+      Default `LLM_EXTRACT_SAMPLES=1` = no-op; per-model calibration is Trial A3.)*
 - [x] **`verify` step:** entailment/NLI check that the span supports the proposition
       *with its polarity and modality*; disagreement sets `provisional` (§3.1). Prefer an
       **independent verifier (different model family from the extractor)** to reduce
