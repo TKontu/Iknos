@@ -62,30 +62,40 @@ layer on top** and **reverses one non-goal** (multi-sample — see G1.3).
 
 ## Gaps to close
 
-### G1.0 — Document parse front-end (Stage 0, §1) *(new in revised plan; precedes G1.9)*
+### G1.0 — Document parse front-end (Stage 0, §1) *(new in revised plan; precedes G1.9)* — 🟡 contract slice shipped
 The revised §1 adds a **Stage 0** that the original Phase 1 lacked: real case
 documents are PDFs/scans (multi-column, tables, figures, OCR-only), not clean text.
-Nothing in the codebase parses documents today (no MinerU/parser/PDF/OCR path); the
-integration test feeds text directly. This is the new pipeline entry point and gates
-ingest of any real document.
+This is the new pipeline entry point and gates ingest of any real document.
 
-- [ ] **Parser behind a fixed contract** (swappable like the LLM): input PDF/scan/doc →
-      reading-order text + structure + tables + located figures + formulas +
-      per-element `{page, bbox}`. Default impl **MinerU**; Docling/Marker as alternates.
+**Shipped (first slice):** the parse **contract** + the identity **null parser** +
+the wiring that threads parser output onto `Span.layout` through G1.9's
+`persist_spans(layouts=...)` seam, plus a `parse` provenance Action and parse-identity
+folded into the segmentation hash. Plain-text ingest is now a first-class Stage-0 mode
+(layout `None`), unchanged in behaviour. **Open:** the real MinerU HTTP service, and
+table/figure interpretation.
+
+- [x] **Parser behind a fixed contract** (swappable like the LLM): `core/parse.py`
+      (`ParseElement`/`ParseResult`/`Parser` protocol). Reading-order `text` and per-element
+      char ranges are *derived* (offset drift impossible); `{page, bbox}` geometry carried
+      per element. *(Contract shipped; default **MinerU** impl below still open.)*
 - [ ] **MinerU as a separate hosted service (CLI/HTTP), never vendored** — it is
-      AGPL-3.0; the copyleft must stop at the service edge (`config.py` endpoint, like
-      the LLM/verifier). See the licensing note in `todo.md`.
-- [ ] **`Span.layout {page, bbox}`** — extend `types/nodes.py::Span` (optional `layout`)
-      and the span ORM/AGE persistence so a claim resolves to a *region on the page
-      image*, not just a character offset. Schema-contract field (§10); see
-      `todo_phase_0_foundations.md` Span note. **Wire the write path in G1.9.**
+      AGPL-3.0; the copyleft must stop at the service edge. *(Config seam in place:
+      `config.parser_base_url` / `parser_kind`, empty ⇒ null parser. HTTP client = next slice.)*
+- [x] **`Span.layout {page, bbox}`** — `types/nodes.py::Span.layout` (G1.9) is now **fed**
+      by `parse.layouts_for_spans` through `persist_spans(layouts=...)`. The persisted dict
+      is versioned + **multi-region** (a span straddling a column/page break carries several
+      regions), each region with `origin`/`page_size`/`unit` (a bbox is unrenderable without
+      them). Null parser ⇒ `None`.
 - [ ] **Tables → structured observations:** rows/cells → propositions with column
-      semantics preserved, observation-class (§3.1) — not flattened to prose.
+      semantics preserved, observation-class (§3.1) — not flattened to prose. *(Phase 2;
+      `ParseKind.TABLE` reserved.)*
 - [ ] **Figures located, interpreted later:** store figure region + caption + bbox; a
       Phase-2 vision `extract` operator reads propositions off the figure, provisional.
+      *(Phase 2; `ParseKind.FIGURE`/`CAPTION` reserved.)*
 - [ ] **Parse quality → faithfulness input:** scanned / handwritten / complex-table
       parses marked lower-faithfulness → provisional → triage (feeds G1.5/G1.6); surface
-      MinerU's layout visualization for expert QA against the original.
+      MinerU's layout visualization for expert QA against the original. *(`SourceQuality`
+      carried per element/region now; **consumed** in G1.5/G1.6.)*
 
 ### G1.1 — Structured epistemic fields on `Proposition` (§3.1) *(core)* — ✅ shipped (#20)
 Today `Proposition = {id, text}`. `architecture.md` §10 (lines ~771–775) requires

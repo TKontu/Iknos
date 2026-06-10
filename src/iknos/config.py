@@ -40,5 +40,13 @@ class Settings(BaseSettings):
     llm_extract_samples: int = Field(1, alias="LLM_EXTRACT_SAMPLES")
     prop_agreement_threshold: float = Field(0.86, alias="PROP_AGREEMENT_THRESHOLD")
 
+    # Stage 0 document parse front-end (§1, G1.0). MinerU (AGPL-3.0) runs as a separate
+    # hosted service behind this endpoint — the copyleft stops at the service edge, like
+    # the LLM/verifier. An empty parser_base_url is the "no service" signal: ingest falls
+    # back to the identity (null) parser — plain text in, no page geometry — which is a
+    # first-class supported mode, not degradation. The real HTTP client is a later slice.
+    parser_base_url: str = Field("", alias="PARSER_BASE_URL")
+    parser_kind: str = Field("null", alias="PARSER_KIND")
+
 
 settings = Settings()

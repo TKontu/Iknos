@@ -62,6 +62,18 @@ def test_content_hash_changes_on_model() -> None:
     assert a != b
 
 
+def test_content_hash_changes_on_parse_hash() -> None:
+    # G1.0 (D): the upstream parse identity folds into the segmentation identity, so a
+    # re-parse with a different parser (even on identical text) re-segments.
+    a = span_content_hash(
+        "hello world", segmenter_params=_PARAMS, model="BAAI/bge-m3", parse_content_hash="A"
+    )
+    b = span_content_hash(
+        "hello world", segmenter_params=_PARAMS, model="BAAI/bge-m3", parse_content_hash="B"
+    )
+    assert a != b
+
+
 # --- sentence splitter (offset-preserving) ---
 
 
