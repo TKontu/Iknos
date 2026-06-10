@@ -21,7 +21,17 @@ controlled ordering, never LLM-as-judge headline scores (§8, §13).
 Resolves the accuracy-bound open details. One corpus, four trials. This is the
 **Phase-4 validation gate**; passing it gates the hardening of Phases 3 and 4.
 
-### Trial A0 — Build the planted-corpus and evaluation harness *(shared prerequisite)*
+### Trial A0 — Build the planted-corpus and evaluation harness *(shared prerequisite — **start now**)*
+
+**Scheduling (2026-06 review, P1).** A0 is the critical-path asset: every gate
+(A1–A7, B2, E1) consumes it, and gold labelling with ≥2 annotators is **weeks of
+work, not days** — yet it depends on *nothing unbuilt* (it is documents + labels +
+scoring code). Run it as its own managed work item **in parallel with the Phase 1
+tail**, starting immediately; do not let it materialize lazily when Phase 4 needs
+it. Treat the sub-items below as the work breakdown; corpus authoring and labelling
+can proceed while harness code is written. The Phase 1 fixture corpus is the seed.
+Include at least one document longer than one embedding window and spans with
+hard negation/modality cases (regression anchors for G1.13/G1.14).
 
 - [ ] Assemble a small fixed corpus: sources with deliberately planted contradictions
       plus a later **overturning fact**.
@@ -206,18 +216,32 @@ interface; C2 is an explicit "revisit at scale," not MVP-blocking.
 - [ ] **Note:** revisit at scale — do not block the MVP on this.
 - **Gates:** the scale path for Phase 3 — Layer A placement.
 
-### Trial C3 — Storage-engine viability under schema density  ⚠ may force engine change
+### Trial C3 — Storage-engine viability under schema density  ⚠ may force engine change — **run before Phase 2**
 
+**Scheduling (2026-06 review, P2).** Originally parked with the scale trials —
+too late: Phases 2–5 (continuous entity resolution, recursive retraction,
+bitemporal supersession) build *directly* on AGE, so a failure discovered after
+them maximizes rework. The benchmark needs no production code: generate a
+**synthetic** graph at target density and measure. Days of work; de-risks the
+single biggest potential architecture swap. It is now a **Phase 2 entry
+criterion** (`todo_phase_2_graph_construction.md`), paired with the G0.R2
+property-index migration (`gap_phase_0_residual.md`).
+
+- [ ] **Prerequisite:** the G0.R2 AGE property-index migration is merged — benchmark
+      the indexed engine, and verify with `EXPLAIN` through the real `cypher()` call
+      path that the indexes are actually *used* (existence ≠ use).
 - [ ] Benchmark **Apache AGE** under the *real* schema density — every node/edge carrying
       provenance, two annotations, sensitivity, conditional credibility, bitemporal
       validity, overrides — at investigation scale (tens of docs) + a static reference
       base, on the actual query patterns (box-scoped retrieval, `WITH RECURSIVE` closure,
-      SCC detection, bitemporal as-of).
+      SCC detection, bitemporal as-of, **and MERGE-by-id at entity-resolution call
+      rates**).
 - [ ] **Scope bitemporality:** confirm it is applied where needed (boxes, overrides,
       packs) and not bloating every `SAME_AS` edge.
 - [ ] **Decision:** stay single-engine (Postgres + AGE) if it meets latency; the fallback
       is a separate graph store at the cost of single-engine simplicity (§6, §13).
-- **Gates:** Phase 0 — schema/engine commitment before building heavily on AGE.
+- **Gates:** Phase 2 entry (and the original Phase 0 engine commitment, retroactively
+  validated) — before building heavily on AGE.
 
 ---
 
@@ -251,6 +275,11 @@ A-series proves mechanisms, not efficacy; this instrument tests both efficacy an
 - [ ] Build a thin end-to-end slice (extract → link → adjudicate → answer) and the
       baseline ladder: plain RAG → agentic / multi-hop RAG → expert + good search, over
       the *same* corpus.
+- [ ] **Scope the baselines as real work (2026-06 review, P5):** the go/no-go is only
+      as valid as the strongest baseline — a weak RAG rig biases E1 toward the system.
+      Budget the baseline implementations explicitly (retrieval-tuned plain RAG;
+      multi-hop/agentic RAG with tool use; an expert+search protocol), start them
+      before Phase 4 completes, and reuse them as Phase 1's retrieval sanity check.
 - [ ] **Measure on the differentiator axes** (where RAG is weak — an easy factoid tie is
       fine): contradiction / refuter handling; correct **retraction** when an overturning
       fact is added; completeness/correctness of **traceability** to source; **calibration**
@@ -293,11 +322,13 @@ A-series proves mechanisms, not efficacy; this instrument tests both efficacy an
 ## Sequencing & gating summary
 
 ```
-A0 (build corpus + harness)
+A0 (build corpus + harness — START NOW, parallel with Phase 1 tail)
    ├─► A5 (extraction faithfulness) ┐
    ├─► A6 (entity resolution)       ├─ foundation gates ─► Phase 1/2; precede A1–A4
    └─► A1, A2, A3, A4   ── gate ──►  harden Phases 3 & 4   (assume faithful atoms + sound identity)
-E1 (beat cheap baseline) ══ GO/NO-GO ══►  before hardening & Phases 5–7 (E2 ablation guides descope)
+C3 (AGE density bench)   ── gate ──►  Phase 2 ENTRY (with G0.R2 indexes) — pulled forward
+E1 (beat cheap baseline) ══ GO/NO-GO ══►  before hardening & Phases 5–7 (E2 ablation guides descope;
+                                      baselines scoped as real work, started before Phase 4 ends)
 B1, B2 (on thin slice)   ── gate ──►  build Phase 6 frontier / Phase 7 controls
                                       (B2 also gates Phase 4 oscillation handling)
 C1                       ── gate ──►  Phase 5 triggers / Phase 3 Layer A↔B interface
@@ -305,6 +336,12 @@ C2                       ── defer ──►  scale path only (revisit, not M
 D1 (two domains)         ── gate ──►  claiming multi-domain; onboarding more domains
 E3 (retrospective real)  ── gate ──►  any efficacy claim (validity ladder)
 ```
+
+**Ordering deltas from the 2026-06 review:** A0 starts immediately (it gates
+everything and depends on nothing unbuilt); C3 moves from "scale trial" to Phase 2
+entry; G1.14 (polarity-aware clustering) lands **before** A5 fits
+`PROP_AGREEMENT_THRESHOLD`, or the calibration bakes the polarity-blind bug in;
+A5 additionally evaluates `min` vs `×` as the faithfulness combiner (§12 note).
 
 **Run earliest (can fail and force redesign/descope):** **E1 (beat the cheap baseline —
 the go/no-go on the whole approach)**, A5 (extraction faithfulness) and A6 (entity

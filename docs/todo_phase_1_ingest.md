@@ -20,8 +20,12 @@ HTTP client** (`MinerUParser` over our own versioned text+offsets wire schema +
 `make_parser` factory) are shipped. What remains for live MinerU is **standing up the hosted
 service** that emits the wire schema (ops/AGPL-side adapter) and **table/figure interpretation**
 (Phase 2). Open: MinerU service standup, quarantine enforcement (G1.6), multi-level/RAPTOR
-(G1.10), box scoping (G1.11), cross-document cache reuse (G1.7b). See `gap_phase_1_ingest.md`
-for the gap-plan IDs. *(Granular state below; not every box maps 1:1 to a gap ID.)*
+(G1.10), box scoping (G1.11), cross-document cache reuse (G1.7b). The **2026-06 review**
+(`review_2026-06_architecture_plan.md`) added **G1.13–G1.19** — two critical correctness
+fixes (long-document truncation G1.13, polarity-blind agreement G1.14) plus staleness,
+robustness, table-contract, and rank-fusion work; G1.13 slice 1 and G1.14 are the new
+front of the queue. See `gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state
+below; not every box maps 1:1 to a gap ID.)*
 
 ## Document parsing — front-end (§1, Stage 0) — 🟡 contract + MinerU client shipped (G1.0/G1.0b)
 
@@ -39,6 +43,12 @@ for the gap-plan IDs. *(Granular state below; not every box maps 1:1 to a gap ID
 - [ ] **Tables → structured observations:** ingest table rows/cells as propositions with
       column semantics preserved (observation-class, §3.1); do not flatten to prose.
       *(Phase 2; `ParseKind.TABLE` reserved.)*
+- [ ] **Table structure must survive Stage 0 (G1.18 — do now, while the wire schema is
+      on a branch):** add the optional structured `table` payload (cell grid with
+      per-cell `[start, end)` into the same reading-order blob + bbox) to
+      `ParseElement` and the MinerU wire schema. Without it a TABLE element is just a
+      char range — the 2-D structure is destroyed at the trust boundary and the Phase-2
+      consumer has nothing to read. *(Review A1.)*
 - [ ] **Figures located here, interpreted later:** store figure region + caption + bbox;
       a vision `extract` operator (Phase 2/§3) reads propositions off the figure, flagged
       provisional. *(Phase 2; `ParseKind.FIGURE`/`CAPTION` reserved.)*
@@ -51,12 +61,24 @@ for the gap-plan IDs. *(Granular state below; not every box maps 1:1 to a gap ID
       visualization for expert QA against the original. *(`SourceQuality` carried now;
       consumed in G1.5/G1.6.)*
 
-## Embedding substrate (§1) — built (increment 1)
+## Embedding substrate (§1) — built (increment 1); long-document coverage open (G1.13)
 
-- [x] Long-context embedding model run **once** per document; cache contextualized
-      token embeddings ("late chunking" — embed once, derive all granularities).
+- [x] Long-context embedding model run **once** per document; contextualized token
+      embeddings held for the run ("late chunking" — embed once, derive all
+      granularities). *(Scope honesty: the token-embedding cache is per ingest run,
+      in memory — not persisted. If G1.10 multi-level re-derivation needs it again,
+      persist keyed by `(document, model)` or budget the re-embed; §1.)*
 - [x] Confirm boundary detection, multi-level pooling, and search all read from the
       cached vectors (no per-level re-embedding).
+- [ ] **Truncation guard (G1.13 slice 1 — critical):** a document longer than the
+      model context (8192 tokens) must **fail loudly** (`DocumentTooLongError`),
+      never silently index a prefix. Today `embed_document` truncates silently and
+      spans past the cutoff get zero vectors → skipped dense rows → invisible to
+      retrieval. *(Review C1.)*
+- [ ] **Windowed embedding (G1.13 slice 2):** overlapping macro-windows over long
+      documents; each span pooled from the window where it sits furthest from a
+      window edge; window layout recorded in the segment Action and folded into
+      the span content hash. Needed before MinerU feeds real multi-page PDFs.
 
 ## Segmentation backbone (§2) — built (increment 2; single-level)
 
@@ -98,6 +120,13 @@ for the gap-plan IDs. *(Granular state below; not every box maps 1:1 to a gap ID
       extractions, score each by cross-sample agreement. *(G1.3, #23; `core/consistency.py`
       + `combine_faithfulness` — agreement folds into `faithfulness` multiplicatively.
       Default `LLM_EXTRACT_SAMPLES=1` = no-op; per-model calibration is Trial A3.)*
+- [ ] **Polarity-aware agreement (G1.14 — critical):** cluster only within identical
+      `(polarity, epistemic_class)` partitions — embedding cosine cannot distinguish
+      a claim from its negation, so the current cosine-only clustering reports
+      agreement 1.0 on a 3-assert/2-negate split and persists a coin-flip polarity.
+      Cross-polarity "twins" drive agreement *down* and set `provisional`. Plus a
+      config guard: `LLM_EXTRACT_SAMPLES > 1` requires temperature > 0. Must land
+      **before** Trial A5 fits the agreement threshold. *(Review C2/P4.)*
 - [x] **`verify` step:** entailment/NLI check that the span supports the proposition
       *with its polarity and modality*; disagreement sets `provisional` (§3.1). Prefer an
       **independent verifier (different model family from the extractor)** to reduce
@@ -118,10 +147,21 @@ for the gap-plan IDs. *(Granular state below; not every box maps 1:1 to a gap ID
 
 - [x] **Dense** index in pgvector over the chosen granularities. *(increment 3 —
       `proposition_embeddings`.)*
-- [x] **Sparse/lexical** index (TF-IDF/BM25) — catches names, codes, acronyms.
-      *(increment 3 — `proposition_lexical_index`, `simple` tsvector + GIN.)*
+- [x] **Sparse/lexical** index (exact-token) — catches names, codes, acronyms.
+      *(increment 3 — `proposition_lexical_index`, `simple` tsvector + GIN. Honesty
+      note: Postgres `ts_rank` is **not** TF-IDF/BM25 — recall is fine, ranking
+      semantics differ; §4 corrected. Review A3.)*
+- [ ] **Rank-based fusion (G1.19):** hybrid dense+sparse retrieval fuses by
+      Reciprocal Rank Fusion, never a weighted sum of cosine and `ts_rank`
+      (incomparable scales). AGPL BM25 extensions only if Trial A1 shows
+      under-ranking, and only service-isolated like MinerU.
 - [ ] Both indexes carry `box` id so retrieval can be scoped to the active working set.
       *(G1.11 — gated on Phase 2 boxing.)*
+- [ ] **Embedding-model identity (G1.16):** `model` column on
+      `document_embeddings`/`proposition_embeddings` + mismatch guard
+      (`EmbeddingModelMismatchError`) + `scripts/reembed.py` migration path — a
+      same-dimension model swap must be refused, not silently mixed into one ANN
+      space. *(Review A5.)*
 - [ ] (Keyword/entity index feeds graph nodes in Phase 2 and candidate generation in
       Phase 4 — keep keyworders in the lexical layer, not the graph.)
 
@@ -133,9 +173,31 @@ for the gap-plan IDs. *(Granular state below; not every box maps 1:1 to a gap ID
       content_hash)` over the extractor model/prompt/regime/verifier (`core/cache.py`).
       Unchanged content no-ops; a changed pipeline re-extracts (or fails loud). Cross-document
       output reuse — "extract once" across docs/re-segmentation — is the remaining G1.7b.)*
+- [ ] **Hash the real prompt + schema into the cache key (G1.15):** today invalidation
+      rides on a hand-bumped `EXTRACT_SCHEMA_VERSION`; a prompt edit without the bump
+      silently serves stale extractions. Add `prompt_sha`/`schema_sha` (extractor and
+      verifier) to `extraction_content_hash`. One-time loud re-extraction when it lands.
+      *(Review A4.)*
 - [ ] **Amortize reference processing:** reference-corpus / domain-pack boxes are ingested
       **once** and persisted read-only for reuse across investigations; only case
       documents are processed per investigation (§9).
+
+## Robustness hardening (G1.17, review R1–R8 — one batch PR)
+
+- [ ] Per-span error isolation in the propositionizer (`gather` must not let one
+      flaky span/sample abort the document; failed spans recorded + resumable via
+      idempotency).
+- [ ] Verifier failure degrades to "verdict unavailable" (faithfulness/provisional
+      null, logged) instead of crashing the batch.
+- [ ] `pool_span` returns `None` for no-token spans — no zero-vector sentinel; no
+      zero vector can ever reach pgvector.
+- [ ] Partial functional `actions` indexes for parser/segmenter idempotency lookups
+      (migration 0006 covered only the propositionizer).
+- [ ] Per-LLM-call `asyncio.timeout` above the tenacity ceiling (a hung endpoint
+      must not hold a semaphore permit through full backoff).
+- [ ] `EmbeddingSubstrate` close()/context-manager lifecycle.
+- [ ] Property-based fuzz tests for `cypher_map` escaping (document text and LLM
+      output cross this hand-rolled boundary).
 
 ## Exit criteria
 
@@ -145,7 +207,16 @@ for the gap-plan IDs. *(Granular state below; not every box maps 1:1 to a gap ID
       source text resolvable.
 - [ ] Re-ingesting an unchanged document hits the cache (no re-extraction); a static
       reference corpus is processed once and reused.
+- [ ] A document longer than the embedding context ingests with **full** dense
+      coverage — no silent truncation, no zero vectors in pgvector (G1.13).
+- [ ] Mixed-polarity extractions never report full agreement; polarity-unstable
+      spans yield `provisional` propositions (G1.14).
+- [ ] A prompt-template edit alone invalidates the extraction cache (G1.15); an
+      embedding-model swap is refused, not silently mixed (G1.16).
 - [ ] Maintain a small fixture corpus exercising this path (seed for the gate corpus).
+      Include at least one document longer than one embedding window and one span
+      whose negation the extractor is known to waver on (regression anchors for
+      G1.13/G1.14).
 
 ## Phase risks / decisions
 
