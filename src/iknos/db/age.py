@@ -76,12 +76,26 @@ def _dollar_quote_tag(body: str) -> str:
         n += 1
 
 
+def _build_cypher_sql(graph_name: str, query: str, returns: str) -> str:
+    """Assemble the ``SELECT * FROM cypher(...)`` invocation — the pure, config-free seam.
+
+    Splitting this out of :func:`cypher` keeps the SQL/AGE statement-assembly (the two-layer
+    injection boundary) unit-testable without importing the config singleton, which the rest
+    of the unit suite deliberately never does. The Cypher ``query`` body is wrapped in a
+    dollar-quoted SQL string using a tag absent from the body (:func:`_dollar_quote_tag`), so
+    no body content — including a value carrying ``$$`` (see that function) — can terminate
+    the quote early and inject SQL. ``graph_name`` is operator config validated at its source
+    (``config.Settings.graph_name``), not untrusted input, so it is interpolated directly.
+    """
+    tag = _dollar_quote_tag(query)
+    return f"SELECT * FROM cypher('{graph_name}', {tag} {query} {tag}) AS ({returns})"
+
+
 def cypher(query: str, returns: str = "result agtype") -> str:
     """Wrap a Cypher query body in the SQL/AGE invocation (injection-safe dollar quoting)."""
     from iknos.config import settings
 
-    tag = _dollar_quote_tag(query)
-    return f"SELECT * FROM cypher('{settings.graph_name}', {tag} {query} {tag}) AS ({returns})"
+    return _build_cypher_sql(settings.graph_name, query, returns)
 
 
 async def execute_cypher(
