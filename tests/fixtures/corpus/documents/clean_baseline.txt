@@ -1,0 +1,5 @@
+Evidence Intake Summary — Matter 2023-0417, Exhibit EX-2023-0001
+
+The forensic team received one sealed evidence bag from the Rotterdam field office on 3 April 2023. The bag contained a single laptop computer, a Halden Maritime asset tag reading HM-LT-0449, and a chain-of-custody form signed by two officers. The laptop powered on and presented a corporate login screen.
+
+A bit-for-bit forensic image of the internal drive was acquired on 4 April 2023 using a write-blocker. The acquisition completed without error and the image hash matched the source drive. The imaged drive holds 512 gigabytes and was encrypted with the corporate full-disk policy; the recovery key was supplied by the IT department under a separate authorisation.

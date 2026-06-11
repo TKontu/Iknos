@@ -1,0 +1,314 @@
+INVESTIGATIVE DOSSIER — MATTER 2023-0417
+Halden Maritime Holdings: Review of the Brügen Privatbank Wire and Related Treasury Activity
+Prepared by the Forensic Investigation Team
+Filing date: 28 April 2023
+Classification: Restricted — Counsel and Audit Committee only
+
+SECTION 1 — COVER MEMORANDUM
+
+This dossier consolidates the work product of the forensic investigation opened on 30 March 2023 under reference Matter 2023-0417. The investigation was commissioned by the Audit Committee of Halden Maritime Holdings following an internal control alert raised by the group treasury reconciliation system on 28 March 2023. The alert flagged a single outbound wire transfer that could not be matched to an approved payment run. The committee instructed the forensic team to establish the facts of the transfer, to determine whether the relevant internal controls operated as designed, and to identify any further transactions exhibiting the same characteristics.
+
+The team has approached the matter as a fact-finding exercise. Where this dossier records an observation, that observation is drawn directly from a primary record — a bank statement, a ledger entry, a system log, a signed form, or a recorded interview. Where this dossier records an inference, the inference is labelled as such and the underlying observations are cited. The distinction is maintained deliberately throughout, because the committee will weigh the conclusions, and the conclusions are only as strong as the observations beneath them. Nothing in the concluding section should be read as a finding of fact established beyond the standard the committee applies; the concluding section is the team's assessment.
+
+The dossier is organised as follows. Section 2 states the scope and the limitations the team operated under. Section 3 describes the corporate structure and the treasury control environment as the team understood it at the outset. Section 4 sets out the methodology and the sources relied upon. Sections 5 through 11 present the evidence: the witness statements, the exhibit log, the interview transcripts, the forensic accounting findings, the banking analysis, the device and systems analysis, and the consolidated timeline. Section 12 lists the open questions the team was unable to resolve within the period of the engagement. Section 13 records the team's assessment. Appendices follow.
+
+SECTION 2 — SCOPE AND LIMITATIONS
+
+The scope authorised by the Audit Committee was, in summary, to investigate the wire transfer flagged on 28 March 2023, to test whether it was properly authorised under the group's treasury policy, and to search the records of the operating company for related activity over the preceding eighteen months. The scope did not extend to the group's overseas joint ventures, which are governed by separate treasury arrangements and were outside the committee's remit for this engagement.
+
+The team operated under several limitations that the committee should bear in mind when reading the evidence. First, the team had read-only access to the treasury workflow system and to the general ledger; it did not have access to the underlying database administration logs, which are held by an external managed-services provider and were not produced within the engagement period. Second, two of the individuals the team wished to interview were unavailable: one was on extended medical leave, and one had left the company in February 2023 and declined a voluntary interview through counsel. Third, the banking records obtained from Brügen Privatbank were provided in response to a formal request and were limited to the single account identified in that request; the team could not independently confirm that no other accounts at that institution were involved. These limitations are noted again at the relevant points in the evidence sections.
+
+The team emphasises that the absence of a record is not, by itself, evidence that an event did not occur. Several of the open questions in Section 12 arise precisely because a record that the team would expect to exist could not be located. The team has been careful not to treat a missing record as proof of either innocence or wrongdoing.
+
+SECTION 3 — CORPORATE STRUCTURE AND CONTROL ENVIRONMENT
+
+Halden Maritime Holdings is the parent of a group of companies engaged in coastal freight, port logistics, and vessel chartering across the North Sea and Baltic corridors. The operating company relevant to this matter is Halden Maritime Operations Limited, which holds the group's principal operating bank account at a domestic clearing bank and runs the day-to-day treasury function. The group was founded by Sigrid Halden, who remains the chair and the majority shareholder. The chief financial officer during the period under review was Daniel Okonkwo, who joined the group in 2019. The group treasurer reported to the chief financial officer, and the treasury operations team reported to the group treasurer.
+
+The treasury control environment, as documented in the group's payments policy dated June 2021, requires that every outbound wire above a threshold of fifty thousand euros be initiated by a member of the treasury operations team, reviewed by the group treasurer, and approved by two authorised approvers using individual hardware credential tokens. The policy describes this as dual control. The policy further requires that each approval be bound to the approver's registered workstation, and that the binding metadata be retained in the workflow export for audit. The reconciliation system is configured to compare the daily list of settled wires against the list of approved payment instructions and to raise an alert where a settled wire has no matching approved instruction.
+
+The control environment, on paper, is conventional and adequate for a group of this size. The investigation was concerned with whether the controls operated as the policy described, and the evidence in the following sections bears directly on that question. It will be seen that the documentary trail for the transfer at the centre of this matter does not exhibit the dual-control characteristics the policy requires, and that the binding metadata the policy requires to be retained was absent from the relevant export.
+
+SECTION 4 — METHODOLOGY AND SOURCES
+
+The team relied on five categories of source. The first category was the group's accounting records: the general ledger, the subledgers for cash and intercompany balances, and the period-end reconciliations. The second category was the treasury workflow system: the payment-instruction records, the approval records, and the system event log to the extent it was produced. The third category was banking records: statements and confirmations obtained from the group's domestic clearing bank and from Brügen Privatbank. The fourth category was the testimony of witnesses, captured in recorded interviews and reduced to signed statements. The fifth category was forensic artefacts recovered from a laptop computer and from the group's email archive.
+
+For each item of evidence, the team recorded its provenance, the date it was obtained, the custodian who produced it, and a hash or other integrity marker where one was available. The exhibit log in Section 7 reflects this discipline. Where the team derived a figure by computation — for example, by summing a series of ledger entries — the computation is shown so that it can be checked. Where the team relied on a witness's recollection, the dossier identifies it as recollection and not as a record.
+
+The team applied a consistent rule in distinguishing observations from conclusions. An observation is a statement that can be verified against a primary record without the exercise of judgement: the date on a statement, the amount of a transfer, the presence or absence of a field in an export. A conclusion is a statement that requires the team to weigh observations and to reason about what they imply: whether a control failed, whether an explanation is credible, whether a pattern is deliberate. The dossier keeps the two apart, and the concluding section draws only on the observations established earlier.
+
+SECTION 5 — WITNESS STATEMENTS
+
+Statement of Marta Lindqvist, treasury operations officer.
+
+Ms Lindqvist was interviewed on 9 April 2023 and again on 18 April 2023. She has been employed in the treasury operations team since 2020 and was, during the relevant period, one of two officers authorised to initiate payment instructions. In her first interview she described the normal payment process in terms consistent with the June 2021 policy: an instruction is initiated against a supplier or counterparty record, reviewed by the treasurer, and approved by two approvers before it is released for settlement. She stated that she did not recall preparing the instruction for the wire to Brügen Privatbank, and that the counterparty was not one she recognised from the group's normal supplier list. She stated that she would not ordinarily initiate a payment to a counterparty that had not been onboarded through the supplier-vetting process, and that she had no record of such an onboarding for Brügen Privatbank.
+
+In her second interview, having been shown the payment-instruction record bearing her user identifier, Ms Lindqvist maintained that she had no recollection of creating it. She observed that her workstation was, on occasion, left unlocked during busy settlement periods, and that the open-plan treasury area was accessible to other members of the finance function. She did not accuse any individual. She noted that the instruction had been created at 17:52 on 13 March 2023, which was after her normal working hours, and that she did not believe she had been at her desk at that time, though she could not be certain. The team has not been able to corroborate or refute her account of her movements on that afternoon.
+
+Statement of Henrik Sòl, group treasurer.
+
+Mr Sòl was interviewed on 11 April 2023. He is responsible for reviewing payment instructions before they pass to the approval stage. He stated that the review step is, in practice, a check that the instruction is well-formed and that the counterparty details are complete; it is not, he said, an independent verification that the counterparty is legitimate, which he understood to be the function of the supplier-onboarding process upstream. He stated that he had no specific recollection of the instruction to Brügen Privatbank and that, during the relevant week, he had delegated part of his review workload to cover a period of leave. He could not say with confidence whether he or a delegate had reviewed the instruction in question.
+
+Mr Sòl described the approval step as the principal control. He stated that two approvers, each using a personal hardware token, were required, and that the tokens were issued individually and were not, to his knowledge, shared. He expressed surprise that the export for the transfer in question showed only one approval token and a blank second approval row, and he stated that, in his understanding, the system should not release a wire for settlement without two approvals recorded. He could offer no explanation for how a wire could have settled in that state. The team notes that this is a central unresolved question and returns to it in Section 12.
+
+Statement of Priya Raghavan, financial controller.
+
+Ms Raghavan was interviewed on 12 April 2023. She is responsible for the period-end close and for the reconciliations. She stated that the reconciliation system raised the alert for the unmatched wire on 28 March 2023, during the close for the period ending on the preceding Friday, and that she escalated it the same day to the chief financial officer and to the chair of the Audit Committee. She stated that, in her recollection, the chief financial officer initially suggested that the wire was likely to be a misposting that would resolve on further matching, and asked her to hold the escalation pending a review. She stated that she did not hold the escalation, because the policy required her to escalate an unmatched wire above the threshold within one business day, and she followed the policy.
+
+Ms Raghavan stated that, in the days that followed, she was asked by the chief financial officer for the supporting documentation she held, and that she provided it. She stated that she retained copies of everything she provided. The team has compared the copies Ms Raghavan retained against the records subsequently produced from the treasury system and notes a discrepancy, discussed in Section 8, between the counterparty reference shown in Ms Raghavan's contemporaneous copy and the counterparty reference shown in the later system export.
+
+Statement of Tomas Berg, information technology operations lead.
+
+Mr Berg was interviewed on 14 April 2023. He is responsible for the group's end-user computing and for liaison with the external managed-services provider that administers the treasury workflow database. He stated that the workflow system's application logs are retained for ninety days and that the database administration logs are retained by the external provider under a separate arrangement. He stated that he had requested the database administration logs for the relevant period from the provider on 10 April 2023 at the team's request, and that the provider had acknowledged the request but had not, as at the date of his interview, produced the logs. He stated that he was not aware of any deletion or alteration of records, but that he was not in a position to confirm the integrity of the database logs without the provider's cooperation.
+
+Mr Berg described the credential-token infrastructure. He stated that each approver is issued a hardware token bound to a registered workstation, and that the binding is recorded in a configuration store. He stated that he was surprised to learn that the binding metadata was absent from the export for the transfer in question, because, in his understanding, the binding metadata is written at the time of approval and is not ordinarily removable through the application interface. He undertook to investigate how the metadata could be absent and reported back, on 20 April 2023, that he had been unable to reproduce the condition in a test environment.
+
+SECTION 6 — EXHIBIT LOG
+
+The following exhibits are referenced throughout this dossier. Each exhibit was logged on receipt with its provenance and an integrity marker where available. The full exhibits are held in the secure evidence store and are available to the committee on request.
+
+Exhibit EX-2023-0001. Sealed evidence bag received from the Rotterdam field office on 3 April 2023, containing one laptop computer bearing asset tag HM-LT-0449 and a signed chain-of-custody form. Integrity: chain-of-custody intact; two officer signatures.
+
+Exhibit EX-2023-0002. Forensic disk image of the internal drive of the laptop in EX-2023-0001, acquired on 4 April 2023 using a hardware write-blocker. Integrity: acquisition hash recorded and matched to the source drive.
+
+Exhibit EX-2023-0003. General ledger extract for Halden Maritime Operations Limited for the period 1 January 2022 through 31 March 2023, produced by the financial controller on 6 April 2023. Integrity: produced under cover of a signed production note.
+
+Exhibit EX-2023-0004. Cash subledger reconciliation for the period ending 24 March 2023, produced by the financial controller on 6 April 2023. Integrity: signed production note.
+
+Exhibit EX-2023-0005. Treasury workflow export for the payment instruction associated with the Brügen Privatbank wire, produced by the IT operations lead on 8 April 2023. Integrity: export timestamp recorded; the team notes the absence of the binding metadata field.
+
+Exhibit EX-2023-0006. Bank statement for the Halden Maritime operating account at the domestic clearing bank for the period 1 March 2023 through 31 March 2023, obtained on 7 April 2023. Integrity: bank-issued statement with reference number.
+
+Exhibit EX-2023-0007. Account statement and confirmation obtained from Brügen Privatbank in response to a formal request, covering the account that received the wire, obtained on 19 April 2023. Integrity: bank-issued, limited to the single identified account.
+
+Exhibit EX-2023-0008. Contemporaneous copy of the supporting documentation for the unmatched wire, retained by the financial controller and produced on 12 April 2023. Integrity: the financial controller attests it is a true copy of what she provided to the chief financial officer.
+
+Exhibit EX-2023-0009. Email archive extract for the period 1 March 2023 through 28 April 2023 for the mailboxes of the treasury operations team, the group treasurer, the financial controller, and the chief financial officer, produced on 13 April 2023. Integrity: produced from the archive system with a production manifest.
+
+Exhibit EX-2023-0010. System event log extract for the treasury workflow application for the period 10 March 2023 through 16 March 2023, produced on 15 April 2023. Integrity: application log, ninety-day retention; the team notes a gap discussed in Section 10.
+
+Exhibit EX-2023-0011 through EX-2023-0024. A series of fourteen supplier-onboarding records produced on 16 April 2023 in response to the team's request for the onboarding record of Brügen Privatbank; none of the fourteen records corresponds to that counterparty. Integrity: produced from the supplier master with a production manifest.
+
+Exhibit EX-2023-0025. Written response from the external managed-services provider dated 24 April 2023, stating that the database administration logs for the relevant period would be produced subject to a contractual review. Integrity: provider letter on letterhead.
+
+SECTION 7 — INTERVIEW TRANSCRIPT EXCERPTS
+
+The following excerpts are drawn from the recorded interviews and are reproduced to give the committee the witnesses' own words on the central points. The full transcripts are held with the exhibits.
+
+From the interview of the financial controller, 12 April 2023.
+
+Investigator: When the alert was raised, what did you do first?
+Controller: I checked that it was a real exception and not a system artefact. I matched the settled wire against the approved instruction list, and there was no approved instruction with that reference. So it was a genuine unmatched wire over the threshold, and the policy says I escalate within one business day.
+Investigator: And did you escalate?
+Controller: I escalated the same day, to the chief financial officer and to the chair of the Audit Committee.
+Investigator: What was the response?
+Controller: The chief financial officer's first reaction was that it was probably a misposting and would clear on further matching, and he asked me to hold off. I said I couldn't hold off, because the policy is the policy, and I'd already sent it to the chair.
+
+From the interview of the group treasurer, 11 April 2023.
+
+Investigator: The export shows one approval token and a blank second row. In your understanding, can a wire settle in that state?
+Treasurer: It should not. The whole point of dual control is that two tokens are required before release. If it settled with one, then either the system did not enforce the rule on that occasion, or the second approval existed and is not showing in the export. I cannot tell you which, and that troubles me.
+Investigator: Have you seen this before?
+Treasurer: Not in my time here. Not once.
+
+From the interview of the treasury operations officer, 18 April 2023.
+
+Investigator: The instruction carries your user identifier. Did you create it?
+Officer: I have no memory of creating it, and the counterparty means nothing to me. I am not saying it is impossible that I created it and have forgotten; I am saying I have no memory of it and it does not fit anything I would normally do.
+Investigator: Was your workstation ever left unlocked?
+Officer: During settlement crunches, yes, it happened. The area is open-plan. I am not pointing at anyone. I am telling you the conditions.
+
+SECTION 8 — FORENSIC ACCOUNTING FINDINGS
+
+The forensic accounting work proceeded from the primary records in Exhibits EX-2023-0003 through EX-2023-0008. The team's principal observations are stated first; the team's analysis follows and is labelled as analysis.
+
+Observation. The general ledger records an outbound wire transfer of USD 4,200,000 dated 14 March 2023 from the Halden Maritime operating account to an account at Brügen Privatbank. The corresponding entry in the cash subledger and the corresponding line on the bank statement in Exhibit EX-2023-0006 agree as to amount, date, and beneficiary account. There is no ambiguity in the primary records as to the fact, the amount, or the date of the transfer.
+
+Observation. The treasury workflow export in Exhibit EX-2023-0005 records a single payment instruction matching the transfer, created at 17:52 on 13 March 2023 under the user identifier of the treasury operations officer, reviewed under the group treasurer's identifier, and bearing one approval token and a blank second approval row. The binding metadata field that the June 2021 policy requires to be retained is absent from the export.
+
+Observation. The contemporaneous copy retained by the financial controller, Exhibit EX-2023-0008, shows a counterparty reference for the beneficiary that differs from the counterparty reference shown for the same instruction in the later system export, Exhibit EX-2023-0005. The contemporaneous copy references a counterparty styled as "Tarn Holdings Ltd, care of Brügen Privatbank," whereas the later export references the bank directly with no intermediary named.
+
+Observation. The fourteen supplier-onboarding records produced in Exhibits EX-2023-0011 through EX-2023-0024 do not include an onboarding record for Brügen Privatbank or for Tarn Holdings Ltd. The supplier master, as produced, contains no entry for either name.
+
+Analysis. The discrepancy between the contemporaneous copy and the later export as to the counterparty reference is significant, because it bears on whether the counterparty record was altered after the transfer. The team cannot, on the records available, determine when or by whom the reference was changed, because the database administration logs that would record such a change have not been produced. The team notes that the change is consistent with an attempt to obscure an intermediary, but the team also notes that an innocent correction of a data-entry error would produce a similar pattern, and the team cannot distinguish the two on the present record.
+
+Analysis. The absence of any onboarding record for the beneficiary is consistent with the treasury officer's statement that she would not ordinarily pay a counterparty that had not been onboarded. It is also consistent with the possibility that the onboarding step was bypassed. The team treats the absence of an onboarding record as an established observation and the inference about bypass as an inference requiring further evidence.
+
+Analysis. The team performed a search of the eighteen-month ledger history for other transfers to beneficiaries lacking an onboarding record and above the threshold. The search returned three further transfers, totalling USD 1,150,000, to two beneficiaries that likewise have no onboarding record. The team has not completed the analysis of these three transfers within the engagement period and flags them in Section 12 as requiring further work. The team is careful not to characterise these three transfers as improper on the present record; they share one characteristic with the principal transfer and are, for that reason, worth examining, but the team has not examined them.
+
+SECTION 9 — BANKING ANALYSIS
+
+The banking analysis relied on the domestic clearing bank statement in Exhibit EX-2023-0006 and on the Brügen Privatbank statement and confirmation in Exhibit EX-2023-0007.
+
+Observation. The domestic clearing bank statement confirms the debit of USD 4,200,000 value-dated 14 March 2023, with a beneficiary account at Brügen Privatbank and a beneficiary reference consistent with the later system export. The statement shows the operating account in good standing before and after the debit, with no other unusual movements in the statement period.
+
+Observation. The Brügen Privatbank statement confirms the credit of USD 4,200,000 to the identified account on 14 March 2023. The statement shows that, on 16 March 2023, an amount of USD 4,150,000 was transferred out of that account to a further account, the details of which are redacted in the produced statement. The remaining balance after the onward transfer was USD 50,000, which the team notes is below the threshold that would itself trigger the reconciliation alert in the group's own systems, though that observation concerns the group's systems and not the bank's.
+
+Analysis. The onward transfer of almost the entire credited amount within two business days is a characteristic the team associates with funds being moved through an account rather than held in it. The team is careful not to overstate this: the rapid onward movement is consistent with a pass-through arrangement, but the produced statement does not reveal the ultimate destination, and the team cannot, on the redacted record, trace the funds further. The team has noted in Section 12 that obtaining the unredacted onward-transfer details would require a further formal request to Brügen Privatbank and the cooperation of the relevant authorities, which was outside the engagement period.
+
+Analysis. The team considered whether the transfer could be explained as a legitimate, if poorly documented, payment to a genuine counterparty. The absence of an onboarding record, the discrepancy in the counterparty reference, the single approval token, the missing binding metadata, and the rapid onward movement of the funds are each, individually, capable of an innocent explanation. The team's analysis of their combination is reserved for Section 13, where it is presented as the team's assessment and not as an established fact.
+
+SECTION 10 — DEVICE AND SYSTEMS ANALYSIS
+
+The device analysis was performed on the forensic image in Exhibit EX-2023-0002. The systems analysis relied on the workflow event log in Exhibit EX-2023-0010.
+
+Observation. The laptop in Exhibit EX-2023-0001 was issued, according to the asset register, to the treasury operations officer. The forensic image shows that the device was in normal use through March 2023. The image contains the user's profile, ordinary office documents, and a local cache of the treasury workflow application. The team found no evidence of unauthorised software, and no evidence of remote-access tooling, on the device.
+
+Observation. The local cache of the treasury workflow application on the device contains a record of the user's sessions. The cache shows a session active from 08:41 to 17:18 on 13 March 2023 and no session thereafter on that date. The payment instruction in Exhibit EX-2023-0005 was created at 17:52 on 13 March 2023, which is after the last cached session on the device ended.
+
+Analysis. The gap between the end of the cached session at 17:18 and the creation of the instruction at 17:52 is consistent with the treasury officer's statement that she did not believe she was at her desk when the instruction was created. The team is cautious: a cached session is a record of activity on this particular device, and the workflow application could in principle be accessed from another workstation, so the absence of a cached session after 17:18 does not establish that the officer's credentials were not used elsewhere. The team treats the cached session times as an observation and the inference about the officer's whereabouts as an inference that the cached times support but do not prove.
+
+Observation. The workflow event log in Exhibit EX-2023-0010 covers 10 March 2023 through 16 March 2023. The log records the creation of the payment instruction at 17:52 on 13 March 2023 and the single approval event, but the log does not contain any event corresponding to the second approval, and it contains a gap of approximately eleven minutes immediately following the single approval event, during which no events of any kind are recorded.
+
+Analysis. An eleven-minute gap in an event log that is otherwise dense is unusual and bears on the integrity of the log. The gap could reflect a genuine pause in activity, a logging fault, or the removal of events. The team cannot distinguish these without the database administration logs, which have not been produced. The team flags the gap in Section 12 and does not draw a conclusion from it on the present record.
+
+SECTION 11 — CONSOLIDATED TIMELINE
+
+The following timeline consolidates the dated events established by the evidence. Each entry cites the exhibit or statement that establishes it.
+
+13 March 2023, 08:41. The treasury operations officer's cached workflow session begins on the laptop in Exhibit EX-2023-0001, per the device analysis in Section 10.
+
+13 March 2023, 17:18. The cached workflow session ends, per the device analysis in Section 10.
+
+13 March 2023, 17:52. The payment instruction for the wire is created under the treasury officer's user identifier, per Exhibit EX-2023-0005 and the event log in Exhibit EX-2023-0010.
+
+13 March 2023, approximately 17:53 to 18:04. The single approval event is recorded, followed by the eleven-minute gap in the event log, per Exhibit EX-2023-0010.
+
+14 March 2023. The wire of USD 4,200,000 settles to the Brügen Privatbank account, per Exhibits EX-2023-0003, EX-2023-0006, and EX-2023-0007.
+
+16 March 2023. USD 4,150,000 is transferred onward from the Brügen Privatbank account to a redacted further account, per Exhibit EX-2023-0007.
+
+28 March 2023. The reconciliation system raises the unmatched-wire alert; the financial controller escalates the same day, per the statement of the financial controller.
+
+30 March 2023. The Audit Committee commissions the investigation under Matter 2023-0417.
+
+3 April 2023. The laptop is received from the Rotterdam field office, per Exhibit EX-2023-0001.
+
+4 April 2023. The forensic image is acquired, per Exhibit EX-2023-0002.
+
+6 April through 19 April 2023. The accounting, treasury, banking, email, and supplier records are produced, per the exhibit log in Section 6.
+
+9 April through 18 April 2023. The witnesses are interviewed, per the statements in Section 5.
+
+24 April 2023. The external provider responds regarding the database administration logs, per Exhibit EX-2023-0025.
+
+28 April 2023. This dossier is filed.
+
+SECTION 12 — OPEN QUESTIONS
+
+The team was unable to resolve the following questions within the engagement period. Each is material to the committee's consideration of the matter.
+
+First, how did a wire settle with a single approval token recorded, when the policy and, on the group treasurer's evidence, the system's design require two? The team could not determine whether the rule was not enforced on the occasion, or whether a second approval existed and is not reflected in the produced export. Resolving this requires the database administration logs that have not been produced.
+
+Second, who created the payment instruction at 17:52 on 13 March 2023? The instruction carries the treasury officer's identifier, but the officer has no recollection of creating it, the device analysis shows no cached session on her laptop at that time, and the binding metadata that would tie the approval to a specific workstation is absent. Resolving this requires the binding metadata and the database administration logs.
+
+Third, why does the counterparty reference differ between the financial controller's contemporaneous copy and the later system export, and when and by whom was it changed? Resolving this requires the database administration logs.
+
+Fourth, what is the ultimate destination of the USD 4,150,000 transferred onward from the Brügen Privatbank account on 16 March 2023? Resolving this requires an unredacted record from Brügen Privatbank and the cooperation of the relevant authorities.
+
+Fifth, are the three further transfers identified in Section 8, totalling USD 1,150,000 to beneficiaries lacking onboarding records, improper, and are they connected to the principal transfer? The team identified them but did not analyse them within the engagement period.
+
+Sixth, what accounts for the eleven-minute gap in the workflow event log immediately following the single approval event? Resolving this requires the database administration logs.
+
+SECTION 13 — ASSESSMENT
+
+The team's assessment is offered as assessment and not as a finding of fact. The committee will weigh it against the observations in the preceding sections and against any further evidence obtained.
+
+In the professional judgement of the investigation team, the evidence assembled in this dossier is most consistent with a deliberate diversion of corporate funds orchestrated through a misuse of the treasury controls, rather than with an isolated processing error. The team reaches that assessment from the combination of features that each, alone, might be explained innocently but that together form a coherent pattern: a payment to a counterparty that was never onboarded; a counterparty reference that was altered after the event; a single approval where the policy requires two; binding metadata that should have been retained but was absent; an instruction created under an identifier whose owner has no record of creating it and whose device shows no session at the time; an event-log gap at the critical moment; and the rapid onward movement of almost the entire sum through an account that did not retain it.
+
+The team stresses the limits of this assessment. The team did not obtain the database administration logs, which bear on several of the open questions and which could either strengthen or undercut the assessment. The team did not trace the funds to their ultimate destination. The team did not interview two individuals it wished to interview. Each of these gaps could, in principle, yield evidence that revises the assessment. The team has been careful, throughout this dossier, to record what it observed and to separate it from what it inferred, precisely so that the committee can re-weigh the inferences if the observations beneath them change.
+
+The team recommends that the committee pursue the database administration logs through the contractual review the external provider has indicated, that it seek the unredacted onward-transfer details from Brügen Privatbank through the appropriate channels, that it complete the analysis of the three further transfers identified in Section 8, and that it preserve all records pending that further work. The team is available to undertake the further work if the committee so instructs.
+
+APPENDIX A — GLOSSARY OF TERMS
+
+Approval token. A hardware credential issued to an authorised approver and used to record that approver's approval of a payment instruction in the treasury workflow system.
+
+Binding metadata. Data recorded at the time of approval that ties an approval token to the registered workstation from which the approval was given; required by the June 2021 policy to be retained in the workflow export.
+
+Dual control. The control requirement that two authorised approvers, each using an individual token, approve an outbound wire above the threshold before it is released for settlement.
+
+Onboarding record. The record produced by the supplier-vetting process that establishes a counterparty as approved to receive payments.
+
+Pass-through arrangement. An arrangement in which funds are credited to an account and then transferred onward within a short period, such that the account holds the funds only briefly.
+
+Reconciliation alert. The exception raised by the reconciliation system when a settled wire above the threshold has no matching approved instruction.
+
+APPENDIX B — PRODUCTION INDEX
+
+This index lists, for each exhibit, the custodian who produced it and the date of production. It is provided so that the committee can direct any follow-up production requests to the correct custodian. The financial controller produced the accounting records and the contemporaneous copy. The IT operations lead produced the treasury export, the event log, and arranged the device imaging. The relevant banks produced the statements and confirmations. The archive system produced the email extract under a manifest. The external managed-services provider has been asked to produce the database administration logs and has indicated it will do so subject to a contractual review.
+
+APPENDIX C — STATEMENT OF INDEPENDENCE
+
+The members of the investigation team confirm that they have no financial interest in Halden Maritime Holdings, that they have no personal relationship with any of the individuals named in this dossier, and that they have approached the matter without preconception as to its outcome. The team's compensation is not contingent on the conclusions reached. The team has recorded its observations faithfully and has distinguished them from its inferences throughout, in accordance with the methodology stated in Section 4.
+
+APPENDIX D — DETAILED LEDGER WALK
+
+This appendix sets out the ledger entries the team relied upon in Section 8, so that the committee or a subsequent reviewer can reproduce the figures. All entries are drawn from Exhibit EX-2023-0003 unless otherwise stated.
+
+The operating account carried a brought-forward balance at 1 March 2023 of USD 11,480,000. During the statement period to 31 March 2023, the account recorded ordinary operating receipts totalling USD 6,920,000, comprising freight settlements from seven customers, and ordinary operating disbursements totalling USD 5,310,000, comprising payroll, fuel, port dues, charter hire, and routine supplier payments. None of the ordinary disbursements individually exceeded USD 480,000, and each of them matched an approved payment instruction in the treasury workflow export. The single disbursement that did not match an approved instruction was the wire of USD 4,200,000 to Brügen Privatbank value-dated 14 March 2023.
+
+The team reconciled the closing balance as follows. The brought-forward balance of USD 11,480,000, plus operating receipts of USD 6,920,000, less ordinary disbursements of USD 5,310,000, less the disputed wire of USD 4,200,000, yields a closing balance of USD 8,890,000. The bank statement in Exhibit EX-2023-0006 shows a closing balance of USD 8,890,000 at 31 March 2023. The reconciliation ties without residual, which establishes that the disputed wire is fully accounted for in the cash movements of the period and is not, for example, a duplicate posting or a timing difference that would later reverse. This observation is relevant because it forecloses the explanation the chief financial officer initially offered to the financial controller, namely that the item was a misposting that would clear on further matching.
+
+The team also examined the eighteen-month history for the three further transfers referenced in Section 8. The first, dated 19 August 2022, was USD 500,000 to a beneficiary styled "Crane Reach Services." The second, dated 7 November 2022, was USD 350,000 to the same beneficiary. The third, dated 2 February 2023, was USD 300,000 to a beneficiary styled "Vossberg Marine Agencies." Neither beneficiary appears in the supplier master produced in Exhibits EX-2023-0011 through EX-2023-0024. The team records these as observations. The team did not, within the engagement period, obtain the workflow exports or the banking records for these three transfers, and therefore the team makes no observation about their approval state, their counterparty references, or the subsequent movement of the funds. The team repeats that it does not characterise these transfers as improper; it records that they share the single feature of a missing onboarding record and that they warrant the further work described in Section 12.
+
+APPENDIX E — SUPPLEMENTARY WITNESS STATEMENTS
+
+Statement of Astrid Brandt, engagement partner, Brandt and Vossel, external auditors.
+
+Ms Brandt was interviewed on 17 April 2023 in her capacity as the engagement partner on the group's most recent statutory audit. She stated that the audit had tested the treasury controls on a sample basis and had not identified an exception during the audit period, which ended before the date of the disputed wire. She stated that the audit sample for outbound wires was selected on a value-weighted basis and that, had the disputed wire fallen within the audit period, it would have had a high probability of selection given its size. She was careful to say that the audit provides reasonable, not absolute, assurance, and that a control that operates correctly during a sample period may still be circumvented on a particular occasion outside that period. She offered no view on the present matter beyond the scope of the completed audit, which she said it would be inappropriate for her to do.
+
+Statement of Lena Foss, human resources business partner.
+
+Ms Foss was interviewed on 13 April 2023 to establish the employment status and the leave records of the individuals relevant to the matter. She confirmed the dates of employment of the named individuals, confirmed that one individual the team wished to interview had left the company in February 2023, and confirmed that the group treasurer had recorded a period of leave during the week of the disputed instruction. She stated that the leave records are maintained in a system separate from the treasury workflow and that she had produced extracts on request. She offered no view on the substance of the matter, which was outside her function.
+
+Statement of Rashid Karim, infrastructure engineer.
+
+Mr Karim was interviewed on 20 April 2023 as the engineer who attempted, at the IT operations lead's request, to reproduce the condition in which the binding metadata is absent from a workflow export. He stated that he had built a test environment mirroring the production configuration and had attempted, through the application interface, to create and approve a payment instruction in which the binding metadata would be absent from the export. He stated that he had been unable to produce that condition through the interface, and that, in every test he ran, the binding metadata was written at approval and was present in the export. He stated that he could not exclude the possibility that the metadata could be removed by direct manipulation of the database, which would not pass through the application interface, but that he had no means of testing that without access to the production database, which is administered by the external provider. The team records his evidence as bearing on the open question of how the binding metadata came to be absent.
+
+APPENDIX F — CONTROL NARRATIVE AND POLICY EXTRACTS
+
+This appendix reproduces, in narrative form, the relevant provisions of the group payments policy dated June 2021, so that the committee can read the controls the team tested against. The policy is held in full with the exhibits.
+
+The policy provides that all outbound payments are to be initiated within the treasury workflow system against a counterparty record drawn from the supplier master. The policy provides that no payment may be initiated to a counterparty that is not present in the supplier master, and that counterparties are added to the supplier master only through the supplier-onboarding process, which includes verification of the counterparty's banking details and a screening step. The policy provides that the initiation of a payment is to be performed by a member of the treasury operations team using that member's individual credentials.
+
+The policy provides that every initiated payment is to be reviewed by the group treasurer or a designated delegate, that the review is to confirm the completeness and the form of the instruction, and that the reviewer is to be a different individual from the initiator. The policy provides that every outbound wire above fifty thousand euros is, following review, to be approved by two authorised approvers, that each approver is to use that approver's individual hardware token, that the two approvers are to be different individuals from one another and from the initiator and the reviewer, and that the system is to record each approval together with the binding metadata tying the approval to the approver's registered workstation. The policy provides that a payment above the threshold may not be released for settlement until two approvals have been recorded.
+
+The policy provides that the reconciliation team is to compare, on each business day, the list of settled wires against the list of approved instructions, and that any settled wire above the threshold without a matching approved instruction is to be escalated to the chief financial officer and to the chair of the Audit Committee within one business day. The team tested the operation of these provisions against the evidence and records its observations in Sections 8, 9, and 10. The team observes that the escalation provision operated as the policy requires, in that the financial controller escalated the unmatched wire within one business day; and that the dual-control provision did not operate as the policy requires, in that the produced export records a single approval token where two are required, with the binding metadata absent.
+
+APPENDIX G — METHODOLOGY NOTES ON INTEGRITY AND CHAIN OF CUSTODY
+
+This appendix records the integrity measures the team applied, so that the evidentiary weight of the exhibits can be assessed.
+
+For the device evidence, the team applied a forensic acquisition process using a hardware write-blocker, which prevents any write to the source drive during acquisition. The team recorded a cryptographic hash of the source drive and of the acquired image and confirmed that the two matched, which establishes that the image is a faithful copy of the source and that the source was not altered during acquisition. All subsequent analysis was performed on the image, not on the source drive, which was returned to the secure evidence store under chain of custody.
+
+For the documentary evidence, the team recorded, for each production, the custodian who produced it, the date of production, and, where the production system supported it, a production manifest listing the records produced. The team treated a record produced under a manifest as more reliable than a record produced without one, because the manifest establishes the completeness of the production against a defined scope. The team notes that the database administration logs, which have not been produced, would, if produced, be expected to carry their own integrity markers, and that the team would assess their reliability at that time.
+
+For the testimonial evidence, the team recorded each interview, reduced it to a written statement, and provided the statement to the witness for review and signature. The team treated a witness's recollection as recollection and not as a record, and, where a witness's recollection conflicted with a primary record, the team has identified the conflict rather than resolving it silently in favour of either. The team applied the same discipline to the conflict between the treasury officer's account and the instruction bearing her identifier, which the team has presented as an unresolved conflict in Section 12 rather than as a resolved finding.
+
+The team has, throughout, observed the principle that the weight of the evidence is a matter for the committee, and that the team's function is to assemble the evidence faithfully, to record its provenance, and to distinguish what was observed from what was inferred. The team is satisfied that it has discharged that function within the limitations recorded in Section 2, and it has flagged in Section 12 the further work that the limitations leave open.
+
+APPENDIX H — SUPPLEMENTARY TRANSCRIPT EXCERPTS AND ANALYTICAL NOTES
+
+The following further excerpts and notes are provided to complete the record on the points the committee is most likely to probe. They are reproduced from the recorded interviews and from the team's working papers.
+
+From the interview of the financial controller, 12 April 2023, continued.
+
+Investigator: When you provided the supporting documentation to the chief financial officer, what did you keep?
+Controller: I kept a copy of everything. It is my habit to keep a copy of anything I hand over during a close, because items move and get amended, and I want to be able to show what I sent and when. So I have the copy I gave him, dated the day I gave it.
+Investigator: And the counterparty reference on your copy?
+Controller: My copy says Tarn Holdings, care of Brügen Privatbank. When I later saw the system export, it just said the bank, with no Tarn Holdings. I noticed it because I had read my own copy so many times. I do not know who changed it or when. I only know my copy and the export do not say the same thing.
+
+From the interview of the group treasurer, 11 April 2023, continued.
+
+Investigator: You delegated part of your review workload that week. To whom?
+Treasurer: To my deputy, who covers for me when I am on leave. But I cannot tell you, from memory, whether this particular instruction crossed my desk or my deputy's. The review records would show it, but the review records are part of what is in dispute, so I do not want to rely on my memory and call it fact.
+Investigator: That is a careful answer.
+Treasurer: It has to be. I would rather tell you I do not know than tell you something that turns out to be wrong.
+
+Analytical note on the convergence of the features. The team recorded, in its working papers, the analytical exercise of asking, for each feature of the transfer, how often that feature would be expected to appear in an ordinary, properly processed payment. A payment to a counterparty absent from the supplier master is rare, because the system is configured to draw counterparties from the master. A counterparty reference that changes between a contemporaneous copy and a later export is rare, because references are not ordinarily edited after settlement. A single approval token on an above-threshold wire is rare, because the system is designed to require two. Absent binding metadata is rare, because the metadata is written at approval and, on the engineer's evidence, is not removable through the interface. An instruction created under an identifier whose owner has no record of it, at a time when that owner's device shows no session, is rare. A dense event log with an eleven-minute gap at the critical moment is rare. The rapid onward movement of almost the entire sum is, on the team's experience, characteristic of a pass-through.
+
+The team's analytical observation is that each feature is individually rare and that the probability of all of them coinciding in a single ordinary, properly processed payment is, on any reasonable view, very low. The team is careful to frame this as an analytical observation about the joint rarity of the features and not as a calculation of any probability, which the available record would not support. The team has reserved the weight to be given to this convergence for the assessment in Section 13, where it is presented as the team's assessment.
+
+Analytical note on alternative explanations. The team tested its assessment against the most plausible innocent explanation it could construct, which is that a genuine but irregular payment to a real counterparty was processed outside the normal controls under time pressure, with the documentary irregularities arising from hurried and informal handling rather than from concealment. The team found that this explanation accounts for some of the features — a missing onboarding record and an informal counterparty reference could arise from haste — but that it accounts poorly for others, in particular the absence of the binding metadata, which the engineer could not reproduce through ordinary use, and the eleven-minute event-log gap, which haste would not explain. The team therefore does not adopt the innocent explanation, while acknowledging that further evidence, and in particular the database administration logs, could change that view.
+
+END OF DOSSIER — MATTER 2023-0417

@@ -284,10 +284,18 @@ remaining Phase-1 cost/structure work. See `gap_phase_1_ingest.md` for the gap-p
       spans yield `provisional` propositions (G1.14).
 - [x] A prompt-template edit alone invalidates the extraction cache (G1.15); an
       embedding-model swap is refused, not silently mixed (G1.16).
-- [ ] Maintain a small fixture corpus exercising this path (seed for the gate corpus).
-      Include at least one document longer than one embedding window and one span
-      whose negation the extractor is known to waver on (regression anchors for
-      G1.13/G1.14).
+- [x] **Fixture corpus (seed for the gate corpus) — shipped.** `tests/fixtures/corpus/`
+      holds three real documents + a `manifest.toml` of machine-readable regression
+      anchors, loaded by a typed, model-free/DB-free loader (`tests/fixtures/corpus.py`,
+      stdlib `tomllib`) and kept honest by `tests/unit/test_corpus.py`. It includes a
+      document **longer than one embedding window** — `long_case_file.txt`, > 8200 words,
+      so `tokens ≥ words > MAX_MODEL_TOKENS` makes ">1 window" provable in CI **with no
+      model in the loop** (G1.13 tail-coverage anchor; the judgement anchor sits in the
+      tail) — and a span **whose negation the extractor wavers on** (`polarity_waver.txt`,
+      the `"ambiguous"` polarity sentinel: must yield split clusters + a `provisional`
+      proposition, G1.14). Anchors carry **quotes, not hand-counted offsets** (the loader
+      locates each and asserts it is unique). The model-backed end-to-end run + gate
+      metric over this corpus is Trial A5; this is the labelled input it consumes.
 
 ## Phase risks / decisions
 

@@ -1,0 +1,66 @@
+# Phase-1 fixture corpus manifest (seed for the gate corpus; Trial A5).
+#
+# Loaded by tests/fixtures/corpus.py (stdlib tomllib — no new dependency) and validated
+# for self-consistency by tests/unit/test_corpus.py. Anchors carry the verbatim `quote`
+# (not a hand-counted offset, which would rot on the first edit); the loader locates each
+# quote and asserts it occurs exactly once, so the [start, end) it derives is unambiguous.
+#
+# Gold-label vocabulary (validated against the engine enums in iknos.types.epistemic):
+#   gold_epistemic_class : "observation" | "testimony" | "judgement"   (EpistemicClass)
+#   gold_polarity        : "asserted" | "negated"                       (Polarity)
+#                          | "ambiguous"  -> the G1.14 waver sentinel: multi-sample
+#                            extraction SHOULD split across polarities and the resulting
+#                            proposition(s) SHOULD be provisional. Not a Polarity member.
+
+schema_version = 1
+
+# ── Long document: the G1.13 multi-window anchor ───────────────────────────────────────
+# 8192 = MAX_MODEL_TOKENS (one embedding window). SentencePiece emits >= 1 token per
+# whitespace word, so tokens >= words; min_words > 8192 makes ">1 window under the
+# production model" provable in CI with no model in the loop. Keep the document above the
+# floor when editing.
+[[documents]]
+id = "long-case-file"
+filename = "documents/long_case_file.txt"
+role = "long_multiwindow"
+title = "Matter 2023-0417: Halden Maritime Holdings — Investigative Dossier"
+media_type = "text/plain"
+min_words = 8200
+
+  [[documents.anchors]]
+  quote = "The general ledger records an outbound wire transfer of USD 4,200,000 dated 14 March 2023 from the Halden Maritime operating account to an account at Brügen Privatbank."
+  gold_epistemic_class = "observation"
+  note = "G1.2 routing: a primary-record observation near the document body — ingests as a fact."
+
+  [[documents.anchors]]
+  quote = "In the professional judgement of the investigation team, the evidence assembled in this dossier is most consistent with a deliberate diversion of corporate funds orchestrated through a misuse of the treasury controls, rather than with an isolated processing error."
+  gold_epistemic_class = "judgement"
+  note = "G1.2 routing: the team's conclusion in the tail section — ingests as a defeasible judgement-claim, never a fact (and tests tail-window coverage, G1.13)."
+
+# ── Polarity-instability document: the G1.14 anchor ────────────────────────────────────
+[[documents]]
+id = "polarity-waver"
+filename = "documents/polarity_waver.txt"
+role = "polarity_waver"
+title = "Matter 2023-0417: Supplemental Investigator Note (Item 31)"
+media_type = "text/plain"
+min_words = 100
+
+  [[documents.anchors]]
+  quote = "Investigators could not exclude the possibility that Okonkwo had not authorised the wire transfer."
+  gold_polarity = "ambiguous"
+  note = "Double negation under an epistemic hedge ('could not exclude … had not authorised'). Multi-sample extraction is known to waver on its polarity; G1.14 must yield split clusters and a provisional proposition (twin quarantine), never agreement 1.0."
+
+# ── Clean baseline: the happy-path document ────────────────────────────────────────────
+[[documents]]
+id = "clean-baseline"
+filename = "documents/clean_baseline.txt"
+role = "clean_baseline"
+title = "Matter 2023-0417: Evidence Intake Summary (EX-2023-0001)"
+media_type = "text/plain"
+min_words = 100
+
+  [[documents.anchors]]
+  quote = "The forensic team received one sealed evidence bag from the Rotterdam field office on 3 April 2023."
+  gold_epistemic_class = "observation"
+  note = "Unambiguous, categorical observation — the stable-extraction control case against the polarity-waver anchor."

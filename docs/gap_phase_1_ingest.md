@@ -62,6 +62,28 @@ lifecycle, and `cypher_map` property fuzzing. Next: **G1.6 quarantine enforcemen
 Phase-2-gated (no SUPPORTS/REFUTES creation site to gate yet), so the remaining Phase-1 work
 is **G1.7b cross-doc reuse / G1.8 reference amortization** and **G1.10 multi-level/RAPTOR**.
 
+**Fixture corpus (exit-criterion seed) is now shipped** — `tests/fixtures/corpus/`: three
+real documents + a `manifest.toml` of regression anchors, a typed model-free/DB-free loader
+(`tests/fixtures/corpus.py`), and `tests/unit/test_corpus.py`. It carries the two required
+anchors — a > 8200-word document (G1.13: `tokens ≥ words > MAX_MODEL_TOKENS`, so multi-window
+is CI-provable without the model) and an `"ambiguous"`-polarity waver span (G1.14) — plus
+observation/judgement routing anchors (G1.2). Anchors store quotes, not offsets (located +
+uniqueness-checked at load). This is the labelled input Trial A5 (faithfulness-gate metric)
+consumes.
+
+**Re-assessment after Phase 2/3 merged to `main`** (G2.1–G2.7 boxes + reference binding +
+credibility + part-whole + provenance; G3.4–G3.9 reasoning core). Three items previously
+called "Phase-2-gated" were re-checked against the merged code:
+- **G1.6 quarantine enforcement** — still gated: no `SUPPORTS`/`REFUTES` creation site
+  exists yet (`composed_loop.py` documents the evidential layer as Phase-4 work). Land the
+  `is_provisional` gate where evidential edges are first created.
+- **G1.19 RRF fusion** — still gated: no hybrid-retrieval consumer queries both indexes yet
+  (Phase-4 candidate generation). Nothing to fuse into.
+- **G1.11 box on indexes** — partially unblocked (case boxes exist via G2.1), but propositions
+  are indexed in Phase 1 *before* any box is assigned at Phase-2 extract time; threading a box
+  through ingest needs an architectural decision, so it is sequenced after the un-gated work.
+Genuinely actionable un-gated Phase-1 work now: **G1.10**, **G1.7b**, **G1.8**, **G1.12**.
+
 ## Current implementation (baseline)
 
 The built proposition layer is sound and retained — its design is captured here
