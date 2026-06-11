@@ -11,9 +11,11 @@ disciplines, confidence pipeline, experiment), §7.2 (ensemble gate, hypothesis 
 §10 (`sign`/`strength`/`significance`).
 
 **Status — 🟡 adjudication core + persistence landed (G4.1, G4.4); candidate-generation funnel
-complete across both cheap stages (G4.2 slice 1 structural + slice 2 embedding k-NN);
-edge-judgment scoring core + blind LLM judge landed (G4.3 slice 1 subjective-logic algebra +
-slice 2 blind/randomized judge); AGE edge producer / operators / gate open.**
+complete across both cheap stages (G4.2 slice 1 structural + slice 2 embedding k-NN); the
+edge-judgment pipeline now runs end-to-end (G4.3 slice 1 subjective-logic algebra + slice 2
+blind/randomized judge + slice 3 AGE producer that persists the judged `SUPPORTS`/`REFUTES`
+edges) — funnel → judge → calibrated edge → QBAF is a closed loop; `corroborate`/
+`find-contradiction` operators + ensemble gate (G4.5) and the validation gate (G4.6) open.**
 G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
 the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
 conservative default, both retained at the seam), the `solve` bounded fixpoint (acyclic-exact,
@@ -38,8 +40,14 @@ temperature 0); it classifies **sign only** (supports/refutes/irrelevant — no 
 magnitude), drops `irrelevant`-plurality pairs, and folds the per-sample votes into the
 G4.3-slice-1 `opinion_from_evidence` → `discount` → projected-probability read-off — the
 calibrated `strength`, with a `sign_stable` finding when the panel splits direction (§13). It is
-the DB-free LLM layer between the funnel and the read-off; the AGE producer that writes the
-surviving edges is the next slice. **G4.2 slice 1**
+the DB-free LLM layer between the funnel and the read-off. **G4.3 slice 3** (`core/edge_producer.py`)
+closes the pipeline: the **AGE producer** reads the G4.2 candidate pool, resolves each node's
+`statement` + each evidence node's `effective_credibility`, runs the slice-2 judge concurrently, and
+writes each surviving `SUPPORTS`/`REFUTES` edge (calibrated `strength`, derived `significance`,
+`sign_stable` finding) plus a provenance `Action` (§10.1) in one transaction — keeping
+strength/significance/credibility the **three separate quantities** §3.1/§8/§9 mandate (strength the
+pure connection judgment; `effective_credibility` routed into `significance` per §9, not the
+strength discount). **G4.2 slice 1**
 (`core/candidates.py`) lands the candidate-generation funnel (§5.1): the recall-first **funnel
 core** (`funnel` + `CandidatePool`, with the union-over-intersect combination **decided by a
 fixture** — `DEFAULT_STRATEGY = UNION`, so the dissimilar refuter the embedding stage misses
@@ -50,10 +58,10 @@ judgment that consumes the survivors. **G4.2 slice 2** adds the **embedding k-NN
 `proposition_embeddings` vector, the `k` nearest claims by cosine union in as `EMBEDDING_KNN`, with
 the recall-first **no-similarity-floor decision** mirroring the funnel's `UNION` and the G1.16
 model-identity guard enforced). Coarse-to-fine (stage 3) + keyword co-occurrence remain documented
-seams. The rest of the edge-judgment pipeline (§8, G4.3 — per-model recalibration and the AGE
-producer that persists the judged `SUPPORTS`/`REFUTES` edges), the `corroborate` /
+seams. The remaining edge-judgment refinement (§8, G4.3 — per-model recalibration, identity until
+G4.6) and the tier-differentiated significance weighting are open seams; the `corroborate` /
 `find-contradiction` operators + ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6)
-are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
+are the next increments. See `gap_phase_4_linking_adjudication.md` for the build plan.
 
 ## Candidate generation (§5.1) — which pairs to assess
 
@@ -122,9 +130,21 @@ are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
       directions voted) is surfaced as a `sign_stable=False` finding (§13), the signal the
       G4.5 ensemble gate consumes. **Open:** per-model recalibration (a fitted curve, identity
       until G4.6) and cross-judge fusion (the ensemble, G4.5).)*
-- [ ] Write `SUPPORTS`/`REFUTES` edges carrying `sign`, fused/recalibrated `strength`,
+- [x] Write `SUPPORTS`/`REFUTES` edges carrying `sign`, fused/recalibrated `strength`,
       and `significance` (from the node/tier). Stored `strength` is **never** the raw
-      LLM number (§10).
+      LLM number (§10). *(G4.3 slice 3 — `core/edge_producer.py`: the AGE producer reads the
+      G4.2 candidate pool, resolves each node's `statement` + each evidence node's
+      `effective_credibility`, runs the slice-2 judge, and writes each surviving edge
+      (`merge_edge` `SUPPORTS`/`REFUTES`) with the **calibrated** `strength` (the multi-sample
+      opinion's projected probability), a derived `significance`, the `sign_stable` finding, and a
+      provenance `Action` (raw votes + sampling + `prompt_sha`/`schema_sha`/`schema_version`,
+      §10.1). **Reconciles the §8/§9 credibility routing:** strength stays the *pure connection
+      judgment* (judge fed identity reliability) and `effective_credibility` is routed into
+      `significance` (§9), keeping strength/significance/credibility the "three separate quantities,
+      never merged" (§3.1/§8). The QBAF adapter (G4.4) consumes exactly these edges. **Open:**
+      per-model recalibration (the fitted consistency→correctness curve, identity until G4.6) and
+      tier-differentiated significance (the `SignificancePolicy` is uniform until G4.6 calibrates
+      it).)*
 - [ ] `corroborate` operator: hypothesis → gather supporting/refuting evidence.
 - [ ] `find-contradiction` operator + **ensemble gate** (multi-sample LLM + symbolic +
       temporal agreement) required before any `REFUTES` (§7.2).
