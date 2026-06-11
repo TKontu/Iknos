@@ -12,8 +12,10 @@ from iknos.core.candidates import (
     CandidateGenerationAdapter,
     CandidatePool,
     CandidateSource,
+    EmbeddedNode,
     FunnelStrategy,
     InvolvesRow,
+    embedding_knn_candidates,
     funnel,
     structural_entity_candidates,
 )
@@ -160,3 +162,117 @@ def test_candidate_key_includes_direction() -> None:
 def test_adapter_is_db_free_to_construct() -> None:
     # Mirrors the QBAF/derivation adapters: constructing the adapter touches no DB.
     assert isinstance(CandidateGenerationAdapter(), CandidateGenerationAdapter)
+
+
+# --- stage 2: the embedding k-NN prior (§5.1) -------------------------------------------------
+
+
+def _embedded(node: str, *vector: float, model: str = "m") -> EmbeddedNode:
+    """An ``(node, model, vector)`` triple — one of the node's EVIDENCED_BY proposition vectors."""
+    return EmbeddedNode(node=node, model=model, vector=tuple(vector))
+
+
+# --- the decision fixture (§5.1): recall-first top-k over a similarity floor -------------------
+
+
+def test_decision_fixture_knn_topk_keeps_dissimilar_refuter_a_floor_drops_it() -> None:
+    """The embedding analogue of the union/intersect fixture, same dissimilar-refuter throughline:
+    pure top-k keeps a real-but-dissimilar refuter; a cosine floor drops exactly that refuter."""
+    h = _embedded("H", 1.0, 0.0)
+    f_sup = _embedded("F_sup", 0.99, 0.14)  # near-parallel to H: high cosine (a supporter)
+    f_ref = _embedded("F_ref", 0.20, 0.98)  # near-orthogonal: low cosine, but a genuine refuter
+
+    recall = embedding_knn_candidates(hypotheses=[h], evidence=[f_sup, f_ref], k=10)
+    assert {c.key for c in recall} == {("F_sup", "H"), ("F_ref", "H")}
+
+    # A floor (the precision pre-filter, retained at the seam) re-introduces the support-bias.
+    precision = embedding_knn_candidates(
+        hypotheses=[h], evidence=[f_sup, f_ref], k=10, min_similarity=0.5
+    )
+    assert {c.key for c in precision} == {("F_sup", "H")}
+
+
+def test_knn_limits_to_the_k_nearest() -> None:
+    h = _embedded("H", 1.0, 0.0)
+    near = _embedded("E_near", 1.0, 0.1)  # cosine ~0.995
+    mid = _embedded("E_mid", 1.0, 1.0)  # cosine ~0.707
+    far = _embedded("E_far", 0.0, 1.0)  # cosine 0.0
+    pool = embedding_knn_candidates(hypotheses=[h], evidence=[near, mid, far], k=2)
+    assert {c.key for c in pool} == {("E_near", "H"), ("E_mid", "H")}
+
+
+def test_knn_only_compares_within_one_embedding_model() -> None:
+    """The G1.16 vector-space identity guard: cosine across models is meaningless, so not paired."""
+    h = _embedded("H", 1.0, 0.0, model="m1")
+    same = _embedded("E_same", 1.0, 0.0, model="m1")
+    other = _embedded("E_other", 1.0, 0.0, model="m2")  # identical vector, different space
+    pool = embedding_knn_candidates(hypotheses=[h], evidence=[same, other], k=10)
+    assert {c.key for c in pool} == {("E_same", "H")}
+
+
+def test_knn_candidate_carries_embedding_source_and_is_unscored() -> None:
+    h = _embedded("H", 1.0, 0.0)
+    e = _embedded("E", 1.0, 0.0)
+    [cand] = embedding_knn_candidates(hypotheses=[h], evidence=[e], k=1)
+    assert cand.sources == frozenset({CandidateSource.EMBEDDING_KNN})
+    assert cand.shared_entities == frozenset()  # the embedding stage supplies no entity rationale
+
+
+def test_knn_node_with_several_propositions_is_one_candidate_by_its_best_match() -> None:
+    h = _embedded("H", 1.0, 0.0)
+    # Evidence node E is EVIDENCED_BY two propositions: one orthogonal, one parallel to H.
+    e_far = EmbeddedNode(node="E", model="m", vector=(0.0, 1.0))
+    e_near = EmbeddedNode(node="E", model="m", vector=(1.0, 0.0))
+    pool = embedding_knn_candidates(hypotheses=[h], evidence=[e_far, e_near], k=10)
+    assert [c.key for c in pool] == [("E", "H")]  # one candidate, not one per proposition
+
+    # The best-matching prop represents the node: E clears a floor only its near prop passes.
+    floored = embedding_knn_candidates(
+        hypotheses=[h], evidence=[e_far, e_near], k=10, min_similarity=0.9
+    )
+    assert [c.key for c in floored] == [("E", "H")]
+
+
+def test_knn_never_pairs_a_node_with_itself() -> None:
+    # A node id appearing on both sides (a node that is also a target) is never self-paired.
+    h = _embedded("X", 1.0, 0.0)
+    e_self = _embedded("X", 1.0, 0.0)
+    e_other = _embedded("E", 1.0, 0.0)
+    pool = embedding_knn_candidates(hypotheses=[h], evidence=[e_self, e_other], k=10)
+    assert {c.key for c in pool} == {("E", "X")}
+
+
+def test_knn_is_deterministic_regardless_of_input_order() -> None:
+    h = _embedded("H", 1.0, 0.0)
+    a = _embedded("A", 1.0, 0.1)
+    b = _embedded("B", 1.0, 0.1)  # cosine tie with A -> broken by node id
+    fwd = embedding_knn_candidates(hypotheses=[h], evidence=[a, b], k=10)
+    rev = embedding_knn_candidates(hypotheses=[h], evidence=[b, a], k=10)
+    assert [c.key for c in fwd] == [c.key for c in rev] == [("A", "H"), ("B", "H")]
+
+
+def test_knn_empty_inputs_and_nonpositive_k_yield_nothing() -> None:
+    h = _embedded("H", 1.0, 0.0)
+    e = _embedded("E", 1.0, 0.0)
+    assert embedding_knn_candidates(hypotheses=[], evidence=[e], k=10) == []
+    assert embedding_knn_candidates(hypotheses=[h], evidence=[], k=10) == []
+    assert embedding_knn_candidates(hypotheses=[h], evidence=[e], k=0) == []
+
+
+def test_funnel_unions_structural_and_embedding_sources() -> None:
+    struct = _structural("F1", "H", "actorA")  # structural-only
+    emb_same = Candidate(
+        evidence="F1", hypothesis="H", sources=frozenset({CandidateSource.EMBEDDING_KNN})
+    )
+    emb_only = Candidate(
+        evidence="F2", hypothesis="H", sources=frozenset({CandidateSource.EMBEDDING_KNN})
+    )
+    by_key = {c.key: c for c in funnel([struct], [emb_same, emb_only]).candidates}
+    # The pair both stages found carries both sources + the structural entity rationale.
+    assert by_key[("F1", "H")].sources == {
+        CandidateSource.STRUCTURAL_ENTITY,
+        CandidateSource.EMBEDDING_KNN,
+    }
+    assert by_key[("F1", "H")].shared_entities == frozenset({"actorA"})
+    # The embedding-only pair survives under the recall-first UNION default.
+    assert ("F2", "H") in by_key

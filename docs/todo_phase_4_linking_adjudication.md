@@ -10,8 +10,9 @@ Phase 3 as a thin slice.
 disciplines, confidence pipeline, experiment), §7.2 (ensemble gate, hypothesis state),
 §10 (`sign`/`strength`/`significance`).
 
-**Status — 🟡 adjudication core + persistence landed (G4.1, G4.4); candidate-generation +
-edge-judgment cores started (G4.2/G4.3 slice 1); LLM judge / operators / gate open.**
+**Status — 🟡 adjudication core + persistence landed (G4.1, G4.4); candidate-generation funnel
+complete across both cheap stages (G4.2 slice 1 structural + slice 2 embedding k-NN);
+edge-judgment core started (G4.3 slice 1); LLM judge / operators / gate open.**
 G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
 the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
 conservative default, both retained at the seam), the `solve` bounded fixpoint (acyclic-exact,
@@ -33,8 +34,12 @@ core** (`funnel` + `CandidatePool`, with the union-over-intersect combination **
 fixture** — `DEFAULT_STRATEGY = UNION`, so the dissimilar refuter the embedding stage misses
 survives; intersect retained at the seam) + the **structural-entity prior** (stage 1: shared
 `INVOLVES` `Actor`/`Object`, active-box-scoped, evidence → hypothesis), separate from the §8
-judgment that consumes the survivors. The embedding k-NN (stage 2) + coarse-to-fine (stage 3) +
-keyword co-occurrence are documented seams. The rest of the edge-judgment pipeline (§8, G4.3 — the
+judgment that consumes the survivors. **G4.2 slice 2** adds the **embedding k-NN workhorse** (stage
+2: `embedding_knn_candidates` — each node traced `EVIDENCED_BY` → `Proposition` → its
+`proposition_embeddings` vector, the `k` nearest claims by cosine union in as `EMBEDDING_KNN`, with
+the recall-first **no-similarity-floor decision** mirroring the funnel's `UNION` and the G1.16
+model-identity guard enforced). Coarse-to-fine (stage 3) + keyword co-occurrence remain documented
+seams. The rest of the edge-judgment pipeline (§8, G4.3 — the
 blind/randomized LLM judge, per-model recalibration, the AGE producer), the `corroborate` /
 `find-contradiction` operators + ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6)
 are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
@@ -49,9 +54,13 @@ are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
       `structural_entity_candidates` ships the shared-`INVOLVES`-entity prior (stage 1),
       active-box-scoped via the shared reads. **Open:** sparse/keyword co-occurrence — a further
       `STRUCTURAL_KEYWORD` `CandidateSource` (`PropositionLexicalIndex`) that unions at the seam.)*
-- [ ] Embedding **k-NN** over pgvector (approximate NN, sublinear) — the workhorse. *(G4.2 slice-2
-      seam: needs the cross-store pgvector read + span/proposition → reasoning-node tracing; unions
-      in as an `EMBEDDING_KNN` source.)*
+- [x] Embedding **k-NN** over pgvector — the workhorse. *(G4.2 slice 2 — `embedding_knn_candidates`
+      + the `CandidateGenerationAdapter` cross-store read: each active reasoning node is traced
+      `EVIDENCED_BY` → `Proposition` → its `proposition_embeddings` vector, and the **`k` nearest
+      claims by cosine** become `EMBEDDING_KNN` candidates per hypothesis. **Exact** in-memory
+      cosine over the active working set (the recall ceiling the §8 gate measures any ANN index
+      against); the model column is the G1.16 vector-space identity guard (no cross-model cosine).
+      The pgvector `<=>` ivfflat/hnsw push-down is the documented performance seam.)*
 - [ ] **Coarse-to-fine** over the §2 abstraction levels: match coarse, descend to
       proposition pairs only within survivors. *(G4.2 slice-2 seam: needs the `partOf` level
       derivation, §14.)*

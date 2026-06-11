@@ -24,7 +24,7 @@ until the gate passes").
 | ID | Increment | Depends on | State |
 |----|-----------|------------|-------|
 | **G4.1** | **QBAF gradual-semantics adjudication core** — the semantics decision (DF-QuAD vs Quadratic Energy) + the pure `solve` engine (bounded fixpoint, non-convergence surfaced) + verdict banding / computed hypothesis state | Phase 3 Layer B (contract only) | **shipped (this increment)** |
-| G4.2 | **Candidate generation** (§5.1) — the cheap→expensive funnel: structural priors (shared `INVOLVES`, co-occurrence), embedding k-NN over pgvector, coarse-to-fine over §2 levels; tuned for recall early | Phase 1 embeddings, Phase 2 graph | **slice 1 shipped** (the recall-first funnel core + the structural-entity prior, `core/candidates.py`); embedding k-NN + coarse-to-fine + keyword co-occurrence planned |
+| G4.2 | **Candidate generation** (§5.1) — the cheap→expensive funnel: structural priors (shared `INVOLVES`, co-occurrence), embedding k-NN over pgvector, coarse-to-fine over §2 levels; tuned for recall early | Phase 1 embeddings, Phase 2 graph | **slices 1–2 shipped** (`core/candidates.py`): the recall-first funnel core + the structural-entity prior (slice 1) and the embedding k-NN workhorse over `proposition_embeddings` (slice 2); coarse-to-fine + keyword co-occurrence planned |
 | G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | **slice 1 shipped** (the subjective-logic confidence-scoring core, `core/subjective_logic.py`); LLM judge + recalibration + AGE producer planned |
 | **G4.4** | **QBAF persistence adapter** — load the active `SUPPORTS`/`REFUTES` subgraph + hypothesis base scores (Layer B) from AGE → `BAF`; write the computed `acceptability` / `state` back to the `Hypothesis` node. The Phase-4 analogue of G3.4 | G4.1, Phase 2/3 adapters | **shipped (this increment)** |
 | G4.5 | **`corroborate` / `find-contradiction` operators + ensemble gate** (§7.2) — gather supporting/refuting evidence; `find-contradiction` as a first-class refuter generator; the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement) that authorises a persisted `refuted` flip; wires the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize` driver | G4.3, G4.4, G3.9 | planned |
@@ -182,11 +182,7 @@ the pre-existing `resolve.py` error remains); 607 unit tests pass.
 
 **Deferred (documented seams, not regressions) — the rest of G4.2:**
 
-- **Embedding nearest-neighbour (stage 2, the workhorse)** — each node's pgvector k-NN as
-  relatedness candidates; sublinear, reusing the dense index. Deferred because it needs the
-  cross-store read (the vectors live in relational `document_embeddings` / `proposition_embeddings`,
-  the nodes in AGE) + the span/proposition → reasoning-node tracing. Unions in as an
-  `EMBEDDING_KNN` `CandidateSource` without a contract change.
+- **Embedding nearest-neighbour (stage 2, the workhorse)** — *shipped in slice 2, below.*
 - **Coarse-to-fine (stage 3)** — reuse the §2 multi-level chunk hierarchy as a pruning tree (match
   coarse, descend within survivors). Needs the `partOf` level derivation (§14).
 - **Sparse/keyword co-occurrence** — the other half of stage 1 (the `PropositionLexicalIndex`);
@@ -196,6 +192,65 @@ the pre-existing `resolve.py` error remains); 607 unit tests pass.
   contradiction-search operator is G4.5.
 - **Conclusion-as-target** — slice 1 generates evidence → `Hypothesis`; pairing evidence against a
   `Conclusion` target (also valid per §5) is an additive extension of the partition.
+
+## G4.2 — Candidate generation, slice 2: the embedding k-NN workhorse
+
+**What shipped.** Stage 2 of the §5.1 funnel in `core/candidates.py` — the **embedding
+nearest-neighbour** generator, the "workhorse" that pulls relatedness candidates the structural
+prior (constituent-entity overlap) cannot see. Same pure/DB split as slice 1: a DB-free k-NN core
++ a cross-store read in the adapter.
+
+**1. The cross-store tracing chain (the slice's real work).** A reasoning node has no embedding of
+its own; its dense vector is its **claim's** vector. So the adapter rides the §4/§10 provenance:
+`(n)-[:EVIDENCED_BY]->(p:Proposition)` in AGE gives each active node its proposition(s), and
+`proposition_embeddings` (relational pgvector) gives each proposition its `(model, vector)` — the
+two stores served by **one session** (the engine bootstraps AGE *and* pgvector on every
+connection, so no second connection is opened). `(p:Proposition)` label-matching keeps the
+claim-space edges and drops the text-locator `(:Span)` ones; a node with no proposition embedding
+(an un-propositionized `Hypothesis` stub) simply yields no embedding candidate — the structural
+recall floor still covers it, so the stage degrades gracefully against the current partial
+hypothesis pipeline.
+
+**2. The k-NN core, recall-first (slice 2's decision fixture).** `embedding_knn_candidates` ranks,
+for each hypothesis, the evidence nodes by **best cosine** over their proposition vectors and emits
+the top `k` as `EMBEDDING_KNN` candidates (evidence → hypothesis; unscored — the cosine rank is a
+transient selection signal, never persisted, precision is the §8 LLM stage's job). Two decisions
+recorded eyes-open, both the same *default-to-what-cannot-lose-a-candidate* shape as the funnel's
+`UNION`, the QBAF's `DF_QUAD`, fusion's `AVERAGING` and Layer B's Gödel:
+
+- **No similarity floor (`DEFAULT_MIN_SIMILARITY = None`)** — pure rank-based top-`k`. The
+  **dissimilar-refuter throughline** again: a refuter can sit at a *low* cosine yet inside the
+  top-`k`; a floor would drop exactly that refuter, re-introducing the support-bias §5.1 forbids.
+  The floor is retained at the seam (the `min_similarity` parameter) as a precision pre-filter for
+  a recall-saturated sub-domain. Decided with the `test_candidates.py` dissimilar-refuter k-NN
+  fixture (top-`k` keeps the refuter / a floor drops it).
+- **The G1.16 vector-space identity guard** — two vectors are compared **only when their `model`
+  matches**; cosine across embedding models is meaningless, so a hypothesis and evidence embedded
+  under different models are never paired (no candidate), exactly as ingest refuses to mix two
+  spaces in place.
+
+**3. Exact in-memory, with the ANN push-down as the seam.** The k-NN math is **exact** cosine over
+the active working set, not an approximate pgvector ivfflat/hnsw scan. Deliberate: the exact set is
+the **recall ceiling** the validation gate (G4.6) measures any approximate index against (you
+cannot calibrate refuter-recall against an ANN whose own recall is unknown), and §9/§11 already
+bound the active set to a scoped working subset, so exact is affordable now. The pgvector `<=>`
+index push-down replaces the in-memory loop **without a contract change** (it unions in as the same
+`EMBEDDING_KNN` source) the day the active set outgrows it — the documented performance seam.
+
+**Tests** (`tests/unit/test_candidates.py` DB-free, 9 new; `tests/integration/test_candidates.py`
+real AGE+pgvector, 1 new). Unit: the decision fixture (top-`k` keeps the dissimilar refuter / a
+floor drops it), the k limit, the model-identity guard (identical vector, different model → not
+paired), the unscored `EMBEDDING_KNN` provenance, a multi-proposition node collapsing to one
+candidate by its best match, no self-pairing, determinism, empty/non-positive-`k`, and the funnel
+unioning the structural + embedding sources of one pair. Integration: `generate` proposes the near
+claims via the live node → proposition → pgvector chain, and a different-`model` embedding and a
+deprecated-box claim are both excluded. ruff + `ruff format` + mypy(`src/iknos`) clean (only the
+pre-existing `resolve.py` error remains); 616 unit tests pass.
+
+**Deferred (documented seams, not regressions) — the rest of G4.2:** coarse-to-fine (stage 3, needs
+the `partOf` level derivation, §14), sparse/keyword co-occurrence (the `STRUCTURAL_KEYWORD` source),
+`find-contradiction` as a first-class refuter generator (G4.5), Conclusion-as-target, and the
+pgvector ANN index push-down (the performance seam above).
 
 ## G4.3 — Edge-judgment pipeline, slice 1: the subjective-logic confidence-scoring core
 

@@ -13,19 +13,24 @@ A *candidate* is an ordered ``(evidence → hypothesis)`` pair — the schema di
 bearer and which is the target. ``sign`` is **not** decided here (that is the §8 "sign before
 magnitude" judgment, G4.3); generation only proposes *which pairs to look at*.
 
-**The funnel, cheap → expensive (§5.1).** Stage 4 (LLM adjudication) is G4.3; this increment
-ships the recall-first funnel core and **stage 1, the structural-entity prior** — the refuter-safe
-recall floor — with the other cheap generators as documented seams:
+**The funnel, cheap → expensive (§5.1).** Stage 4 (LLM adjudication) is G4.3; slice 1 shipped the
+recall-first funnel core and **stage 1, the structural-entity prior** (the refuter-safe recall
+floor), slice 2 adds **stage 2, the embedding nearest-neighbour workhorse**, with the remaining
+cheap generators as documented seams:
 
 1. **Structural priors** — near-free. Two reasoning nodes sharing an ``Actor``/``Object`` (via an
-   ``INVOLVES`` edge), restricted to the active box scope, are candidates. *(Shipped:
+   ``INVOLVES`` edge), restricted to the active box scope, are candidates. *(Shipped, slice 1:
    :func:`structural_entity_candidates`. The sparse/keyword co-occurrence prior is a further
    :class:`CandidateSource` that unions in at the same seam.)*
-2. **Embedding nearest-neighbour** — each node's pgvector k-NN are relatedness candidates;
-   sublinear, the workhorse. *(Deferred slice-2 seam: needs the cross-store pgvector read +
-   span/proposition → reasoning-node tracing.)*
+2. **Embedding nearest-neighbour** — each reasoning node's k nearest claims (by cosine over the
+   ``proposition_embeddings`` dense index it is ``EVIDENCED_BY``, §4) are relatedness candidates;
+   the workhorse stage. *(Shipped, slice 2: :func:`embedding_knn_candidates` + the
+   :class:`CandidateGenerationAdapter` cross-store read. The k-NN math is **exact** in-memory over
+   the active working set — the recall ceiling the validation gate G4.6 measures any approximate
+   ANN index against; the pgvector ``<=>`` ivfflat/hnsw push-down is the performance seam for when
+   the active set outgrows in-memory search, unioning in without a contract change.)*
 3. **Coarse-to-fine** — reuse the §2 multi-level chunk hierarchy as a pruning tree: match coarse,
-   descend to proposition pairing only within survivors. *(Deferred slice-2 seam: needs the
+   descend to proposition pairing only within survivors. *(Deferred seam: needs the
    ``partOf`` level derivation.)*
 
 **Tune for recall early, precision late (§5.1).** A missed candidate is an edge never considered
@@ -50,6 +55,7 @@ reads in its ``async`` methods behind a lazy ``iknos.db.age`` import, reusing th
 active-subgraph definition cannot diverge from the propagation/adjudication loads.
 """
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -72,9 +78,9 @@ class CandidateSource(StrEnum):
     """
 
     STRUCTURAL_ENTITY = "structural-entity"  # shared INVOLVES Actor/Object (shipped — stage 1)
-    # Deferred cheap generators (slice-2 seams; see module docstring):
+    EMBEDDING_KNN = "embedding-knn"  # proposition-embedding nearest-neighbour (shipped — stage 2)
+    # Deferred cheap generator (seam; see module docstring):
     # STRUCTURAL_KEYWORD = "structural-keyword"  # sparse/keyword co-occurrence (stage 1)
-    # EMBEDDING_KNN = "embedding-knn"            # pgvector nearest-neighbour (stage 2)
 
 
 class FunnelStrategy(StrEnum):
@@ -101,6 +107,33 @@ class FunnelStrategy(StrEnum):
 
 DEFAULT_STRATEGY = FunnelStrategy.UNION
 """Recall-first union (§5.1) — never lose a candidate a cheap stage found."""
+
+
+DEFAULT_K = 10
+"""How many nearest claims the embedding stage proposes per node (§5.1).
+
+A recall/precision tunable, not an epistemic either/or — wider ``k`` raises recall at the cheap
+stage and leaves more for the §8 LLM stage to reject; the validation gate (G4.6) calibrates it
+against measured candidate/refuter recall. Defaulted generously (precision is the LLM's job)."""
+
+
+DEFAULT_MIN_SIMILARITY: float | None = None
+"""The embedding stage's recall-first decision (G4.2's UNION-style fixture), recorded eyes-open.
+
+Whether to apply a **cosine-similarity floor** to the k-NN is the embedding analogue of the
+funnel's UNION-vs-INTERSECT choice, and it is the **same dissimilar-refuter throughline** (§5.1):
+
+- **``None`` (the default) — pure rank-based top-k, no floor.** A refuting claim can be
+  semantically *dissimilar* to the hypothesis it attacks, so it sits at a low cosine yet still
+  inside the top-``k``; a floor would **drop exactly that refuter**, re-introducing the
+  support-bias §5.1 forbids. *Default to the operator that cannot lose a true candidate.*
+- **A floor in ``[0, 1]``** — keep only neighbours at least that similar: a precision pre-filter
+  for a recall-saturated sub-domain. Retained at the seam (the ``min_similarity`` parameter of
+  :func:`embedding_knn_candidates`), never the candidate-generation default.
+
+Parallels the Layer-B (Gödel), QBAF (DF-QuAD), fusion (averaging) and funnel (UNION) choices —
+decided with the :func:`~tests.unit.test_candidates` dissimilar-refuter k-NN fixture. Reversible —
+a value, not a branch."""
 
 
 @dataclass(frozen=True)
@@ -156,6 +189,26 @@ class InvolvesRow:
     role: str | None = None
 
 
+@dataclass(frozen=True)
+class EmbeddedNode:
+    """One reasoning node's dense vector for the embedding stage — its claim's proposition vector.
+
+    A reasoning node (``Fact``/``Conclusion``/``Hypothesis``) is ``EVIDENCED_BY`` one or more
+    ``Proposition``s (§4, §10), each embedded in ``proposition_embeddings``; this is one such
+    ``(node, model, vector)`` triple. A node with several propositions yields several
+    :class:`EmbeddedNode`s sharing ``node`` — the k-NN represents the node by its **best-matching**
+    proposition (recall-first; a node is a candidate if *any* of its claims is near the target).
+
+    ``model`` is the embedding-model id (``proposition_embeddings.model``) — the **vector-space
+    identity** (G1.16): cosine across two models is meaningless, so :func:`embedding_knn_candidates`
+    only ever compares two vectors with the *same* ``model``. ``vector`` is the dense embedding.
+    """
+
+    node: NodeId
+    model: str
+    vector: tuple[float, ...]
+
+
 def structural_entity_candidates(
     *,
     hypotheses: Iterable[NodeId],
@@ -205,6 +258,98 @@ def structural_entity_candidates(
         )
         for (e, h), entities in shared.items()
     ]
+
+
+def _cosine_similarity(a: tuple[float, ...], b: tuple[float, ...]) -> float:
+    """Cosine of two equal-length dense vectors, in ``[-1, 1]`` (``0.0`` if either is the zero
+    vector — undefined direction contributes no relatedness rather than raising)."""
+    dot = 0.0
+    na = 0.0
+    nb = 0.0
+    for x, y in zip(a, b, strict=True):
+        dot += x * y
+        na += x * x
+        nb += y * y
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / math.sqrt(na * nb)
+
+
+def embedding_knn_candidates(
+    *,
+    hypotheses: Iterable[EmbeddedNode],
+    evidence: Iterable[EmbeddedNode],
+    k: int = DEFAULT_K,
+    min_similarity: float | None = DEFAULT_MIN_SIMILARITY,
+) -> list[Candidate]:
+    """Stage 2 (§5.1): pair every hypothesis with its ``k`` nearest evidence claims by cosine.
+
+    Pure (DB-free). For each hypothesis node, evidence nodes are ranked by the **best** cosine
+    similarity over their proposition vectors and the top ``k`` distinct nodes become candidates,
+    directed evidence → hypothesis (the schema direction a ``SUPPORTS``/``REFUTES`` edge runs,
+    §5/§10), tagged :attr:`CandidateSource.EMBEDDING_KNN`. The pair is **unscored** (recall-first;
+    the cosine rank is a transient selection signal, not persisted — precision is the §8 LLM
+    stage's job), so the embedding stage supplies no ``shared_entities`` rationale.
+
+    **Vector-space identity guard (G1.16).** Two vectors are compared **only when their ``model``
+    matches** — cosine across embedding models is meaningless. A hypothesis and a piece of evidence
+    embedded under different models are simply never compared (no candidate), exactly as a span and
+    a proposition in different spaces are kept apart at ingest.
+
+    **The recall-first selection (the :data:`DEFAULT_MIN_SIMILARITY` decision).** With
+    ``min_similarity`` unset (the default), selection is pure rank-based top-``k`` with **no
+    distance floor**, so a dissimilar-but-real refuter inside the top ``k`` survives; passing a
+    floor keeps only neighbours at least that similar (a precision pre-filter, never the default).
+
+    Exact in-memory cosine over the active working set — the recall ceiling an approximate pgvector
+    ANN index is later measured against (G4.6), and the seam where the ``<=>`` push-down replaces
+    this loop without changing the contract. Determinism: ties break by descending similarity then
+    node id, so a replay/trace is stable (§10) regardless of input order.
+    """
+    if k <= 0:
+        return []
+
+    # Group each side's vectors by node — a node may be EVIDENCED_BY several propositions.
+    hyp_vecs: dict[NodeId, list[EmbeddedNode]] = {}
+    for en in hypotheses:
+        hyp_vecs.setdefault(en.node, []).append(en)
+    ev_vecs: dict[NodeId, list[EmbeddedNode]] = {}
+    for en in evidence:
+        ev_vecs.setdefault(en.node, []).append(en)
+
+    candidates: list[Candidate] = []
+    for h, h_entries in hyp_vecs.items():
+        # Best same-model cosine between this hypothesis and each evidence node (None = not
+        # comparable: no shared vector space). A self-pair (h is also evidence) is skipped —
+        # candidates run evidence → hypothesis only, never a node against itself.
+        scored: list[tuple[float, NodeId]] = []
+        for e, e_entries in ev_vecs.items():
+            if e == h:
+                continue
+            best: float | None = None
+            for he in h_entries:
+                for ee in e_entries:
+                    if he.model != ee.model:
+                        continue
+                    sim = _cosine_similarity(he.vector, ee.vector)
+                    if best is None or sim > best:
+                        best = sim
+            if best is None:
+                continue
+            if min_similarity is not None and best < min_similarity:
+                continue
+            scored.append((best, e))
+
+        scored.sort(key=lambda s: (-s[0], s[1]))
+        for _sim, e in scored[:k]:
+            candidates.append(
+                Candidate(
+                    evidence=e,
+                    hypothesis=h,
+                    sources=frozenset({CandidateSource.EMBEDDING_KNN}),
+                )
+            )
+    return candidates
 
 
 def funnel(
@@ -289,23 +434,83 @@ class CandidateGenerationAdapter:
             for nid, eid, role in rows
         ]
 
+    async def _load_evidenced_propositions(self, session: object) -> list[tuple[NodeId, NodeId]]:
+        """Each current reasoning node paired with a ``Proposition`` it is ``EVIDENCED_BY`` (§4).
+
+        The node → claim provenance link the embedding stage rides: a reasoning node's dense vector
+        is the row its source ``Proposition`` has in ``proposition_embeddings``. The node must be
+        bitemporally current (``valid_to IS NULL``); the proposition is immutable content (no
+        ``valid_to``), and ``(p:Proposition)`` label-matching keeps the claim-space ``EVIDENCED_BY``
+        edges (node → Proposition) and excludes the text-locator ones (node → Span). Active-box
+        scoping is applied in :meth:`generate` against the shared active-node universe.
+        """
+        from iknos.db.age import execute_cypher, unquote_agtype
+
+        rows = await execute_cypher(
+            session,  # type: ignore[arg-type]
+            "MATCH (n)-[:EVIDENCED_BY]->(p:Proposition) WHERE n.valid_to IS NULL RETURN n.id, p.id",
+            returns="nid agtype, pid agtype",
+        )
+        return [(unquote_agtype(nid), unquote_agtype(pid)) for nid, pid in rows]
+
+    async def _load_proposition_vectors(
+        self, session: object, proposition_ids: set[NodeId]
+    ) -> dict[NodeId, list[tuple[str, tuple[float, ...]]]]:
+        """Dense ``proposition_embeddings`` rows for the given propositions — the cross-store read.
+
+        The vectors live in the relational pgvector store, the nodes in AGE; one shared session
+        serves both (the engine bootstraps AGE *and* pgvector on every connection). Returns, per
+        proposition id, its ``(model, vector)`` rows — normally one; more than one only
+        mid-model-migration, and :func:`embedding_knn_candidates` keeps each in its own vector space
+        (the G1.16 identity guard), so they are never silently mixed.
+        """
+        if not proposition_ids:
+            return {}
+        import uuid as _uuid
+
+        from sqlalchemy import select
+
+        from iknos.db.orm import PropositionEmbedding
+
+        result = await session.execute(  # type: ignore[attr-defined]
+            select(
+                PropositionEmbedding.proposition_id,
+                PropositionEmbedding.model,
+                PropositionEmbedding.embedding,
+            ).where(
+                PropositionEmbedding.proposition_id.in_(
+                    [_uuid.UUID(pid) for pid in proposition_ids]
+                )
+            )
+        )
+        by_prop: dict[NodeId, list[tuple[str, tuple[float, ...]]]] = {}
+        for prop_id, model, embedding in result.all():
+            by_prop.setdefault(str(prop_id), []).append((model, tuple(float(x) for x in embedding)))
+        return by_prop
+
     async def generate(
         self,
         session: object,
         *,
         strategy: FunnelStrategy = DEFAULT_STRATEGY,
+        k: int = DEFAULT_K,
     ) -> CandidatePool:
         """Read the active subgraph and run the funnel — the read path G4.3 consumes.
 
         Partitions the active reasoning nodes into hypotheses (the targets) and evidence
-        (everything else — ``Fact``/``Conclusion``), scopes the ``INVOLVES`` rows to that active
-        universe, runs stage 1, and folds it through :func:`funnel`. (Embedding-NN / coarse-to-fine
-        are the slice-2 generators that union in here without changing the contract.)
+        (everything else — ``Fact``/``Conclusion``), then folds two cheap stages through
+        :func:`funnel`: **stage 1** (the structural-entity prior, scoping the ``INVOLVES`` rows to
+        the active universe) and **stage 2** (the embedding k-NN, tracing each active node to its
+        ``EVIDENCED_BY`` proposition vector and proposing the ``k`` nearest per hypothesis). A node
+        with no proposition embedding (e.g. an un-propositionized hypothesis stub) simply
+        contributes no embedding candidate — the structural recall floor still covers it.
+        (Coarse-to-fine is the further generator that unions in here without a contract change.)
         """
         active_box_ids = await load_active_box_ids(session)
         nodes = await load_reasoning_nodes(session)
         hyp_ids = await load_hypothesis_ids(session)
         involves = await self._load_involves(session)
+        node_props = await self._load_evidenced_propositions(session)
 
         active_ids = {n.id for n in nodes if active_box_ids is None or n.box in active_box_ids}
         hypotheses = active_ids & hyp_ids
@@ -315,7 +520,19 @@ class CandidateGenerationAdapter:
         structural = structural_entity_candidates(
             hypotheses=hypotheses, evidence=evidence, involves=involves_active
         )
-        return funnel(structural, strategy=strategy)
+
+        # Stage 2: trace active node -> EVIDENCED_BY proposition -> pgvector row, then k-NN.
+        node_props_active = [(n, p) for n, p in node_props if n in active_ids]
+        vectors = await self._load_proposition_vectors(session, {p for _n, p in node_props_active})
+        hyp_embedded: list[EmbeddedNode] = []
+        ev_embedded: list[EmbeddedNode] = []
+        for n, p in node_props_active:
+            for model, vec in vectors.get(p, ()):
+                bucket = hyp_embedded if n in hyp_ids else ev_embedded
+                bucket.append(EmbeddedNode(node=n, model=model, vector=vec))
+        embedding = embedding_knn_candidates(hypotheses=hyp_embedded, evidence=ev_embedded, k=k)
+
+        return funnel(structural, embedding, strategy=strategy)
 
 
 def _opt_str(v: object) -> str | None:
