@@ -1,4 +1,4 @@
-"""Layer B — confidence valuation: the semiring algebra (G3.5, architecture §12, §7.1).
+"""Layer B — confidence valuation over a semiring (G3.5 algebra + G3.6 engine; §12, §7.1).
 
 Layer B owns **strength**. On exactly the nodes Layer A (``core/truth_maintenance.py``)
 certifies as *well-founded*-supported, it computes a ``[0, 1]`` confidence as a least
@@ -7,10 +7,14 @@ merged (§12): Layer A's integer support-count answers *which* / *by how many de
 Layer B's confidence answers *how strongly*. Conflating them reintroduces the exact bug
 the split exists to avoid — confidence that double-counts or fails to converge on cycles.
 
-**This module is the algebra, not the engine.** §12 mandates that the
-**Viterbi `max-·` vs Gödel `max-min`** choice be made *with a fixture, before* the Layer B
-valuation engine (G3.6) is written, because it is an **epistemic** choice, not a tuning
-detail:
+This module ships, in order: the **algebra** (:class:`Semiring` + the two candidates,
+G3.5), and the **valuation engine** (:func:`valuate`, G3.6) — the cycle-convergent least
+fixpoint over the chosen semiring, **gated on Layer A's certified set** so an unfounded
+cycle never receives a confidence (§12: "foundedness gates confidence").
+
+**The semiring is an explicit Phase-3-entry decision (G3.5), not a default.** §12 mandates
+the **Viterbi `max-·` vs Gödel `max-min`** choice be made *with a fixture, before* the
+valuation engine, because it is an **epistemic** choice, not a tuning detail:
 
 * **Viterbi** ``([0,1], max, ·, 0, 1)`` multiplies confidences along a rule body. It
   carries a structural **depth bias** — confidence decays geometrically with derivation
@@ -24,7 +28,7 @@ detail:
   scores downstream.
 
 Both share one shape — ``(carrier, ⊕ across alternative derivations, ⊗ along a rule body,
-zero, one)`` — so the G3.6 engine is written **once, generic over a** :class:`Semiring`,
+zero, one)`` — so :func:`valuate` is written **once, generic over a** :class:`Semiring`,
 and the chosen default is swapped at this seam rather than rewritten. Both ``⊕`` are
 ``max`` (idempotent), and both semirings are **absorptive** (``a ⊕ (a ⊗ b) = a`` since
 ``a ⊗ b ≤ a`` on ``[0, 1]``) and ω-continuous, so the confidence least fixpoint is
@@ -42,8 +46,11 @@ Deliberately **pure**: no DB, no AGE, no LLM — a small algebra over ``[0, 1]``
 unit-testable in isolation exactly like ``core/truth_maintenance.py``.
 """
 
-from collections.abc import Callable, Iterable
+from collections import defaultdict
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+
+from iknos.core.truth_maintenance import Derivation, DerivationGraph, NodeId
 
 # A confidence is an ordinal degree in the closed unit interval. It is *not* a calibrated
 # probability (§12: calibrated probabilities under correlated derivations would need
@@ -121,6 +128,80 @@ VITERBI = Semiring(name="viterbi", times=_viterbi_times, plus=max, one=1.0, zero
 #: use the QBAF makes of these scores downstream.
 GODEL = Semiring(name="godel", times=_godel_times, plus=max, one=1.0, zero=0.0)
 
-#: The Layer B default the G3.5 fixture decided on. The G3.6 valuation engine takes a
+#: The Layer B default the G3.5 fixture decided on. :func:`valuate` takes a
 #: :class:`Semiring` argument defaulting to this, so the choice stays reversible at the seam.
 DEFAULT_SEMIRING = GODEL
+
+
+def valuate(
+    graph: DerivationGraph,
+    supported: frozenset[NodeId],
+    *,
+    base_confidence: Mapping[NodeId, Confidence] | None = None,
+    strength: Mapping[Derivation, Confidence] | None = None,
+    semiring: Semiring = DEFAULT_SEMIRING,
+) -> dict[NodeId, Confidence]:
+    """G3.6 — Layer B confidence valuation: the least fixpoint over ``semiring``, computed
+    **only over the Layer-A-certified** ``supported`` set (§12).
+
+    Returns ``{node: confidence}`` for **exactly** the supported nodes. ``supported`` must be
+    Layer A's well-founded set for this same ``graph`` (obtained from a
+    :class:`~iknos.core.truth_maintenance.SupportOracle`) — that is the two-layer seam: Layer
+    A decides *membership*, Layer B scores it. Passing the certified set in (rather than
+    recomputing it here) keeps the layers' annotations cleanly separate and the engine pure.
+
+    **The valuation.** A node's confidence is the semiring sum (``⊕``, best derivation)
+    over its grounds:
+
+    * if it is a base fact, the evidence confidence ``base_confidence[node]`` (the
+      ``EVIDENCED_BY`` strength; missing ⇒ ``semiring.one``, a certain leaf);
+    * for each of its derivations, the ``DERIVED_FROM`` edge ``strength[d]`` (§7.1; missing
+      ⇒ ``one``) combined (``⊗``) with the body product (``⊗`` of the antecedents'
+      confidences).
+
+    **Foundedness gates confidence (§12).** Only derivations whose head *and whole body* are
+    in ``supported`` can contribute. An unfounded cycle is absent from ``supported``, so it is
+    **never scored** — Layer A's membership decision, taken first, is what keeps the cycle out
+    of Layer B. (Layer B *would* converge on it; convergence is not foundedness.)
+
+    **Convergence.** Computed by Kleene ascent (Jacobi iteration) from ``zero``. ``⊕`` is
+    idempotent and the semiring absorptive (``a ⊕ (a ⊗ b) = a``, since ``a ⊗ b ≤ a`` on
+    ``[0, 1]``) and ω-continuous, so the iterates are monotone, bounded by ``one``, and reach
+    the least fixpoint on **acyclic and cyclic** ``DERIVED_FROM`` graphs alike — a cyclic
+    contribution can never exceed the node's direct grounding, so a grounded cycle saturates
+    instead of inflating. The iteration is bounded; exceeding the bound (which an absorptive,
+    ω-continuous semiring cannot do) raises rather than hangs — the inner-layer analogue of
+    §12's composed-loop iteration bound. *(The genuinely separate composed-loop oscillation
+    detection — REFUTES→retract→A→B→QBAF — is G3.9.)*
+    """
+    base_conf: Mapping[NodeId, Confidence] = base_confidence or {}
+    edge_strength: Mapping[Derivation, Confidence] = strength or {}
+
+    # Foundedness gate: index only the derivations both of whose endpoints Layer A certifies.
+    grounds: dict[NodeId, list[Derivation]] = defaultdict(list)
+    for d in graph.derivations:
+        if d.conclusion in supported and all(a in supported for a in d.body):
+            grounds[d.conclusion].append(d)
+
+    nodes = sorted(supported)  # deterministic iteration ⇒ replay-stable trace (§10)
+    conf: dict[NodeId, Confidence] = dict.fromkeys(nodes, semiring.zero)
+
+    def contributions(node: NodeId) -> Iterable[Confidence]:
+        if node in graph.base_facts:
+            yield base_conf.get(node, semiring.one)
+        for d in grounds[node]:
+            body = semiring.combine_body(conf[a] for a in d.body)
+            yield semiring.times(edge_strength.get(d, semiring.one), body)
+
+    # The longest grounding chain through `supported` is < len(nodes); Jacobi propagates one
+    # edge per round, plus one round to confirm the fixpoint. Cycles add no rounds (absorption
+    # caps them at their direct grounding). +2 is therefore a safe ceiling, not a tuning knob.
+    for _ in range(len(nodes) + 2):
+        nxt = {n: semiring.combine_alternatives(contributions(n)) for n in nodes}
+        if nxt == conf:
+            return conf
+        conf = nxt
+    raise RuntimeError(  # pragma: no cover — unreachable for an absorptive, ω-continuous ⊕
+        "Layer B confidence valuation did not converge; the semiring is not "
+        "absorptive/ω-continuous as §12 requires."
+    )
