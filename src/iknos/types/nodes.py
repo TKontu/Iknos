@@ -160,3 +160,33 @@ class Fact(BaseModel):
     # gated by the proposition's epistemic class — see core/credibility.py.
     interest_alignment: InterestAlignment | None = None
     override: dict[str, Any] | None = None  # §10.3 — logic lands in Phase 7
+
+
+class Conclusion(BaseModel):
+    """A derived reasoning node — the output of the ``deduce``/``induce`` operators (§6, G3.8).
+
+    The AGE label is **``DeductiveConclusion``** or **``InductiveConclusion``** (the operator
+    picks it from the derivation kind); this one Pydantic projection serves both, the
+    distinction carried by ``provisional``. A ``Conclusion`` is grounded by ``DERIVED_FROM``
+    edges to its premises (not ``EVIDENCED_BY`` — only base Facts are evidenced), so the
+    adapter (G3.4) reads it as a *derived* node, never a base fact.
+
+    The two §12 annotations are **computed, not asserted**: ``support_count`` is Layer A's
+    grounding multiplicity and ``confidence`` is Layer B's valuation over the well-founded
+    support — *not* a raw LLM number (the "LLM proposes, engine disposes" constraint; the LLM
+    proposes the *claim*, the engine values it). ``provisional`` is ``True`` for an
+    ``induce``d conclusion (a defeasible generalization) and ``False`` for a ``deduce``d one.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: uuid.UUID
+    box: uuid.UUID
+    tier: Tier
+    statement: str
+    provisional: bool
+    annotations: Annotations
+    temporal: BitemporalFields
+    # lub of antecedents' sensitivity (§9.1); propagation walk deferred.
+    sensitivity: Sensitivity = Field(default_factory=Sensitivity)
+    override: dict[str, Any] | None = None  # §10.3 — logic lands in Phase 7

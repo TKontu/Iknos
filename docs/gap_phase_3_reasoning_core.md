@@ -30,7 +30,7 @@ for every faster engine that follows.
 | **G3.5** | **Layer B semiring decision** — the Phase-3-entry fixture (deep vs shallow chain, multi-path) deciding **Viterbi `max-·` vs Gödel `max-min`** *before* any Layer B code (§12, review A6) | — | **shipped (this increment)** |
 | **G3.6** | **Layer B confidence valuation** — least fixpoint over the chosen semiring, computed only over Layer-A-certified nodes; cycle-convergent (incremental-on-delta deferred) | G3.5, G3.2 | **shipped (this increment)** |
 | G3.7 | **`SAME_AS`-component aggregation** — support/confidence accrue to the canonical component; merge/split is a belief-revision trigger re-running A/B on the affected component (§5.2) | G3.2, G3.6, G2.3 | planned |
-| G3.8 | **Derivation operators** — `deduce` (→ `DeductiveConclusion`) and `induce` (→ provisional `InductiveConclusion`), `DERIVED_FROM` + provenance, each emitting an `Action` (§6, §10.2) | G3.4 | planned |
+| **G3.8** | **Derivation operators** — `deduce` (→ `DeductiveConclusion`) and `induce` (→ provisional `InductiveConclusion`), `DERIVED_FROM` group + provenance, each emitting an `Action`; conclusion annotations computed by Layer A/B (§6, §10.2) | G3.4 | **shipped (this increment)** |
 | G3.9 | **Composed-loop termination** — iteration bound + oscillation detection on REFUTES→retract→A→B→QBAF; non-convergence surfaced as a finding (§12, §7.2) | Phase 4 | planned |
 
 Cross-cutting: every implementation of `SupportOracle` is **diff-tested against
@@ -280,6 +280,55 @@ active subgraph on a shared DB. ruff + mypy(`src/iknos`) clean; 337 unit tests p
 - **Per-antecedent edge strength** — `strength` is one value per derivation (the inference
   step's confidence), stored equally on the group's edges; varying it per body antecedent
   within a rule is a §7.1 refinement, not needed by the shipped `valuate` signature.
+
+## G3.8 — Derivation operators (this increment)
+
+**What shipped.** `core/derive.py` — the `deduce`/`induce` **engine** operators (§6): premises
+(Facts *or* prior conclusions — chaining composes) → a new `Conclusion` (the `types/nodes.py`
+projection added this increment, AGE label `DeductiveConclusion` / `InductiveConclusion`),
+written with its `DERIVED_FROM` group (the G3.4 grouping contract), provenance, and an
+`Action`. `boxes/serde.py` gains the `working_box` constructor (tier `working`) the operators
+derive into.
+
+**The load-bearing decision: "LLM proposes, engine disposes" is enforced structurally.** The
+operator takes a `DerivationProposal` (premises, claim text, kind, step strength) — what an
+upstream proposer puts forward — and **recomputes** the conclusion's two §12 annotations from
+the engine, never the proposal: `support_count` from Layer A's grounding multiplicity,
+`confidence` from Layer B's least-fixpoint valuation. So no proposer number mutates maintained
+reasoning state; the claim text is content, but membership and strength are the engine's.
+`value_conclusion` does this on the graph **augmented in memory** with the proposed
+derivation, so the node is written **once** with final annotations (no write-then-patch), all
+in one transaction; an ungrounded proposal still writes valid structure but lands `(0, 0.0)`
+and revives if a premise later grounds (the Layer A semantics).
+
+**Provenance (§10.2), two ways.** Structurally via `conclusion -[:DERIVED_FROM]-> premise
+-[:EVIDENCED_BY]-> Span`, and in the audit log via the `Action` recording each premise's
+source spans. Deliberately **no `EVIDENCED_BY` from a conclusion** — that edge is the
+base-fact marker the adapter keys on, so writing it would make G3.4 misread a derived node as
+evidence-grounded.
+
+**Tests.** `tests/unit/test_derive.py` (DB-free): `value_conclusion` (weakest-link / step
+discount / Viterbi / ungrounded→zero / chaining), the write contracts
+(`conclusion_to_props`, `derivation_edge_props`), `working_box`. `tests/integration/test_derive.py`
+(real AGE): `deduce` writes a conclusion whose annotations are Layer-A/B-computed (not the
+input), a shared-group `DERIVED_FROM` pair, an `Action` joinable with the premises' spans, and
+the adapter re-reads it as supported; **retraction** of the sole premise drops it; `induce`
+marks `provisional` and a conclusion chains onto another conclusion. ruff + mypy(`src/iknos`)
+clean; 346 unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **The LLM/rule proposer** that *generates* `DerivationProposal`s (which premises, what
+  claim, what step strength) — hypothesis/derivation generation, a Phase-4-adjacent concern.
+  The operator accepts a pre-formed proposal precisely to make the "engine disposes" boundary
+  explicit and the engine testable without an LLM.
+- **Conclusion dedup / disjunctive accrual** — each `derive` mints a fresh node, so two
+  derivations of the *same* claim are two nodes, not one with `support_count = 2`. Same-claim
+  recognition (the conclusion analogue of entity resolution) ties to G3.7.
+- **Annotation propagation to existing affected nodes** — a new derivation only *adds*
+  support (never lowers an existing node's annotations); rewriting every changed node's stored
+  annotations per derivation is the incremental persisted-write path (with G3.3). Downstream
+  reads recompute via the adapter regardless.
 
 ## Phase risks / decisions (carried from §12, §13)
 

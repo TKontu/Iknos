@@ -29,9 +29,11 @@ memory too: the semiring is **decided (G3.5: Gödel `max-min` default)** and the
 cycle-convergent; incremental-on-delta deferred). **G3.4** now wires both layers to real AGE
 data: `core/derivation_adapter.py` reads the *active* subgraph (`valid_to` null, active
 boxes) and assembles the `DerivationGraph` + Layer B side maps, defining the `DERIVED_FROM`
-grouping contract the operators will write. Still open: the `deduce`/`induce` operators
-(G3.8), `SAME_AS`-component aggregation (G3.7), the clingo/SCC/persisted path (G3.3), and
-composed-loop termination (G3.9). See
+grouping contract the operators will write. **G3.8** ships those operators:
+`core/derive.py` `deduce`/`induce` write `DeductiveConclusion`/`InductiveConclusion` nodes +
+`DERIVED_FROM` groups + provenance + an `Action`, with both annotations **computed by Layer
+A/B** ("engine disposes"). Still open: `SAME_AS`-component aggregation (G3.7), the
+clingo/SCC/persisted path (G3.3), and composed-loop termination (G3.9). See
 `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
 
 ## Layer A — truth maintenance over a commutative group (owns retraction)
@@ -124,17 +126,30 @@ composed-loop termination (G3.9). See
 
 ## Derivation operators (§6)
 
-- [ ] `deduce`: facts/conclusions → `DeductiveConclusion`, with `DERIVED_FROM` edges
-      and provenance to underlying facts' spans.
-- [ ] `induce`: facts → `InductiveConclusion`, marked provisional.
-- [ ] Each derivation emits an `Action` record; each conclusion is traceable to source
-      (§10.2).
-- [ ] Conclusions carry both annotations; confidence comes from Layer B, not raw LLM.
+- [x] `deduce`: facts/conclusions → `DeductiveConclusion`, with `DERIVED_FROM` edges
+      and provenance to underlying facts' spans. *(G3.8 — `core/derive.py::Deriver.deduce`;
+      premises may be Facts **or** prior conclusions (chaining), the `DERIVED_FROM` group
+      honours the G3.4 contract, and provenance to source spans is both structural
+      (`conclusion→DERIVED_FROM→premise→EVIDENCED_BY→Span`) and recorded on the Action.)*
+- [x] `induce`: facts → `InductiveConclusion`, marked provisional. *(G3.8 —
+      `Deriver.induce`; `provisional=True` on the node, required step `strength`.)*
+- [x] Each derivation emits an `Action` record; each conclusion is traceable to source
+      (§10.2). *(G3.8 — one `deriver` Action per derive, recording premises, their source
+      spans, kind, strength, and the conclusion/group/annotation outputs.)*
+- [x] Conclusions carry both annotations; confidence comes from Layer B, not raw LLM.
+      *(G3.8 — `value_conclusion` computes `support_count` from Layer A and `confidence`
+      from Layer B over the augmented graph; the proposal's number never becomes the
+      conclusion's confidence — "engine disposes". The LLM/rule **proposer** that generates
+      candidate derivations is the documented upstream seam.)*
 
 ## Exit criteria
 
-- [ ] A conclusion derived from facts gains support; retracting a sole supporting fact
-      retracts it; retracting one of several does not.
+- [x] A conclusion derived from facts gains support; retracting a sole supporting fact
+      retracts it; retracting one of several does not. *(G3.8 + G3.4 —
+      `tests/integration/test_derive.py`: `deduce` gains support and a Layer B confidence;
+      retracting the sole premise (stamp `valid_to`, reload via the adapter) drops the
+      conclusion. The one-of-several exactness is the Layer A guarantee (G3.1
+      `test_retracting_one_of_several_supports_keeps_conclusion`) the adapter now feeds.)*
 - [ ] **Well-founded support holds:** an ungrounded `DERIVED_FROM` cycle retracts fully
       when its external base support is removed; a grounded cycle is kept.
 - [~] Confidence is computed by Layer B and recomputed only on the affected sub-graph;
