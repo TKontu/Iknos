@@ -23,7 +23,7 @@ service** that emits the wire schema (ops/AGPL-side adapter) and **table/figure 
 (G1.10), box scoping (G1.11), cross-document cache reuse (G1.7b). The **2026-06 review**
 (`review_2026-06_architecture_plan.md`) added **G1.13–G1.19** — two critical correctness
 fixes (long-document truncation G1.13, polarity-blind agreement G1.14) plus staleness,
-robustness, table-contract, and rank-fusion work. **G1.13 slice 1** (truncation guard) and
+robustness, table-contract, and rank-fusion work. **G1.13 slice 1** (truncation guard),
 **G1.14** (polarity-aware agreement + twin quarantine), **G1.15** (prompt/schema-hash cache
 key) and **G1.16** (embedding-model identity column + ingest guards + `reembed` reindex path)
 are now shipped — the two critical correctness fixes plus the two silent-staleness closures.
