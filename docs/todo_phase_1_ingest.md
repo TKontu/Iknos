@@ -39,8 +39,15 @@ segmenter `actions` indexes, a per-LLM-call deadline, `EmbeddingSubstrate` lifec
 `cypher_map` property fuzzing) **is now shipped** — one batch hardening the ingest path against
 partial failure, hangs, and the hand-rolled escaping boundary. **G1.6 quarantine enforcement**
 remains genuinely Phase-2-gated (no SUPPORTS/REFUTES creation site exists yet to gate);
-**G1.7b cross-doc reuse / G1.8 reference amortization** and **G1.10 multi-level/RAPTOR** are the
-remaining Phase-1 cost/structure work. See `gap_phase_1_ingest.md` for the gap-plan IDs.
+**G1.7b cross-doc reuse / G1.8 reference amortization** are the remaining Phase-1 cost work.
+The **fixture corpus** (exit-criterion seed for the gate corpus / Trial A5) is now shipped —
+`tests/fixtures/corpus/` with a long multi-window anchor (G1.13), a polarity-waver anchor
+(G1.14), and observation/judgement routing anchors (G1.2), behind a typed model-free loader.
+**G1.10 Part A (multi-level offset spans) is now shipped** — the DP length penalty as a
+configurable per-level knob (`default_level_policy()`, default 2 levels) producing `Span`s at
+multiple granularities from the one cached embedding pass, persisted with per-level idempotency
+and purely additive to level 0; **Part B (RAPTOR summaries)** is deferred per the §2 cost
+decision. See `gap_phase_1_ingest.md` for the gap-plan IDs.
 *(Granular state below; not every box maps 1:1 to a gap ID.)*
 
 ## Document parsing — front-end (§1, Stage 0) — 🟡 contract + MinerU client shipped (G1.0/G1.0b)

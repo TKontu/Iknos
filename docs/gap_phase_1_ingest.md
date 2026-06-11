@@ -59,8 +59,10 @@ is now shipped** — one batch: per-span error isolation + a `PropositionizeRepo
 verifier-failure degradation, `pool_span`→`None` (zero-vector sentinel removed), parser/
 segmenter `actions` indexes (migration 0010), a per-LLM-call deadline, `EmbeddingSubstrate`
 lifecycle, and `cypher_map` property fuzzing. Next: **G1.6 quarantine enforcement** stays
-Phase-2-gated (no SUPPORTS/REFUTES creation site to gate yet), so the remaining Phase-1 work
-is **G1.7b cross-doc reuse / G1.8 reference amortization** and **G1.10 multi-level/RAPTOR**.
+Phase-2-gated (no SUPPORTS/REFUTES creation site to gate yet). **G1.10 Part A (multi-level
+offset spans) is now shipped** (Part B RAPTOR summaries deferred per the §2 cost decision), so
+the remaining un-gated Phase-1 work is **G1.7b cross-doc reuse / G1.8 reference amortization**
+(+ optional **G1.12** multi-span provenance and **G1.10 Part B**).
 
 **Fixture corpus (exit-criterion seed) is now shipped** — `tests/fixtures/corpus/`: three
 real documents + a `manifest.toml` of regression anchors, a typed model-free/DB-free loader
