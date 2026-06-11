@@ -68,3 +68,25 @@ deprecation), §12 (propagation), §13 (trigger policy).
   tractable (§13).
 - Promotion is the contamination hazard — verify tentative case conclusions cannot
   leak into the shared reference base automatically (§9).
+
+## Pipeline-version supersession (§6.1 D4 — merged from `archive/todo_ingest.md` 2026-06-11)
+
+The §6.1 version-change policy lands here (it needs this phase's supersession
+machinery; until then the shipped behavior is the loud `StaleExtractionError`):
+
+- [ ] **Contract-compatible upgrade = belief revision, not a cache crisis.**
+      Re-extract an affected span as a **new version** — old retained, bitemporal,
+      logged (§7.4); run the cheap symbolic re-propagation (Layer A/B) immediately;
+      **defer expensive LLM re-derivation behind VoI/budget** (§6.1: at most once per
+      evidence-state). Derived nodes carry an `extractor_version` stamp (the only
+      cache-related field on graph nodes — the cache itself stays infrastructure,
+      not schema).
+- [ ] **Deliberate upgrade pattern:** mark old-version entries superseded (cheap
+      metadata pass) → prioritized, budgeted **VoI-first backfill** (high-stakes /
+      contested spans first). Mixed-version regions are queryable via the stamps and
+      surface lower-confidence until backfilled.
+- [ ] **Contract-breaking change still raises** and requires explicit migration —
+      that path never becomes silent.
+- [ ] Exit check (was D4's): bumping the extractor version triggers **defer +
+      version-stamp**, not an eager full recompute; the old version is retained and
+      the affected region surfaces to triage. (Trial C1 exercises this.)

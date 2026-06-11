@@ -145,3 +145,15 @@ Phases 0–2.
 - Reconciliation must never silently discard expert judgment (inverts principle 6) nor
   silently let it go stale — both failure modes guarded by the policy.
 - Prompt fatigue: only prompt on material change + new evidence, not every recompute.
+
+## Leads & inquiries (§11.3 — merged from `archive/todo_ingest.md` 2026-06-11)
+
+- [ ] Surface the ranked lead list (next-best-move) beside the review queue — same
+      VoI-per-unit-cost ordering, marked clearly as *advisory* (inert until accepted).
+- [ ] Accept / reject / edit a lead; accepting an external lead creates the
+      `Task.kind = inquiry` sub-Task; accepting an internal move runs the operator
+      (the §6 on-demand invocation path).
+- [ ] Enter an inquiry by hand (the expert proposes their own acquisition); track its
+      `answer_state`; on completion, attach the acquired source and trigger re-ingest.
+- [ ] Remediation answers (normative Tasks) presented as decision support — never
+      auto-executed, never re-injected as evidence (§11.3).
