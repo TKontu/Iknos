@@ -10,6 +10,17 @@ Phase 3 as a thin slice.
 disciplines, confidence pipeline, experiment), §7.2 (ensemble gate, hypothesis state),
 §10 (`sign`/`strength`/`significance`).
 
+**Status — 🟡 adjudication core landed (G4.1); candidate generation / edge-judgment /
+persistence / gate open.** G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
+the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
+conservative default, both retained at the seam), the `solve` bounded fixpoint (acyclic-exact,
+cyclic non-convergence **surfaced as a finding** not smoothed, §13), and the read-off
+(acceptability → §11.2 verdict band + computed hypothesis state). It consumes Layer B
+confidence as the base score (§12 seam). Candidate generation (§5.1, G4.2), the LLM
+edge-judgment pipeline (§8, G4.3), the AGE persistence adapter (G4.4), the `corroborate` /
+`find-contradiction` operators + ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6)
+are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
+
 ## Candidate generation (§5.1) — which pairs to assess
 
 - [ ] Funnel, cheap → expensive; **two stages separate from adjudication**.
@@ -44,14 +55,29 @@ disciplines, confidence pipeline, experiment), §7.2 (ensemble gate, hypothesis 
 
 ## Adjudication (QBAF)
 
-- [ ] Model supports/refutes as a **Quantitative Bipolar Argumentation Framework**;
-      Layer B confidence is the base score.
-- [ ] Gradual semantics (DF-QuAD or Quadratic Energy), in-house (QBAF-Py/Uncertainpy
-      as reference only).
-- [ ] **Hypothesis state machine:** compute supported/unsupported/refuted +
+- [x] Model supports/refutes as a **Quantitative Bipolar Argumentation Framework**;
+      Layer B confidence is the base score. *(G4.1 — `core/qbaf.py`: `BAF` (arguments +
+      weighted `Edge` support/attack); `solve` consumes a `base` map = Layer B confidence as
+      the intrinsic score (§12 seam), one edge contributing `strength·σ(src)`. Loading the
+      real subgraph + base scores from AGE is the G4.4 persistence adapter.)*
+- [x] Gradual semantics (DF-QuAD or Quadratic Energy), in-house (QBAF-Py/Uncertainpy
+      as reference only). *(G4.1 — both in-house as `GradualSemantics` values
+      (`DF_QUAD`/`QUADRATIC_ENERGY`), the engine generic over one; **decided with a fixture:
+      `DEFAULT_SEMANTICS = DF_QUAD`** (conservative under correlated error — saturates rather
+      than accrues), Quadratic Energy retained at the seam. `tests/unit/test_qbaf_semantics.py`
+      shows the two rank the same hypotheses oppositely.)*
+- [~] **Hypothesis state machine:** compute supported/unsupported/refuted +
       `acceptability` from incoming evidence; state is computed, never hand-set (§10).
-- [ ] Bound iteration + detect oscillation on cyclic argument graphs; surface
-      unresolved regions rather than forcing convergence (principle 8, §13).
+      *(G4.1 — `acceptability` computed by `solve`; `classify_state` derives
+      supported/refuted/unsupported and `VerdictBands.band` the §11.2 verdict, both **computed,
+      never hand-set**. **Open:** the flip *to* `refuted` requires the ensemble gate (§7.2,
+      G4.5), and writing `state`/`acceptability` to the `Hypothesis` node is G4.4.)*
+- [x] Bound iteration + detect oscillation on cyclic argument graphs; surface
+      unresolved regions rather than forcing convergence (principle 8, §13). *(G4.1 — `solve`
+      bounds the fixpoint iteration and, on hitting the bound, returns `converged=False` with
+      the still-moving arguments in `QbafResult.unstable` (`is_finding`) — surfaced, never
+      smoothed into a verdict. Period-true oscillation over *discrete* loop states is the outer
+      `core/composed_loop.py::stabilize` driver, G3.9.)*
 
 ## Validation gate (§8 experiment) — run before hardening anything
 
