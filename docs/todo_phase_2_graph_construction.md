@@ -123,8 +123,11 @@ because Phase 2 is where its absence turns from latent to expensive.*
       candidates), mark dependent propositions `provisional`, and route to expert triage.
       *(G2.4 — `core/reference.py`: LLM **detection** only → deterministic lexical binding
       (no attention) → scored `REFERS_TO` with `BindingState`; ambiguous/unresolved stay
-      open + mark the proposition `provisional`. Thin slice: the in-graph-entity cascade
-      stage. Deferred seams — pronoun/local-discourse-antecedent + taxonomy-anchor stages,
+      open + mark the proposition `provisional`. The **in-graph-entity** stage and — wiring in
+      the G2.8 linker — the **domain-pack-taxonomy** stage both ship (`resolve_binding`: a
+      mention the box cannot bind falls through to the active pack taxonomy, binding
+      `REFERS_TO` a taxonomy node with `BindingStage.TAXONOMY`). Deferred seams — the leading
+      pronoun/local-discourse-antecedent stage, taxonomy-to-break-an-in-graph-tie,
       multi-sample/verify confidence, expert-triage queue (Phase 7), re-bind belief
       revision (Phase 3).)*
 - [x] `INVOLVES` edges (fact → actor/object) with `role`; `EVIDENCED_BY` edges (fact →

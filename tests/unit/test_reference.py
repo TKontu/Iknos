@@ -9,20 +9,26 @@ REFERS_TO write contracts. The full detect → bind → persist path runs agains
 import uuid
 from datetime import UTC, datetime
 
+from iknos.core.anchor import TaxonomyNode
 from iknos.core.extract import NodeKind
 from iknos.core.reference import (
     REFER_CANDIDATE_BAR,
     REFER_CONFIRM_BAR,
     REFER_SCHEMA_VERSION,
+    BindingStage,
     Mention,
     MentionType,
     Referent,
     block_referents,
+    block_taxonomy,
     decide_binding,
+    decide_taxonomy_binding,
     group_referents,
     mention_to_props,
     refers_to_to_props,
+    resolve_binding,
     score_binding,
+    score_taxonomy_binding,
 )
 from iknos.types.edges import BindingState
 
@@ -241,3 +247,91 @@ def test_refers_to_to_props_flattens_state_strength_annotations_bitemporal():
 
 def test_schema_version_is_recorded_constant():
     assert REFER_SCHEMA_VERSION == 1
+
+
+# --- taxonomy stage (the §3.1 cascade tail) ---
+
+
+def _tax(label, *, type="", id=None):
+    return TaxonomyNode(id=id or uuid.uuid4(), box=uuid.uuid4(), label=label, type=type)
+
+
+def test_block_taxonomy_shares_token_no_kind_gate():
+    # A mention guessed ACTOR still blocks a single-kind taxonomy Object (no kind gate, §14).
+    m = _mention("the bearing", kind=NodeKind.ACTOR)
+    bearing = _tax("Rolling-element bearing")
+    pump = _tax("Centrifugal pump")
+    assert block_taxonomy(m, [bearing, pump]) == [bearing]
+
+
+def test_block_taxonomy_pronoun_blocks_to_empty():
+    # No lexical content -> un-bindable by this lexical stage (needs the antecedent stage).
+    assert block_taxonomy(_mention("it", mtype=MentionType.PRONOUN), [_tax("Roller")]) == []
+
+
+def test_score_taxonomy_exact_confirms_partial_is_candidate():
+    # Exact normalized label reaches the confirm bar; mere containment in a fuller taxonomy
+    # name lands in the candidate band, never an auto-confirm.
+    assert score_taxonomy_binding(_mention("roller"), _tax("Roller")) >= REFER_CONFIRM_BAR
+    partial = score_taxonomy_binding(_mention("the bearing"), _tax("Rolling-element bearing"))
+    assert REFER_CANDIDATE_BAR <= partial < REFER_CONFIRM_BAR
+
+
+def test_decide_taxonomy_confirms_single_exact():
+    m = _mention("roller")
+    decision = decide_taxonomy_binding(m, [_tax("Roller"), _tax("Pump housing")])
+    assert decision.state is BindingState.CONFIRMED
+    assert [n.label for n, _ in decision.targets] == ["Roller"]
+
+
+def test_decide_taxonomy_keeps_cross_pack_homonym_as_candidates():
+    # "pump" contained in two taxonomy names equally -> a tie -> both CANDIDATE (open).
+    m = _mention("pump")
+    decision = decide_taxonomy_binding(m, [_tax("Centrifugal pump"), _tax("Pump housing")])
+    assert decision.state is BindingState.CANDIDATE
+    assert {n.label for n, _ in decision.targets} == {"Centrifugal pump", "Pump housing"}
+
+
+def test_decide_taxonomy_unresolved_when_nothing_clears_bar():
+    assert decide_taxonomy_binding(_mention("gearbox"), [_tax("Roller")]).state is None
+
+
+# --- the full cascade: in-graph -> taxonomy -> unresolved ---
+
+
+def test_cascade_prefers_in_graph_confirmed_over_taxonomy():
+    m = _mention("roller", kind=NodeKind.OBJECT)
+    in_graph = _ref("roller", kind=NodeKind.OBJECT)
+    binding = resolve_binding(m, [in_graph], [_tax("Roller")])
+    assert binding.state is BindingState.CONFIRMED
+    assert binding.stage is BindingStage.IN_GRAPH
+    assert binding.targets == [(in_graph.canonical, binding.targets[0][1])]
+
+
+def test_cascade_falls_through_to_taxonomy_when_in_graph_unresolved():
+    # No in-graph referent shares a token -> fall through to the taxonomy stage.
+    m = _mention("roller", kind=NodeKind.OBJECT)
+    roller = _tax("Roller")
+    binding = resolve_binding(m, [_ref("pump")], [roller])
+    assert binding.state is BindingState.CONFIRMED
+    assert binding.stage is BindingStage.TAXONOMY
+    assert binding.targets == [(roller.id, binding.targets[0][1])]
+
+
+def test_cascade_stops_at_in_graph_candidate_without_consulting_taxonomy():
+    # An open in-graph CANDIDATE is already recorded/triageable: the cascade does NOT also
+    # pile a taxonomy confirm onto it (the documented fall-through-only-on-unresolved rule).
+    m = _mention("the bearing", kind=NodeKind.OBJECT)
+    in_graph_partial = _ref("bearing 3", kind=NodeKind.OBJECT)  # containment -> candidate band
+    would_confirm = _tax("the bearing")  # exact -> would confirm if consulted
+    binding = resolve_binding(m, [in_graph_partial], [would_confirm])
+    assert binding.state is BindingState.CANDIDATE
+    assert binding.stage is BindingStage.IN_GRAPH
+    assert binding.targets == [(in_graph_partial.canonical, binding.targets[0][1])]
+
+
+def test_cascade_unresolved_when_neither_stage_binds():
+    binding = resolve_binding(_mention("gearbox"), [_ref("pump")], [_tax("Roller")])
+    assert binding.state is None
+    assert binding.stage is None
+    assert binding.targets == []
