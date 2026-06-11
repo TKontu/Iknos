@@ -25,7 +25,7 @@ until the gate passes").
 |----|-----------|------------|-------|
 | **G4.1** | **QBAF gradual-semantics adjudication core** — the semantics decision (DF-QuAD vs Quadratic Energy) + the pure `solve` engine (bounded fixpoint, non-convergence surfaced) + verdict banding / computed hypothesis state | Phase 3 Layer B (contract only) | **shipped (this increment)** |
 | G4.2 | **Candidate generation** (§5.1) — the cheap→expensive funnel: structural priors (shared `INVOLVES`, co-occurrence), embedding k-NN over pgvector, coarse-to-fine over §2 levels; tuned for recall early | Phase 1 embeddings, Phase 2 graph | **slices 1–2 shipped** (`core/candidates.py`): the recall-first funnel core + the structural-entity prior (slice 1) and the embedding k-NN workhorse over `proposition_embeddings` (slice 2); coarse-to-fine + keyword co-occurrence planned |
-| G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | **slices 1–2 shipped** (slice 1 the subjective-logic confidence-scoring core, `core/subjective_logic.py`; slice 2 the blind/randomized/multi-sample LLM edge judge, `core/edge_judge.py`); per-model recalibration + AGE producer planned |
+| G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | **slices 1–3 shipped** (slice 1 the subjective-logic confidence-scoring core, `core/subjective_logic.py`; slice 2 the blind/randomized/multi-sample LLM edge judge, `core/edge_judge.py`; slice 3 the AGE producer that persists the judged edges + provenance, `core/edge_producer.py`); per-model recalibration planned (identity until G4.6) |
 | **G4.4** | **QBAF persistence adapter** — load the active `SUPPORTS`/`REFUTES` subgraph + hypothesis base scores (Layer B) from AGE → `BAF`; write the computed `acceptability` / `state` back to the `Hypothesis` node. The Phase-4 analogue of G3.4 | G4.1, Phase 2/3 adapters | **shipped (this increment)** |
 | G4.5 | **`corroborate` / `find-contradiction` operators + ensemble gate** (§7.2) — gather supporting/refuting evidence; `find-contradiction` as a first-class refuter generator; the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement) that authorises a persisted `refuted` flip; wires the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize` driver | G4.3, G4.4, G3.9 | planned |
 | G4.6 | **Validation gate** (§8 experiment) — planted-contradiction corpus (regression suite); measure retraction propagation, hypothesis-state flip, consistency-vs-verbalized confidence, ensemble-vs-single, candidate/refuter recall, level-attachment accuracy; bias-controlled scoring, not LLM-as-judge | G4.2–G4.5 | planned |
@@ -408,16 +408,101 @@ the empty/`n_samples<1` guards. ruff + `ruff format` + mypy(`src/iknos`) clean (
 
 **Deferred (documented seams, not regressions) — the rest of G4.3:**
 
-- **The AGE producer** (next slice) — reads the candidate pool out of the graph, resolves each
-  node's claim text (`EVIDENCED_BY` → `Proposition.text`) and source reliability
-  (`effective_credibility`), calls this judge, and writes the surviving `SUPPORTS`/`REFUTES` edges
-  carrying `strength` + `significance` (from the node/tier, §9) and an `Action` (raw votes + sampling
-  + the `JUDGE_SCHEMA_VERSION`/`prompt_sha`/`schema_sha`, §10.1). The `sign_stable=False` findings are
-  handed to the ensemble gate (G4.5), which owns the `refuted`-flip authorisation.
+- **The AGE producer** — *shipped in slice 3, below.*
 - **Per-model recalibration (step 2)** — the fitted consistency→correctness curve at
   `opinion_from_evidence`, identity until G4.6 fits it against the planted corpus.
 - **Explicit relative ranking** — the set is judged together today (the relative *framing*); an
   explicit ranking/pairwise elicitation over the set is a refinement at the same prompt seam.
+
+## G4.3 — Edge-judgment pipeline, slice 3: the AGE producer (this increment)
+
+**What shipped.** `core/edge_producer.py` — the data-bound increment that **closes** the §8
+pipeline: it reads the G4.2 candidate pool out of the active AGE subgraph, resolves the text +
+source metadata, runs the slice-2 judge, and **persists the surviving `SUPPORTS`/`REFUTES` edges**
+with an `Action`. It is the Phase-4 analogue of how the propositionizer wraps the `Verifier` (and of
+`derive.py` wrapping the Layer A/B valuation): the LLM/pure cores stay DB-free, this is the boundary
+that feeds them the graph and writes their verdict. The consuming end is already in place — G4.4's
+`QbafAdapter` reads exactly these edges back, so this slice makes *funnel → judge → calibrated edge →
+QBAF* a closed loop, tested end-to-end on live AGE.
+
+**Same pure/DB split** as `qbaf_adapter` / `candidates`: the significance policy, the evidence
+grouping, the edge-property flattening and the per-hypothesis **write plan** (`plan_hypothesis`) are
+DB-free and unit-tested with hand-built rows; `EdgeProducer.produce` does the AGE reads/writes,
+judging hypotheses concurrently (one shared semaphore = one LLM budget) and persisting their plans
+serially in one transaction (the propositionizer's concurrent-infer / serial-persist shape).
+
+**1. The §8/§9 credibility-routing reconciliation (slice 3's recorded decision).** §3.1/§8/§9 (and
+`types/edges.py`'s `EvidentialEdge` docstring) hold `strength`, `significance` and `credibility` to
+be **three separate quantities, never merged**, and architecture §9 puts source credibility into
+**`significance`** ("conditional credibility … feeds the edge `significance` — it is the *credibility*
+term"), leaving `strength` the pure *connection* judgment. Slice 2's stated plan had been to route
+`effective_credibility` into the judge's subjective-logic **trust discount** — i.e. into the
+**strength** — which would *merge* credibility into strength, exactly what the separation forbids.
+So the producer follows the architecture (the source of truth): it calls the judge at the **identity
+reliability** (`1.0`), so strength stays the unmodulated multi-sample connection weight, and routes
+`effective_credibility` into `significance` instead. The judge's `reliability` discount is **retained
+as a seam** for a deliberately decorrelated sub-domain, but is not the default path. Recorded so it
+is not re-litigated (and reconciled the way G4.4 reconciled the G4.1 banding duplication).
+
+**2. Significance as swappable policy data (§9), calibration-target MVP.** `SignificancePolicy`
+makes `significance = tier_weight(tier) · effective_credibility` — both factors ∈ [0, 1], so the
+product is, clamped for safety. It is the **one place** the policy lives, so calibration (G4.6)
+re-points it without touching the producer — the same *policy-as-data* discipline as the §11.2
+verdict bands and the Layer-B / QBAF / fusion decision values. The default `tier_weight` is **uniform
+`1.0`** (significance *is* the §9.1 credibility term): a tier-differentiated weighting is a genuine
+calibration question, so the MVP leaves it identity rather than inventing an unjustified ordering,
+while still threading `tier` through so the seam is real. Credibility undefined (an un-evidenced node,
+a Conclusion with no box reliability) reads as the identity `1.0` — *undefined, not zero* (§9.1).
+
+**3. The claim text + the edge contract.** Each node's claim text is its `statement` property
+(always present on a `Fact`/`Conclusion`/`Hypothesis`, §10) — the robust source, vs the finer
+`EVIDENCED_BY` → `Proposition.text` provenance which is empty for an un-propositionized hypothesis
+stub. `evidential_edge_props` flattens one edge (mirroring `derivation_edge_props`): `sign` (stored
+alongside the canonical label) / calibrated `strength` (the projected probability of the
+discounted-by-identity multi-sample opinion — **never the raw LLM number**, §10) / derived
+`significance`, the `sign_stable` finding **on the edge** (so the §7.2 ensemble gate can *graph-query*
+unstable directional edges before authorising a `refuted` flip), and bitemporal fields stamped
+**open** (so a retraction stamps `valid_to` and the QBAF current-state filter drops it). Edges run
+**evidence → hypothesis** (the §5/§10 direction) and inherit the **target** hypothesis's box. The
+producer writes every directional edge, including `REFUTES`, but **does not** authorise a persisted
+`refuted` *flip* — that is the §7.2 ensemble gate's call (G4.5), which consumes the surfaced
+`sign_stable=False` findings.
+
+**4. Provenance (§10.1).** One `Action` per judged hypothesis (`actor="edge-judge"`,
+`action_type="judge"`): inputs carry the candidate set + `prompt_sha`/`schema_sha`/`schema_version`
+(so a re-judgment under a changed pipeline is detectable); outputs carry the written edges, the raw
+per-edge vote tally (the votes behind each stored number), and the **dropped-`irrelevant`** pairs
+(auditable as *considered and rejected*, not silently missing).
+
+**Tests** (`tests/unit/test_edge_producer.py` DB-free, 12 new; `tests/integration/test_edge_producer.py`
+real AGE, 1 new). Unit: significance = tier·credibility (uniform-default, unknown→identity, bounds,
+out-of-range reject); the edge props (three quantities, `sign_stable`, open bitemporal); the grouping
+(drop nodes with no text, identity reliability to the judge, replayable order); the plan (label, the
+Action provenance incl. candidates/drops/shas, the per-edge audit); and the `produce` fold with a
+fake LLM + fake candidate adapter + monkeypatched `merge_edge`/`record_action` (edges written, one
+Action, findings, the all-irrelevant no-write path). Integration: a `Hypothesis` + two supporters
+(one credibility-chained) + a refuter, judged into two `SUPPORTS` + one `REFUTES` edges, asserting
+**strength is the pure connection judgment** (equals `opinion_from_evidence(3,0)`'s projection, *not*
+discounted by the 0.8 credibility) while **credibility is routed into significance** (the chained
+supporter's significance equals its `effective_credibility`; the others' is identity `1.0`), the
+single provenance `Action`, and that `QbafAdapter.evaluate` consumes the edges (net support raises
+acceptability off the base). ruff + `ruff format` + mypy(`src/iknos`) clean (only the pre-existing
+`resolve.py` error remains); 654 unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **Per-model recalibration (step 2)** — the fitted consistency→correctness curve at
+  `opinion_from_evidence`, identity until G4.6 fits it against the planted corpus.
+- **Tier-differentiated significance** — `SignificancePolicy.tier_weight` is uniform `1.0` until
+  G4.6 calibrates a tier ordering against measured outcomes (the same policy seam as the verdict
+  bands).
+- **Sign-flip cleanup on re-judgment** — `merge_edge` keys on `(src, dst, label)`, so a pair that
+  flips direction between runs would leave the stale opposite-label edge alongside the new one;
+  retracting it (bitemporal `valid_to`) is the retraction/ensemble machinery (G4.5 / Phase 5), not
+  this dumb writer.
+- **Conclusion-as-target + finer claim text** — slice 3 targets `Hypothesis` and reads the node
+  `statement`; pairing against a `Conclusion` target and resolving span-level `Proposition.text`
+  are additive extensions at the same reads.
 
 ## G4.4 — QBAF persistence adapter (this increment)
 
