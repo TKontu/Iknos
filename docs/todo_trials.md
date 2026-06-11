@@ -290,7 +290,7 @@ interface; C2 is an explicit "revisit at scale," not MVP-blocking.
 - [ ] **Note:** revisit at scale — do not block the MVP on this.
 - **Gates:** the scale path for Phase 3 — Layer A placement.
 
-### Trial C3 — Storage-engine viability under schema density  ⚠ may force engine change — **run before Phase 2**
+### Trial C3 — Storage-engine viability under schema density  ⚠ may force engine change — **hard backstop: before Phase 5**
 
 **Scheduling (2026-06 review, P2).** Originally parked with the scale trials —
 too late: Phases 2–5 (continuous entity resolution, recursive retraction,
@@ -300,6 +300,16 @@ them maximizes rework. The benchmark needs no production code: generate a
 single biggest potential architecture swap. It is now a **Phase 2 entry
 criterion** (`todo_phase_2_graph_construction.md`), paired with the G0.R2
 property-index migration (`archive/gap_phase_0_residual.md`).
+
+**Scheduling amendment (2026-06-11 architecture assessment, W9).** The Phase 2
+entry criterion was missed — Phase 2 core shipped with C3 still unrun. New hard
+backstop: **C3 runs before Phase 5 starts** (now a Phase 5 entry criterion,
+`todo_phase_5_temporal_revision.md`), and its query set grows to include the
+shapes Phase 5 will actually emit: **edge-property filters**
+(`MATCH ()-[r:SAME_AS {state: 'confirmed'}]->()` — today no index path exists;
+edge-property GIN is a deferred-table item) and **bitemporal supersession
+updates at re-scoring rates**, on the full 15–20-property vertex payload. The
+W2 fixture graph (`todo_phase_4_*.md`) is a realistic shape source.
 
 - [ ] **Prerequisite:** the G0.R2 AGE property-index migration is merged — benchmark
       the indexed engine, and verify with `EXPLAIN` through the real `cypher()` call
@@ -418,6 +428,20 @@ the V4/V5 contract. Contamination rule: the expert has not read
 - [ ] **Decision:** identify the load-bearing components vs the marginal ones; if
       descoping is ever needed, this is the data-driven minimal viable system — not a
       guess.
+- [ ] **De-scoping ladder (W10 — 2026-06-11 architecture assessment).** Name the
+      candidate minimal configurations *in advance*, so a mixed E1 result has a
+      pre-agreed landing zone instead of an unstructured rethink. The ablation arms
+      double as the rungs; the named ladder, smallest first:
+      1. **Perception only** — parse → propositions + epistemic fields +
+         faithfulness + provenance + hybrid retrieval (no graph reasoning): a
+         traceable, calibrated evidence-retrieval product.
+      2. **+ graph & resolution** — entities, `SAME_AS`, evidential edges, manual
+         adjudication: an evidence-mapping product, expert reasons over the graph.
+      3. **+ Layer A/B** — foundedness + confidence propagation, no QBAF: retraction
+         works, verdicts are manual.
+      4. **Full system** — QBAF + ensemble gate + VoI triage.
+      E2 measures which rung the value plateaus at; the rung *is* the descope
+      decision. Record the chosen rung and rationale in `todo.md` if ever invoked.
 
 ### Trial E3 — Ecological validity (retrospective real case)
 

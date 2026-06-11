@@ -79,6 +79,18 @@ corpus), V2 (gold labels — longest lead, start the annotator recruitment now),
 V3 (metrics harness), plus the E1 baselines V4–V6 — specs in `todo_trials.md`.
 The lockdown specs are in *Open task specs* below.
 
+**Composed-loop spine (2026-06-11 architecture assessment, W1/W2/W3).** The
+per-layer cores are verified but **the system has never run as a system**: nothing
+calls the G3.9 `stabilize` driver, so the `REFUTES → retract → Layer A → Layer B →
+QBAF → gate` feedback loop has no executable path and no test — and with the
+symbolic channel ABSTAINing, `DEFAULT_GATE` withholds every automated `refuted`
+flip, so the differentiator capability is currently *correct-but-non-functional*.
+After the lockdown: **W1** (the composed-loop orchestrator) and **W2** (the
+synthetic §8 end-to-end fixture) land before Phase 5 and before the G4.6 run is
+meaningful; **W3** records the interim refutation-gate decision eyes-open instead
+of by default. Specs in *Open task specs* below; findings record in
+`archive/review_2026-06-11_planned_architecture_assessment.md`.
+
 ## Candidate generation (§5.1) — which pairs to assess
 
 - [x] Funnel, cheap → expensive; **two stages separate from adjudication**. *(G4.2 slice 1 —
@@ -258,10 +270,12 @@ The lockdown specs are in *Open task specs* below.
 - **Cyclic QBAF convergence** has no general guarantee — the requirement is
   detect/bound/surface, not converge (principle 8, §13).
 
-## Open task specs *(merged from `archive/gap_review_2026-06.md` R4/R8/R9 and `archive/gap_review_2026-06-11.md` V7/V8/V9, 2026-06-11 — execute as written; one task per PR, branch `fix/<id>-<slug>`)*
+## Open task specs *(merged from `archive/gap_review_2026-06.md` R4/R8/R9, `archive/gap_review_2026-06-11.md` V7/V8/V9, and `archive/review_2026-06-11_planned_architecture_assessment.md` W1/W2/W3 — execute as written; one task per PR, branch `fix/<id>-<slug>`)*
 
 Work-stream order: **R8 → R9 → V7 → V8** (the safety lockdown — before the remaining
-G4.5 slices), and **R4 → V9** (gate ANN infrastructure — with the gate trials).
+G4.5 slices), then **W1 → W2** (the composed-loop spine — before Phase 5 and before
+the G4.6 run), with **W3** decided alongside the G4.5 channel-producer work, and
+**R4 → V9** (gate ANN infrastructure — with the gate trials).
 Migrations: set `down_revision` to the actual head (`alembic heads`) — numbering in
 older specs is stale.
 
@@ -300,6 +314,18 @@ Accept: low-faithfulness proposition persists `["low_faithfulness"]` + legacy
 the pinned degraded-mode tests deliberately); no production read of the boolean
 except the legacy write. Tests:
 `test_epistemic.py` (threshold edge), `test_proposition_layer.py` (persisted fields).
+
+**Acceptance amendment (2026-06-11 architecture assessment, P4).** The in-flight
+R8 implementation (`fix/r8-provisional-reasons`) also carries
+**`POLARITY_UNSTABLE`** (the G1.14 polarity-twin reason — add it to the member
+list above; a twin is provisional *independent of faithfulness*), but ships
+**no fixtures for the invariants the set carries** — the highest-risk gap the
+assessment found, since this is the quarantine gate's data model. R8 is *not
+complete* until these tests exist: a polarity twin seeds `POLARITY_UNSTABLE` and
+**stays provisional even when verified faithful** (a passing verify must not
+clear the OR-fold); a twin that is also low-faithfulness carries **both** reasons
+(OR-fold union, never overwrite); reasons survive an AGE persist → read
+round-trip; and the legacy boolean mirrors non-emptiness in each case.
 
 ### R9 — quarantine gate function (pure)
 
@@ -405,3 +431,77 @@ side of the seam:
 
 Do not: flip the default; remove the in-memory path (it is the oracle); touch
 `funnel` or the structural stage.
+
+### W1 — composed-loop orchestrator (the missing spine) *(needs V7+V8; 2026-06-11 assessment, P1)*
+
+The pure cores are individually verified, but nothing owns the cross-layer control
+flow: `core/composed_loop.py::stabilize` (G3.9) is implemented, tested, and never
+called, so retraction never triggers re-adjudication — changes are only picked up
+on the next independent read. Phase 5 belief revision and the V8 consumer-filter
+need the same sequencing; without one owner there will be divergent ad-hoc wirings.
+
+1. New module `src/iknos/core/revision_loop.py` (adapter layer — may import DB +
+   pure cores): the step body `retract → Layer A (derivation_adapter) → Layer B →
+   QBAF (qbaf_adapter.evaluate) → ensemble gate (authorise) → persist_verdicts
+   (the V8 filter)`, driven by `composed_loop.stabilize` with its iteration bound
+   and oscillation surfacing. An authorised `refuted` flip that retracts a fact
+   feeding the refuter re-enters the body — the §12
+   composition-with-retraction-feedback this driver exists for.
+2. Non-convergence is a **finding** (§13): surface the unstable sub-region with
+   its subgraph; never silently re-iterate. Every iteration appends an `Action`
+   (§10.1).
+3. Keep it thin: no VoI, no re-inference budget (Phase 5/6 layers); single working
+   box; invoked explicitly, no daemon.
+
+Accept: a fixture where an authorised `REFUTES` retracts a supporting fact and
+the loop re-runs A → B → QBAF to a fixpoint within the bound; an oscillating
+fixture surfaces `is_finding` with the unstable region; `stabilize` is the only
+loop driver (grep: no ad-hoc retry loops around `qbaf_adapter`). Do not: build
+the symbolic/temporal channel producers here (W3 / later G4.5); add
+incrementality beyond the existing delta loads.
+
+### W2 — synthetic end-to-end fixture: the §8 experiment in test form *(needs W1; 2026-06-11 assessment, P1)*
+
+The architecture's own must-pass (§8 *Proposed small-scale experiment*) exists in
+no form — every correctness guarantee currently rests on per-layer unit tests.
+W2 is the code-level precursor to the V1 gate corpus: V1 is real documents + gold
+labels measuring *accuracy*; W2 is a hand-built graph fixture proving *mechanics*
+— cheap, deterministic, zero LLM calls (judgments injected as pre-built
+opinions/`GateDecision`s through the real `authorise`).
+
+1. Integration test (`tests/integration/test_revision_loop_e2e.py`): seed base
+   facts → derive conclusions (incl. one grounded cycle and one
+   unfounded-after-retraction cycle) → 2–3 hypotheses with `SUPPORTS`/`REFUTES`
+   → inject the overturning fact.
+2. Assert: retraction propagates and **stays local** (an untouched region's
+   annotations are byte-stable); the unfounded cycle drops while the grounded one
+   survives; hypothesis state flips **only** through the gate (no decision →
+   `pending_refutation`; authorised → flip); a crafted mutual-`REFUTES` region
+   hits the iteration bound and is surfaced, not smoothed; every change is
+   walkable through `Action`s (§10.2).
+3. Keep it as a permanent regression suite (the gate section already promises
+   this for the planted corpus; W2 is its mechanical half).
+
+Accept: green on the ephemeral AGE DB with zero LLM calls; red if any layer seam
+(A → B → QBAF → gate → persist) is rewired without it noticing. Do not:
+substitute it for V1–V3.
+
+### W3 — interim refutation-gate decision (clingo producer vs explicit LLM-only) *(2026-06-11 assessment, P3)*
+
+With `SYMBOLIC` required and its producer unwired (ABSTAIN), `DEFAULT_GATE`
+withholds **every** automated `refuted` flip — safe-by-default per principle 6,
+but it leaves the differentiator capability silently non-functional: it looks
+implemented and does nothing. Decide eyes-open, record the outcome in the status
+block and the `todo.md` deferred-triggers table, one of:
+
+- **(a) Ship the minimal symbolic producer:** a clingo consistency check over the
+  affected sub-region (the G4.5 channel-producer slice pulled forward), unblocking
+  `DEFAULT_GATE` as designed; or
+- **(b) Adopt `LLM_ONLY_GATE` explicitly** for the gate-trial window: logged
+  rationale, a revisit trigger ("the symbolic producer lands, or G4.6 measures the
+  single-channel false-refutation rate"), and the gate choice stamped on every
+  gate `Action` so post-hoc audit can distinguish the regimes.
+
+Either way, a unit test pins the *chosen* default's behavior — today no test
+asserts which gate is in force. Do not: leave the choice implicit in
+`DEFAULT_GATE`'s definition.

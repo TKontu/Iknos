@@ -9,6 +9,19 @@ this builds the *dynamics*.
 **Architecture refs:** §7.3 (belief revision), §7.4 (bitemporal record), §9 (box
 deprecation), §12 (propagation), §13 (trigger policy).
 
+**Entry criteria (2026-06-11 architecture assessment).** Phase 5 layers belief
+revision on the composed loop, so it does not start until:
+
+- the safety lockdown (R8 → R9 → V7 → V8, `todo_phase_4_*.md`) is merged;
+- **W1** (composed-loop orchestrator) and **W2** (synthetic §8 end-to-end fixture)
+  are green — Phase 5 must not be the first caller of a loop that has never run;
+- **C3 has run** with the Phase-5 query shapes (the W9 amendment in
+  `todo_trials.md`: edge-property filters and supersession-rate writes have no
+  index path today);
+- **W7** (dual-write transaction discipline, `todo.md` *Maintenance backlog*) has
+  landed — supersession multiplies multi-statement writes and inherits the
+  orphaned-`Action` hazard.
+
 ## Bitemporal record (§7.4)
 
 - [ ] Populate `event_time` / `ingested_at` on every claim and evidential edge.

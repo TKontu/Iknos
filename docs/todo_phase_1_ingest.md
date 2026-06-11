@@ -495,3 +495,30 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
       verifier off→on completes faithfulness with **zero** extractor LLM calls and
       **zero** purged propositions; verifier upgrade re-verifies without
       re-extracting; extraction cache hit-rate unaffected by verifier config.
+
+### From the 2026-06-11 architecture assessment *(W-tasks; findings record in `archive/review_2026-06-11_planned_architecture_assessment.md`)*
+
+- [ ] **G1.23 (W5) — enforce nonzero sampling temperature when `n_samples > 1`.**
+      §3.1 is explicit: "Multi-sample also requires nonzero sampling temperature,
+      or N identical samples make agreement trivially perfect; **the configuration
+      must enforce this, not document it**." The shipped defaults are
+      `temperature: 0.0` (`core/proposition.py`, `core/extract.py`,
+      `core/verify.py`) with no guard — a multi-sample run today returns
+      agreement = 1.0 vacuously, silently inflating faithfulness. Add constructor
+      validation on the multi-sample extraction/verify paths: `n_samples > 1`
+      with `temperature == 0` raises at construction. **Exemption (by design):**
+      the G4.3 edge judge derives its sample diversity from the per-sample
+      permutation at temperature 0 — document the exemption where the guard
+      lives, so nobody "fixes" the judge. Tests: construction raises; `n=1, T=0`
+      passes; the guard trips with zero LLM calls.
+- [ ] **G1.24 (W6) — context span identity in the extraction cache key.** The key
+      folds the rendered `context_text` but not *which spans* produced it
+      (`core/cache.py`; context assembly in `core/proposition.py`): a
+      re-segmentation that changes the K-span context window can serve a stale
+      extraction — or thrash — on textually-similar context. Add the ordered
+      context `span_id`s to the extraction content hash so cache identity is
+      deterministic on ingest identity. One-time loud re-key on deploy (same
+      class as G1.15/G1.22 — correct and loud); **coordinate with G1.22 so the
+      key changes once, not twice**. Tests: same target span + changed context
+      span set ⇒ different key ⇒ re-extraction; unchanged ingest ⇒ byte-identical
+      key.
