@@ -449,3 +449,49 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
 - [ ] **G1.6 — quarantine enforcement**: moved to the Phase 4 safety lockdown
       (R8 → R9 → V7) now that the `REFUTES` creation site exists — see
       `todo_phase_4_linking_adjudication.md`.
+
+### From the ingest decision thread *(D1/D2 deltas, merged from `archive/todo_ingest.md` 2026-06-11 — the decisions now live in §3.1/§6.1/§2; these are the code changes they require)*
+
+- [ ] **G1.20 — `calibrate(agreement)` in the combiner (D1 delta).**
+      `combine_faithfulness` is shipped multiplicative with the calibration seam
+      documented but identity. Add `calibrate(agreement)` per §3.1: a mild concave /
+      Wilson-style map over the raw agreement (small-N is coarse — N=3 → {0, ⅓, ⅔, 1}),
+      identity until Trial A3 fits the per-model curve; the **raw** agreement stays the
+      persisted value (calibration at combine time only, so the curve can change
+      without rewriting stored data). Land the function + config seam before A5 fits
+      `PROP_AGREEMENT_THRESHOLD`, even while the curve is identity — the threshold must
+      be calibrated against the final code path. Tests: identity curve ⇒ behavior
+      byte-identical to today; a non-identity fixture curve moves faithfulness in the
+      conservative direction only.
+- [ ] **G1.21 — degraded-mode `null` ⇒ provisional (D2 behavior change).** Shipped
+      behavior leaves `provisional` **null** when the verifier is off; §3.1 now decides
+      `faithfulness = null` (unassessed) ⇒ **provisional = true** with reason
+      *unassessed faithfulness* — never coerce null toward trusted. Implement together
+      with R8 (`todo_phase_4_*.md` *Open task specs*), whose enum gains
+      `UNASSESSED_FAITHFULNESS` and whose `provisional_reasons_for(None)` returns it
+      (the R8 spec is amended accordingly). Update the G1.3/G1.17 degraded-mode tests —
+      this deliberately changes their pinned behavior; say so in the PR.
+- [ ] **G1.22 — verification as its own cached stage (the fix D2 needs to work).**
+      §3.1 promises "when the verifier is later enabled, faithfulness completes from
+      persisted agreement *without re-sampling*" — but the verifier signature is
+      currently folded into the **extraction** content hash (G1.15), so toggling or
+      upgrading the verifier trips `StaleExtractionError` → a full re-extraction, not a
+      cheap completion. Fix: **remove the verifier signature from the extraction key**
+      (the extractor's output does not depend on the verifier) and key verification as
+      its own idempotent stage — per proposition, `(proposition_id, verify_sig)` over
+      the existing verify `Action`s — with a **verify-backfill** entrypoint that runs
+      the verifier over already-extracted propositions, computes
+      `combine_faithfulness(verify, stored agreement)`, updates
+      `faithfulness`/`provisional`(+reasons) in place, and records a verify `Action`
+      per proposition. Consequences to handle: one-time loud re-key on deploy (the
+      extraction hash changes — same class as G1.15's first deploy, correct and loud);
+      G1.7b replay copies faithfulness only when the *verify* stage identity matches,
+      else replays the extraction and queues the spans for verify-backfill.
+      **Interaction with shipped G1.7r (#68):** cascade re-extraction currently
+      fires on *any* pipeline-identity change including the verifier sig — after
+      this split, a verifier-only change must trigger **verify-backfill, not
+      cascade re-extraction** (no propositions are purged for a verifier change);
+      update G1.7r's trigger condition accordingly. Tests:
+      verifier off→on completes faithfulness with **zero** extractor LLM calls and
+      **zero** purged propositions; verifier upgrade re-verifies without
+      re-extracting; extraction cache hit-rate unaffected by verifier config.

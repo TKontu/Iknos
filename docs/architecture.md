@@ -66,9 +66,14 @@ evidence (§3.1); (b) figures are *located* here and *interpreted* by a vision `
 operator downstream (§3), flagged provisional; (c) layout coordinates flow into `Span`
 (§10) for **visual provenance** — a claim resolves to a region on the original page.
 Parse quality is a faithfulness input: scanned / handwritten / complex-table parses are
-marked lower-faithfulness → provisional → triage. **License boundary:** MinerU is
-AGPL-3.0, so it is invoked as a **separate hosted service** (CLI/HTTP), never vendored
-into the codebase — the copyleft stops at the service edge.
+marked lower-faithfulness → provisional → triage. **License boundary (updated
+2026-06):** MinerU has relicensed from AGPL-3.0 to the "MinerU Open Source License" —
+Apache-2.0-based **with additional conditions** — and removed its AGPL model
+dependencies. The **separate hosted service** (CLI/HTTP) integration is retained
+regardless: it is the right seam for a heavyweight GPU dependency behind a swappable
+contract, and it keeps us insulated from the custom license's additional conditions
+(licensing track: review those conditions before any vendoring decision; model-weight
+licenses vary by backend — prefer the permissively-licensed vlm/hybrid backends).
 
 - Run a long-context embedding model over the whole document once. Cache the
   contextualized token embeddings.
@@ -109,7 +114,14 @@ boundaries, available at several levels.
 - **Level knob.** The length penalty. Light penalty → many small segments
   (sub-paragraph grain); heavy penalty → few large ones (chapter grain). One
   mechanism, run at a few penalty settings, produces the whole ladder. Segments
-  are stored as offset ranges.
+  are stored as offset ranges. **Level count is configuration, not code (decided,
+  shipped):** an ordered list of per-level params (`penalty`, `max_len`, mode),
+  default **2** (level 0 = the finest, byte-identical to the single-level path —
+  zero regression; level 1 = one coarser pass). Principle 1 makes the count
+  empirical, so trials sweep it without code changes; embed-once (principle 2)
+  makes an extra level a segmentation + index pass, not a re-embedding. Guard:
+  these are **chunk-text** levels — never to be read as part-whole abstraction
+  levels (§14; four distinct hierarchies).
 - **Objective caution.** "Good segment" has three competing meanings that pull
   different ways:
   - *coherence* (low internal variance) — a trap: it rewards redundancy, since
@@ -192,7 +204,9 @@ never to score them.
 
 **Confidence comes from consistency and verification, not verbalized self-report.**
 Reuse the §8 machinery: multi-sample extraction (stable extractions are high-confidence;
-unstable ones flagged), and an **extract-then-verify** pass. **Agreement must be
+unstable ones flagged), and an **extract-then-verify** pass — an entailment/NLI check
+that the source span actually supports the proposition *with its polarity and modality*
+(the perception-layer analogue of ensemble contradiction). **Agreement must be
 computed within identical epistemic-field partitions** — embedding similarity cannot
 distinguish polarity (a claim and its negation embed nearly identically, typically
 above any usable equivalence threshold), so equivalence clusters are formed only
@@ -201,10 +215,34 @@ that splits across polarities is a **negative** consistency signal — the extra
 is unstable on the claim's direction — and must drive agreement *down* and mark the
 proposition provisional, never be averaged into a single high-agreement cluster.
 Multi-sample also requires nonzero sampling temperature, or N identical samples make
-agreement trivially perfect; the configuration must enforce this, not document it — an entailment/NLI check
-that the source span actually supports the proposition *with its polarity and modality*
-(the perception-layer analogue of ensemble contradiction). Verification catches both
-hallucinated content (not in the source) and distortion (operator dropped).
+agreement trivially perfect; the configuration must enforce this, not document it.
+Verification catches both hallucinated content (not in the source) and distortion
+(operator dropped).
+
+**The combiner (decided):** `faithfulness = verify × calibrate(agreement)`, with
+`agreement = 1.0` as the identity element (single-sample / N=1 reduces exactly to the
+verify component). Multiplicative because the two signals are independent failure modes
+(content-grounding vs extraction-stability) and both must bind. A weighted blend is
+*rejected* — at full agreement it inflates faithfulness above `verify`, breaking the
+reduce-to-verify invariant; `min` is *rejected* as discarding the non-binding signal.
+Over-penalizing in the correlated tail is the safe direction (→ provisional → triage).
+`calibrate` maps raw agreement (coarse at small N: N=3 → {0, ⅓, ⅔, 1}) through a mild
+concave / Wilson-style curve so it is conservative, not jumpy — fitted per model by
+Trial A3, identity until then. The **raw** agreement is persisted (calibration applied
+at combine time, so the curve can change without rewriting stored data). Trial A5
+retains an empirical check of this choice — falsification, not an open decision.
+
+**Degraded mode (verifier off — decided): faithfulness is `null`, never coerced.**
+Faithfulness is **three-state** — verified-high / verified-low / **unassessed**
+(`null`) — because high agreement is not grounding (a model can *consistently*
+hallucinate): `agreement` is a modifier, `verify` is the assessment. With the verifier
+off, `agreement` persists in its own field and `faithfulness` stays `null`, which ⇒
+**provisional (reason: unassessed faithfulness)** ⇒ quarantined from high-stakes moves
+and routed to triage. Never coerce an absent verification to 1.0. When the verifier is
+later enabled, faithfulness completes from the persisted agreement **without
+re-sampling** — which requires verification to be keyed as its *own* cached stage,
+separate from the extraction cache key (the extractor's output does not depend on the
+verifier; see §6.1).
 
 **Three confidence types, kept distinct.** A proposition carries a **faithfulness
 confidence** (does it represent the source?), separate from **source credibility** (is
@@ -488,7 +526,28 @@ discipline below keeps both initial and incremental cost bounded (not exponentia
   reference passes are amortized, not repaid each time.
 - **Content-addressed caching.** Extraction and adjudication outputs are cached keyed by
   content (+ model version); unchanged spans/propositions/edges are never re-inferred.
-  "Embed once" extends to "extract once" for static content.
+  "Embed once" extends to "extract once" for static content. **The extraction key
+  (decided, shipped):** per span, `(span_id, content_hash)` where `content_hash` folds
+  the *full pipeline identity* — target text **and context text** (decontextualization
+  makes extraction context-dependent, so identical span text alone is never sufficient),
+  model, prompt/schema SHAs, and the sampling regime. Cross-document "extract once"
+  reuse keys on this same full identity, so a replay is sound by construction; a
+  *context-free, duplicate-text-only* shortcut is **rejected**. Verification is keyed as
+  its **own cached stage** (its identity: verifier model + prompt/schema), separate from
+  the extraction key — the extractor's output does not depend on the verifier, so
+  enabling or upgrading the verifier must re-verify, never re-extract (§3.1 degraded
+  mode completes cheaply from persisted agreement).
+- **Pipeline-version change is belief revision, not a cache crisis (target policy).**
+  A *contract-compatible* upgrade (new extractor model/prompt) re-extracts affected
+  spans as a **new version** — old retained, bitemporal, logged (§7.4) — runs the cheap
+  symbolic re-propagation immediately, and **defers expensive LLM re-derivation behind
+  VoI/budget** (≤1 per evidence-state, below); mixed-version regions carry version
+  stamps, surface lower-confidence, and triage prioritizes the backfill (high-stakes /
+  contested spans first). A *contract-breaking* change (cached form uninterpretable, or
+  mixing versions unsafe) **raises** and requires explicit migration. Until the Phase 5
+  supersession and Phase 6 VoI machinery exist, the shipped interim behavior is the
+  loud `StaleExtractionError` + explicit re-extraction — fail-loud, never silently
+  stale.
 - **Cheap symbolic re-propagation, unbounded.** On any change, Layer A/B and the QBAF
   recompute only the **delta-affected sub-graph** (the transitive dependents), with **no
   LLM calls** — so it runs freely on every change and the cascade is linear in the
@@ -842,11 +901,14 @@ tables in the same Postgres instance, joined to the graph by id.
   possible, hypothesized}, `attribution` (document / reported-speech / named-source),
   `scope` (quantifier scope notes), `epistemic_class` ∈ {observation, testimony,
   judgement} (orthogonal to modality; gates how much source credibility applies, §3.1/
-  §9.1); and `faithfulness` ∈ [0, 1] (calibrated confidence that the proposition
-  represents its span — distinct from source credibility and from evidential strength),
-  plus a `provisional` flag set when faithfulness or a binding is below the
-  stakes-dependent threshold. Linked to the Span(s) it came from. Propositions are
-  first-class nodes, not free text on other nodes.
+  §9.1); `faithfulness` ∈ [0, 1] **or null** — nullable three-state: verified-high /
+  verified-low / unassessed (`null` = verifier off, grounding unassessed, never coerced
+  to a number — §3.1; distinct from source credibility and from evidential strength);
+  **`agreement`** ∈ [0, 1] — the raw multi-sample consistency, persisted separately
+  from faithfulness (calibration is applied at combine time, §3.1); plus a
+  `provisional` flag set when faithfulness is below the stakes-dependent threshold
+  **or null (unassessed)**, or a binding is below threshold. Linked to the Span(s) it
+  came from. Propositions are first-class nodes, not free text on other nodes.
 - **`Mention`** — a surface reference in a span ("it", "the bearing", "bearing 3")
   awaiting binding (§3.1). Properties: `id`, `surface`, `box`, and the Span it occurs
   in. Bound to a canonical entity by a `REFERS_TO` edge; an unbound or low-confidence
@@ -869,9 +931,13 @@ tables in the same Postgres instance, joined to the graph by id.
 - **`Task`** — the intentional node: an investigative goal / framing question (§11.2).
   Properties: `id`, `question` (text), `type` ∈ {causal, normative, existence,
   comparative, …}, `answer_state` ∈ {open, partially-answered, answered, abandoned},
-  `box`. **Distinct from epistemic nodes — a Task is *answered*, never adjudicated
-  true/false.** The root Task is the user's question; sub-Tasks form a decomposition
-  tree.
+  `box`, and `kind` ∈ {question, **inquiry**} — an *inquiry* is an external
+  evidence-acquisition sub-Task (acquire a document, commission a test, interview;
+  §11.3), reusing `DECOMPOSES_INTO` and `answer_state` rather than adding a node
+  category. **Distinct from epistemic nodes — a Task is *answered*, never adjudicated
+  true/false** (and an inquiry carries no truth-state, no `EVIDENCED_BY`, no
+  credibility — the intentional ↔ epistemic firewall). The root Task is the user's
+  question; sub-Tasks form a decomposition tree.
 - **`Box`** — the registry node (§9). Properties: `id`, `tier`
   ∈ {schema, reference, case, working}, `version`, `source`, `reliability_prior`,
   `source_interest` {role, stake} (the §9.1 input for conditional credibility),
@@ -1149,7 +1215,11 @@ merely where to look.
 (§13), and override-reconciliation prompts (§10.3). VoI orders them into a single
 budgeted top-N stream; this *is* the prioritization of the expert-triage queue referenced
 throughout. The same VoI score also gates the machine's **re-inference budget** (§6.1):
-expensive LLM re-analysis runs only where it could change the conclusion.
+expensive LLM re-analysis runs only where it could change the conclusion. Where actions
+have heterogeneous costs (§11.3 leads/inquiries), the score extends to
+**VoI-per-unit-cost** (EVSI under a budget) — one signal, three consumers: the machine
+re-inference budget, this review queue, and the next-best-move list; for external
+inquiries the cost is expert-/pack-supplied, not computed.
 
 **Guard against confident-wrong, not only uncertain.** Pure uncertainty-ranking would
 miss the worst failure mode — a high-confidence atom that is wrong. So triage also
@@ -1220,6 +1290,43 @@ question, and let the expert prune/edit it (principle 6). And the Task layer is 
 **optional overlay**: the system can still run undirected (exploratory "build the network"
 mode); a Task makes it goal-directed.
 
+### 11.3 Leads, moves, and inquiries — the next-best-move layer
+
+The system can propose what to do next. This is **not a new node category**; it
+decomposes into two existing shapes, preserving the intentional ↔ epistemic firewall:
+
+- **Moves (internal, ephemeral).** Candidate computational actions — run
+  `corroborate` / `find-contradiction` / `deduce`, expand a region, retrieve — are a
+  **derived projection over the open-trace set**, recomputed from the current graph
+  state; no persistence beyond the §10.1 process log when one is executed.
+- **Inquiries (external, persisted).** Evidence-acquisition proposals — acquire a
+  document, commission a test, interview a witness — are a **sub-type of `Task`**
+  (`kind = inquiry`, §10), reusing `DECOMPOSES_INTO` and `answer_state`. No epistemic
+  node: a lead has no truth-state, no `EVIDENCED_BY`, no credibility.
+- **Naming.** *Lead* = the surfaced ranked list (moves + inquiries); *move* =
+  internal; *inquiry* = the persisted external sub-Task. The name `Action` is taken
+  by the §10.1 process log and is not reused.
+- **Ranking** is §11.1's VoI extended to **VoI-per-unit-cost** (EVSI under budget);
+  the generator is **type-conditioned** by `Task.type` (normative → "obtain the
+  governing standard"; causal → "find a refuter"), consistent with §11.2's
+  reasoning-mode selection.
+- **Inert until accepted.** A `proposed` lead is advisory and must **not** widen
+  retrieval or candidate scope until accepted — otherwise the value-gate explosion
+  §11.2 warns about relocates into the reasoning scope.
+- **Calibration.** Log predicted-vs-realized VoI per move-*type* (a slow per-type
+  prior, credited only on proximate cause), fed back like the §10.3 reconciliation
+  loop.
+- **Remediation** ("what should be done about the finding") is the *answer to a
+  normative Task* — decision support, never auto-executed, never re-injected as
+  evidence.
+- **The single ingest touchpoint:** an accepted inquiry's outcome (the acquired
+  document, the test report) is a new source that flows through the ordinary §1–§4
+  ingest at the loop's *revise* step — no special ingest path; the cache and
+  version-change policies (§6.1) already cover re-entry.
+
+Owned by Phases 6–7 (runtime generator + ranking; accept/reject and inquiry entry in
+the expert interface).
+
 ## 12. Propagation model — two layers, not one
 
 The "confidence-aware semiring" open item is resolved as follows: **truth maintenance
@@ -1280,8 +1387,10 @@ ordinal, ordering-driven use the QBAF makes of these scores. Decide with a fixtu
 demonstrating both behaviours on a deep chain vs a shallow one before Layer B is
 built; if Viterbi is kept, the banding must be made depth-aware (strictly more
 machinery). The same depth-compounding concern applies at the perception layer,
-where `faithfulness = verify × agreement` and credibility multiply in series —
-Trial A5 should evaluate `min` as the combiner alongside the product.
+where `faithfulness = verify × calibrate(agreement)` and credibility multiply in
+series — the combiner default is decided (§3.1: multiplicative, `min` rejected as
+discarding the non-binding signal); Trial A5's evaluation remains as a
+falsification check, not an open choice.
 
 **Foundedness gates confidence — and that ordering is what makes cycles safe.** Layer B
 *converges* on a cycle but convergence is not foundedness: alone it would assign a
@@ -1598,7 +1707,10 @@ resourced with evaluation gates, not routine engineering — see §13.
   (§12); group-valued counts for retraction, absorptive semiring for confidence.
 - [ ] **Review-triage VoI tuning** — the leverage/uncertainty/significance weighting and
   the batch/re-rank cadence (§11.1); and proving VoI-ordered review beats cheaper
-  baselines. Measured by the triage-efficiency trial.
+  baselines. Measured by the triage-efficiency trial. Now also covers the §11.3
+  extension: the VoI-per-unit-cost (EVSI) form, the type-conditioned lead generator,
+  and the predicted-vs-realized VoI calibration log — same trial family, costs
+  expert-/pack-supplied.
 - [ ] **Entity-resolution tuning** — the auto-merge confidence bar (the under/over-merge
   asymmetry), the relational-evidence scorer, and continuous re-resolution cadence
   (§5.2). Measured by the resolution gate (precision/recall).
@@ -1624,10 +1736,11 @@ resourced with evaluation gates, not routine engineering — see §13.
   domains (§9).
 - [ ] **Re-evaluation trigger policy** — eager propagation vs lazy recompute-on-read,
   and the propagation bound.
-- [ ] **Layer B semiring (Viterbi vs Gödel)** — decide at Phase 3 entry with a
-  depth-bias fixture (§12); if Viterbi is kept, make acceptability banding
-  depth-aware. Same question for the perception-layer combiner (`×` vs `min`) in
-  Trial A5.
+- [x] **Layer B semiring (Viterbi vs Gödel)** — resolved (G3.5, fixture-decided):
+  **Gödel `max-min` default** (depth-neutral, matching the QBAF's ordinal use);
+  Viterbi retained at the seam. The perception-layer combiner is likewise decided
+  (§3.1): `verify × calibrate(agreement)`, `min` rejected; Trial A5's check remains
+  as falsification.
 - [x] **Knowledge tiering** — resolved; see §9 (tier × box axes, source vs working,
   gated promotion).
 - [ ] **LLM→QBAF mapping** — turning calibrated LLM judgments into intrinsic weights

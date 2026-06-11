@@ -267,15 +267,24 @@ older specs is stale.
 
 ### R8 — `provisional` boolean → `provisional_reasons` set
 
-One flag currently carries three meanings; triage (§11.1) needs the reason, the
+One flag currently carries several meanings; triage (§11.1) needs the reason, the
 quarantine gate (R9) needs non-emptiness. Known reasons now: `low_faithfulness`
-(Phase 1), `unresolved_reference` (Phase 2), `uninferred_budget` (Phase 5).
+(Phase 1), `unassessed_faithfulness` (Phase 1 degraded mode — §3.1 D2, amended
+2026-06-11), `unresolved_reference` (Phase 2), `uninferred_budget` (Phase 5).
 
-1. `types/epistemic.py`: add `ProvisionalReason(StrEnum)` with those three values;
+1. `types/epistemic.py`: add `ProvisionalReason(StrEnum)` with those four values;
    replace `is_provisional(...)` with
    `provisional_reasons_for(faithfulness: float | None) -> set[ProvisionalReason]`
-   (`{LOW_FAITHFULNESS}` below threshold, else empty; `None` → empty, the documented
-   verifier-off mode). Migrate callers rather than keeping a bool wrapper.
+   (`{LOW_FAITHFULNESS}` below threshold; **`None` → `{UNASSESSED_FAITHFULNESS}`** —
+   §3.1's decided rule: unassessed grounding is provisional, never coerced toward
+   trusted; this changes the previously-documented verifier-off behavior, see G1.21
+   in `todo_phase_1_ingest.md`; else empty). Migrate callers rather than keeping a
+   bool wrapper. **Merge-order note (2026-06-11):** PR #67 implements R8 with the
+   original three members and `None → set()` — written before this amendment
+   landed. That is fine: merge #67 as-is; **G1.21 then delivers the fourth member
+   and the `None → {UNASSESSED_FAITHFULNESS}` mapping** as the follow-up. Until
+   G1.21 lands, the quarantine gate does *not* hold back unverified (verifier-off)
+   propositions — the D2 rule in §3.1 is spec-ahead-of-code there.
 2. `types/nodes.py::Proposition`: `provisional: bool | None` →
    `provisional_reasons: list[str]` (default `[]`; list for stable serialization,
    set semantics — dedupe on write).
@@ -286,8 +295,10 @@ quarantine gate (R9) needs non-emptiness. Known reasons now: `low_faithfulness`
 4. `grep -rn "provisional" src/ tests/` and migrate every reader.
 
 Accept: low-faithfulness proposition persists `["low_faithfulness"]` + legacy
-`true`; high-faithfulness persists `[]` + `false`; verifier-off persists `[]` +
-`null`; no production read of the boolean except the legacy write. Tests:
+`true`; high-faithfulness persists `[]` + `false`; verifier-off persists
+`["unassessed_faithfulness"]` + legacy `true` (the G1.21 behavior change — update
+the pinned degraded-mode tests deliberately); no production read of the boolean
+except the legacy write. Tests:
 `test_epistemic.py` (threshold edge), `test_proposition_layer.py` (persisted fields).
 
 ### R9 — quarantine gate function (pure)
