@@ -104,16 +104,26 @@ because Phase 2 is where its absence turns from latent to expensive.*
       revision (Phase 3).)*
 - [x] `INVOLVES` edges (fact → actor/object) with `role`; `EVIDENCED_BY` edges (fact →
       proposition/span). *(G2.2 — Fact `EVIDENCED_BY` its Proposition and each Span.)*
-- [ ] Seed each fact's source-reliability/`significance` prior from its box tier (§9,
-      feeds Phase 4 edge significance).
-- [ ] **Conditional credibility (§9.1), gated by epistemic class:** for **observations**
+- [x] Seed each fact's source-reliability/`significance` prior from its box tier (§9,
+      feeds Phase 4 edge significance). *(G2.6 — the source-reliability prior (box
+      `reliability_prior`) is reachable Fact→Box and consumed by `effective_credibility`;
+      `significance` is an SUPPORTS/REFUTES *edge* property, so it lands with those edges in
+      Phase 4, not on the Fact.)*
+- [x] **Conditional credibility (§9.1), gated by epistemic class:** for **observations**
       credibility is minor (checked by corroboration/verification, not interest-discount);
       for **judgements** effective credibility = box base reliability × claim-interest
       alignment (self-serving discounted; against-interest boosted). Source `interest`/role
       patterns come from the domain pack; per-claim alignment is LLM/expert-flagged,
-      defeasible, logged. Distinct from faithfulness and strength.
-- [ ] **Sensitivity (§9.1):** carry the source `sensitivity` onto facts; derived nodes
-      inherit the max of antecedents (propagated in Phase 3/5).
+      defeasible, logged. Distinct from faithfulness and strength. *(G2.6 —
+      `core/credibility.py`: `effective_credibility` is **derived, never stored** — box
+      reliability × an epistemic-class-gated `interest_modifier`; `effective_credibility_of`
+      reads the stored inputs at use-time. The per-claim `interest_alignment`
+      (`InterestAlignment`) slot exists on the Fact; the LLM/expert alignment-judging pass is
+      a deferred seam, so it is `None`→`UNKNOWN` (identity) until then.)*
+- [x] **Sensitivity (§9.1):** carry the source `sensitivity` onto facts; derived nodes
+      inherit the max of antecedents (propagated in Phase 3/5). *(G2.6 — `extract` seeds a
+      base Fact's `sensitivity` as the lub of its source Span(s) (`seed_sensitivity`); the
+      `DERIVED_FROM` walk that propagates to conclusions is Phase 3/5.)*
 - [x] Both annotations initialized: support-count and confidence (§12). *(G2.2 —
       `base_annotations`: `support_count=1` (one `EVIDENCED_BY` grounding), `confidence`
       seeded from faithfulness or the Viterbi identity `1.0`; the computed Layer-B value

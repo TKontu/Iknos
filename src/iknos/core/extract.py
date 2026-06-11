@@ -57,6 +57,7 @@ from iknos.core.llm import LLMClient
 from iknos.core.prompts import vocab
 from iknos.provenance.action_log import record_action
 from iknos.types.annotations import Annotations
+from iknos.types.governance import Sensitivity
 from iknos.types.nodes import Box, Fact, Proposition, Tier
 from iknos.types.temporal import BitemporalFields
 
@@ -192,14 +193,31 @@ def base_annotations(faithfulness: float | None) -> Annotations:
     return Annotations(support_count=1, confidence=seed_confidence(faithfulness))
 
 
+def seed_sensitivity(antecedents: list[Sensitivity]) -> Sensitivity:
+    """The sensitivity a base Fact is *seeded* with (§9.1): the lub of its source antecedents.
+
+    A base fact's antecedents are the Span(s) it is ``EVIDENCED_BY``; its sensitivity is the
+    information-flow high-water-mark — never below any antecedent (``Sensitivity.lub``). Empty
+    (no spans) → the lattice origin (public), the §9.1 floor. This is the **base case** of the
+    §9.1 propagation; the ``DERIVED_FROM`` walk that carries it to conclusions (the lub over a
+    derivation's antecedents) is deferred to Phase 3/5 (``nodes.Fact.sensitivity``).
+    """
+    result = Sensitivity()
+    for s in antecedents:
+        result = result.lub(s)
+    return result
+
+
 def fact_to_props(fact: Fact) -> dict[str, Any]:
     """Flatten a :class:`Fact` to AGE vertex properties — the canonical Fact write contract.
 
     The single place Fact serialization lives (cf. ``boxes/serde.box_to_props`` for boxes),
     so every Fact writer shares one mapping. Annotations flatten to ``support_count`` /
     ``confidence`` (§12); bitemporal fields to ISO-8601 (null where open); sensitivity via
-    its canonical flat names (§9.1). The soft-override slot (§10.3) is null on a
-    machine-produced Fact, so it is omitted here rather than written as null.
+    its canonical flat names (§9.1). ``interest_alignment`` is the derived per-claim
+    credibility input (§9.1) — written only when an alignment pass has set it (``None`` is
+    omitted, the un-judged placeholder, cf. the override slot). The soft-override slot (§10.3)
+    is null on a machine-produced Fact, so it too is omitted rather than written as null.
     """
     props: dict[str, Any] = {
         "id": str(fact.id),
@@ -218,6 +236,8 @@ def fact_to_props(fact: Fact) -> dict[str, Any]:
         ),
     }
     props.update(fact.sensitivity.flatten())
+    if fact.interest_alignment is not None:
+        props["interest_alignment"] = str(fact.interest_alignment)
     return props
 
 
@@ -303,6 +323,29 @@ class Extractor:
         )
         return row.scalar_one_or_none() is not None
 
+    async def _span_sensitivities(
+        self, session: AsyncSession, span_ids: list[uuid.UUID]
+    ) -> list[Sensitivity]:
+        """Read the source Spans' sensitivity (§9.1) — the Fact's antecedents to lub.
+
+        One ``properties()`` read per span, rebuilt through ``Sensitivity.from_props`` (the
+        inverse of the flat write contract, which JSON-encodes the compartment list as a
+        string property). A span missing/un-annotated reads back as the lattice origin
+        (public), so the seed is never below the floor.
+        """
+        from iknos.db.age import execute_cypher, parse_agtype_map
+
+        out: list[Sensitivity] = []
+        for sid in span_ids:
+            rows = await execute_cypher(
+                session,
+                f"MATCH (s:Span {{id: '{sid}'}}) RETURN properties(s)",
+                returns="props agtype",
+            )
+            if rows:
+                out.append(Sensitivity.from_props(parse_agtype_map(rows[0][0])))
+        return out
+
     async def _persist(
         self,
         session: AsyncSession,
@@ -328,7 +371,9 @@ class Extractor:
             statement=prop.text,
             annotations=base_annotations(prop.faithfulness),
             temporal=BitemporalFields(ingested_at=now, valid_from=now),
-            # sensitivity left at the lattice origin — source-sensitivity seeding is G2.6.
+            # Sensitivity seeded from the source Span(s) — the lub of antecedents (§9.1, G2.6);
+            # interest_alignment left None (the per-claim alignment pass is a later seam).
+            sensitivity=seed_sensitivity(await self._span_sensitivities(session, item.span_ids)),
         )
         await merge_vertex(session, "Fact", fact_to_props(fact))
 

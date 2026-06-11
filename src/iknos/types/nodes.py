@@ -21,7 +21,7 @@ from iknos.types.epistemic import (
     Polarity,
     Routing,
 )
-from iknos.types.governance import Sensitivity, SourceInterest
+from iknos.types.governance import InterestAlignment, Sensitivity, SourceInterest
 from iknos.types.temporal import BitemporalFields
 
 
@@ -151,6 +151,12 @@ class Fact(BaseModel):
     statement: str
     annotations: Annotations
     temporal: BitemporalFields
-    # lub of antecedents' sensitivity (§9.1); propagation walk deferred.
+    # lub of antecedents' sensitivity (§9.1); base facts seed from their source Span(s)
+    # (G2.6), the DERIVED_FROM propagation walk for conclusions is deferred to Phase 3/5.
     sensitivity: Sensitivity = Field(default_factory=Sensitivity)
+    # Derived per-claim input to conditional credibility (§9.1/§10): None = no alignment pass
+    # has judged this claim yet (the schema-contract placeholder, cf. Proposition.faithfulness).
+    # Effective credibility is computed (not stored) from box reliability × interest modifier,
+    # gated by the proposition's epistemic class — see core/credibility.py.
+    interest_alignment: InterestAlignment | None = None
     override: dict[str, Any] | None = None  # §10.3 — logic lands in Phase 7

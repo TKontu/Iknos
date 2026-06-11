@@ -27,7 +27,7 @@ bounding pieces (§5.2, §14, §13) — come *after* the node-creation substrate
 | **G2.3** | Entity resolution subsystem (§5.2) — scored `SAME_AS` components, cheap→expensive cascade, conservative under-merge default + `candidate` links | G2.2 | **shipped (this increment)** — thin slice; anchor-canonicalization + belief-revision/contradiction loop deferred |
 | G2.4 | Reference binding (§3.1) — detect `Mention`s separately from binding; scored `REFERS_TO` via the scoped cascade; low-confidence stays open → provisional → triage | G2.2 | **shipped (this increment)** — thin slice; pronoun/discourse-antecedent + taxonomy-anchor stages + multi-sample/verify confidence deferred |
 | G2.5 | `PART_OF` abstraction levels (§14) — anchor-first to the pack taxonomy, induce fallback, coverage policy; level *derived* from the subject-role referent | G2.2 (+ G2.3 anchoring) | planned |
-| G2.6 | Conditional credibility (§9.1) gated by epistemic class + sensitivity seeding onto facts | G2.2 | planned |
+| G2.6 | Conditional credibility (§9.1) gated by epistemic class + sensitivity seeding onto facts | G2.2 | **shipped (this increment)** — derived-not-stored credibility computation + sensitivity seed; the per-claim alignment-judging pass deferred |
 | G2.7 | Quarantine **enforcement** (Phase-1 G1.6) — provisional/low-faithfulness propositions cannot drive a `REFUTES` (gated until evidential edges exist) | Phase 4 edges | planned |
 
 Cross-cutting (enforced from G2.2 on): every created node/edge has a non-empty
@@ -422,3 +422,94 @@ over-eager binding silently fabricates coreference and corrupts every downstream
 - [x] Ambiguous/low-confidence bindings stay **open** (multiple `candidate` targets / no edge)
       and mark the dependent proposition `provisional`; every run emits an `Action`.
 - [x] Re-binding a settled proposition is a no-op (Action-log idempotency).
+
+---
+
+## G2.6 — Conditional credibility + sensitivity seeding *(shipped — thin slice)*
+
+**Goal.** Wire the two §9.1 governance quantities a Fact carries from the source, **keeping
+credibility derived and sensitivity propagated** — never a flat stored scalar (§9.1/§10).
+(1) **Sensitivity** seeds onto each base Fact as the lub of its source Span(s) — the §9.1
+information-flow high-water-mark, base case of the provenance propagation. (2) **Credibility
+is conditional and gated by epistemic class**: this increment ships the canonical
+*computation* over the stored inputs (box `reliability_prior` × an interest modifier that an
+**observation** ignores and a **judgement** applies fully) — **derived at use-time, never
+stored**, so a stored scalar can't collapse the conditional nature or fix it against later
+belief revision.
+
+### What shipped
+
+- **`iknos/core/credibility.py` (pure + one DB read).** `interest_modifier` (the §9.1
+  modifier interpolated from identity toward the alignment endpoint by the epistemic-class
+  *gate* — observation gate 0 ⇒ always 1.0; judgement gate 1 ⇒ full discount/boost) and
+  `effective_credibility` (`reliability_prior × modifier`, clamped) — both DB-free,
+  fail-loud on an unmapped enum (the `_ROUTING`/`_SENSITIVITY_RANK` convention).
+  `effective_credibility_of(session, fact_id)` is the use-time read: it walks Fact→Box
+  (`reliability_prior`), Fact→Proposition (`epistemic_class`), and the Fact's
+  `interest_alignment` slot, returning `None` when the chain is incomplete.
+- **`iknos/types/governance.py`** gained `InterestAlignment`
+  (`self-serving`/`neutral`/`against-interest`/`unknown`) — the derived per-claim credibility
+  input — and `Sensitivity.from_props` (the read inverse of `flatten`, decoding the
+  JSON-string compartment property; absent level ⇒ public origin).
+- **`iknos/core/extract.py`** now seeds the Fact's sensitivity from its source spans
+  (`seed_sensitivity` = lub-fold; `_span_sensitivities` reads them via
+  `Sensitivity.from_props`) instead of leaving the lattice origin, and serializes the
+  `interest_alignment` slot (omitted while `None`). **`iknos/types/nodes.py`** Fact gained
+  the `interest_alignment` field (the schema-contract placeholder).
+
+### Decisions
+
+- **Credibility is derived, never stored (§9.1/§10).** Phase 2 seeds the *inputs* only; the
+  scalar is computed by `effective_credibility_of` at use-time (Phase 4's adjudication — the
+  §8↔credibility seam) and may be materialized later as a recomputed cache, like level (§14).
+  A stored credibility number is the explicit anti-pattern §9.1 forbids.
+- **Gated by epistemic class, in the formula.** The observation/judgement split is a property
+  of `interest_modifier` (the class gate), not a caller branch — "credibility applies where it
+  matters" can't be forgotten at a call site. Observation credibility is interest-independent;
+  judgement/testimony are interest-weighted (self-serving discounted, against-interest boosted
+  to the clamp ceiling — an admission against interest is maximally credible).
+- **Unknown alignment is the identity, not a penalty.** A Fact's `interest_alignment` is `None`
+  until the (deferred) judging pass runs; the read coerces it to `UNKNOWN` (modifier 1.0), so
+  an un-judged claim's credibility is just the box reliability — defer, never penalize on
+  absence (the `faithfulness`/`provisional` placeholder convention).
+- **Sensitivity seed is the base case of the §9.1 propagation.** A base Fact's antecedents are
+  its source Span(s); its sensitivity is their lub. The `DERIVED_FROM` walk that carries
+  sensitivity to *conclusions* (the lub over a derivation's antecedents) stays deferred to
+  Phase 3/5 — this increment does the base layer the walk will build on.
+- **No migration.** AGE is schemaless for properties; `interest_alignment` /
+  `sensitivity_*` are plain property strings on existing labels.
+
+### Deferred (kept out of the thin slice — documented seams)
+
+- **The per-claim interest-alignment judging pass** (LLM/expert-flagged against the pack's
+  source-interest patterns, §9.1) — the Fact's `interest_alignment` is `None` until it runs.
+- **Track-record belief revision** of source credibility after a refuted claim (§9.1) → Phase
+  3/4; this increment computes point-in-time credibility from current inputs.
+- **Independence-aware corroboration + coherence/triage** defenses (§9.1) compose *around*
+  credibility in Phase 4, not inside the scalar.
+- **`DERIVED_FROM` sensitivity propagation** to conclusions → Phase 3/5.
+- **`significance` prior** is an *edge* property (SUPPORTS/REFUTES), so it lands with those
+  edges in Phase 4; a Fact stores no significance — the box `reliability_prior` it would seed
+  from is already reachable (Fact→Box).
+
+### Tests
+
+- **Unit:** `test_credibility.py` (the gate — observation interest-independent for every
+  alignment; judgement discount/boost; clamp to [0,1]; UNKNOWN identity; out-of-range raise);
+  `test_governance.py` (`Sensitivity.from_props` round-trip + JSON-string/absent/empty
+  compartments; `InterestAlignment` vocab); `test_extract.py` (`seed_sensitivity` lub-fold;
+  `fact_to_props` omits `interest_alignment` when unjudged, writes it when set).
+- **Integration (`tests/integration/test_credibility.py`, live AGE):** a Fact inherits a
+  confidential span's sensitivity (lub); `effective_credibility_of` returns the box reliability
+  for an observation; for a judgement it passes reliability through while unjudged, then
+  discounts once an alignment pass flags it self-serving. (Runs in CI.)
+
+### Exit criteria (G2.6)
+
+- [x] A base Fact's `sensitivity` is the lub of its source Span(s) (§9.1), not the lattice
+      origin — seeded at extraction.
+- [x] Effective credibility is **computed** from stored inputs (box reliability ×
+      epistemic-class-gated interest modifier), never stored as a scalar; an observation's
+      credibility is interest-independent, a judgement's is interest-weighted.
+- [x] The per-claim `interest_alignment` input slot exists on the Fact (placeholder, `None`
+      until the judging pass) and is read by the credibility computation.
