@@ -53,7 +53,8 @@ generic over a** :class:`GradualSemantics`, with the default swapped at this sea
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from enum import StrEnum
+
+from iknos.types.intentional import AcceptabilityBand, HypothesisState, band
 
 # An argument id. The pure core is id-blind exactly like ``truth_maintenance.NodeId``: the
 # Phase-4 adapter (a later increment) stringifies AGE/UUID ids at the boundary.
@@ -238,6 +239,26 @@ def _check_unit_interval(value: Strength, what: str) -> None:
         raise ValueError(f"{what} must be in [0, 1], got {value!r}")
 
 
+def _incoming_index(baf: BAF) -> tuple[dict[ArgId, list[Edge]], dict[ArgId, list[Edge]]]:
+    """Index support/attack edges by destination — ``(in_support, in_attack)``.
+
+    Validates each edge's strength is in ``[0, 1]`` and drops any edge with a dangling
+    endpoint (``src`` or ``dst`` not an argument), so the framework is partial-tolerant. Shared
+    by :func:`solve` and :func:`aggregate_evidence` so the contribution wiring lives in one
+    place.
+    """
+
+    def index(edges: tuple[Edge, ...]) -> dict[ArgId, list[Edge]]:
+        by_dst: dict[ArgId, list[Edge]] = {a: [] for a in baf.arguments}
+        for e in edges:
+            _check_unit_interval(e.strength, f"edge strength {e.src!r}->{e.dst!r}")
+            if e.src in baf.arguments and e.dst in baf.arguments:
+                by_dst[e.dst].append(e)
+        return by_dst
+
+    return index(baf.supports), index(baf.attacks)
+
+
 def solve(
     baf: BAF,
     *,
@@ -277,18 +298,7 @@ def solve(
         _check_unit_interval(score, f"base score for {arg!r}")
 
     args = sorted(baf.arguments)  # deterministic iteration ⇒ replay-stable trace (§10)
-
-    # Index incoming edges by destination, dropping dangling endpoints (partial-tolerant).
-    def incoming(edges: tuple[Edge, ...]) -> dict[ArgId, list[Edge]]:
-        by_dst: dict[ArgId, list[Edge]] = {a: [] for a in args}
-        for e in edges:
-            _check_unit_interval(e.strength, f"edge strength {e.src!r}->{e.dst!r}")
-            if e.src in baf.arguments and e.dst in baf.arguments:
-                by_dst[e.dst].append(e)
-        return by_dst
-
-    in_support = incoming(baf.supports)
-    in_attack = incoming(baf.attacks)
+    in_support, in_attack = _incoming_index(baf)
 
     # Seed at the base scores (the §8 intrinsic weight) — the natural starting point and the
     # exact fixpoint for an argument with no incoming edges (stability).
@@ -321,64 +331,37 @@ def solve(
 
 
 # --------------------------------------------------------------------------------------------
-# Read-off — acceptability → verdict band (§11.2) and computed hypothesis state (§7.2, §10).
+# Read-off — aggregate evidence + computed hypothesis state (§7.2, §10).
+#
+# The presentation vocabulary is owned by ``types/intentional.py`` (the AGE property contract):
+# ``HypothesisState`` (the computed state) and ``AcceptabilityBand`` + ``band`` (the §11.2
+# banding *policy* — the single source of truth for the cut-points). This engine **consumes**
+# that vocabulary rather than re-declaring it, so the thresholds cannot drift between the
+# adjudication engine and the node contract. Banding an acceptability for presentation is
+# therefore ``iknos.types.intentional.band(acceptability)``, not a second policy here.
 # --------------------------------------------------------------------------------------------
 
 
-class Verdict(StrEnum):
-    """The graded verdict a hypothesis's acceptability **bands** into for presentation (§11.2).
-    Ordinal, not boolean — the whole point of gradual adjudication."""
+def aggregate_evidence(
+    baf: BAF,
+    strengths: Mapping[ArgId, Strength],
+    *,
+    semantics: GradualSemantics = DEFAULT_SEMANTICS,
+) -> dict[ArgId, tuple[Strength, Strength]]:
+    """For each argument, its ``(aggregate_support, aggregate_attack)`` at the given
+    ``strengths`` — the same per-edge contributions :func:`solve` folds, exposed so
+    :func:`classify_state` can tell *actively-refuted* from *merely-unsupported*.
 
-    TRUE = "true"
-    PLAUSIBLE = "plausible"
-    IMPLAUSIBLE = "implausible"
-    FALSE = "false"
-
-
-class HypothesisState(StrEnum):
-    """A hypothesis's computed state (§7.2, §10): **never hand-set** — derived from the QBAF.
-
-    ``supported`` clears the acceptability bar; below it, ``refuted`` means *actively
-    out-attacked* (net attack dominates) while ``unsupported`` means merely *lacking* support.
-    The distinction matters: a refuted hypothesis has evidence against it; an unsupported one
-    just has too little for it.
+    Pass the converged :attr:`QbafResult.acceptability` as ``strengths``. A source missing from
+    ``strengths`` contributes ``0`` (the unevidenced default). Deterministic (sorted) order.
     """
-
-    SUPPORTED = "supported"
-    UNSUPPORTED = "unsupported"
-    REFUTED = "refuted"
-
-
-@dataclass(frozen=True)
-class VerdictBands:
-    """Acceptability cut-points for the §11.2 verdict bands (and the supported/refuted bar).
-
-    Defaults are **placeholders to be calibrated at the validation gate** (§8 experiment),
-    not tuned constants — held as data (swappable at the same seam as the semantics) precisely
-    so calibration re-points them without touching the engine. ``support_min`` is the bar a
-    hypothesis must clear to count as :attr:`HypothesisState.SUPPORTED`; it defaults to
-    ``plausible_min`` (a verdict at or above "plausible" is a supported hypothesis).
-    """
-
-    true_min: Strength = 0.75
-    plausible_min: Strength = 0.5
-    implausible_min: Strength = 0.25
-    support_min: Strength | None = None  # None ⇒ use plausible_min
-
-    def band(self, acceptability: Strength) -> Verdict:
-        """Band an acceptability into a §11.2 verdict."""
-        if acceptability >= self.true_min:
-            return Verdict.TRUE
-        if acceptability >= self.plausible_min:
-            return Verdict.PLAUSIBLE
-        if acceptability >= self.implausible_min:
-            return Verdict.IMPLAUSIBLE
-        return Verdict.FALSE
-
-
-#: The default verdict bands (calibration targets, §8 experiment) — swappable like the
-#: semantics seam.
-DEFAULT_BANDS = VerdictBands()
+    in_support, in_attack = _incoming_index(baf)
+    out: dict[ArgId, tuple[Strength, Strength]] = {}
+    for a in sorted(baf.arguments):
+        supp = semantics.aggregate(e.strength * strengths.get(e.src, 0.0) for e in in_support[a])
+        att = semantics.aggregate(e.strength * strengths.get(e.src, 0.0) for e in in_attack[a])
+        out[a] = (supp, att)
+    return out
 
 
 def classify_state(
@@ -386,24 +369,25 @@ def classify_state(
     acceptability: Strength,
     aggregate_support: Strength,
     aggregate_attack: Strength,
-    bands: VerdictBands = DEFAULT_BANDS,
 ) -> HypothesisState:
-    """Compute a hypothesis's state from its QBAF outputs (§7.2, §10) — never hand-set.
+    """Compute a hypothesis's state (§7.2, §10) from its QBAF outputs — never hand-set.
 
-    Clears the support bar (``bands.support_min``, default ``plausible_min``) ⇒
-    :attr:`HypothesisState.SUPPORTED`. Otherwise, net attack dominating support ⇒
-    :attr:`HypothesisState.REFUTED` (actively out-argued); else
-    :attr:`HypothesisState.UNSUPPORTED` (merely insufficient support).
+    The support bar is the §11.2 banding policy's ``plausible`` boundary (the single source of
+    truth in ``types/intentional.py``): an acceptability that bands to ``plausible`` or ``true``
+    ⇒ :attr:`~iknos.types.intentional.HypothesisState.SUPPORTED`. Below it, net attack
+    dominating support ⇒ :attr:`~iknos.types.intentional.HypothesisState.REFUTED` (actively
+    out-argued); else :attr:`~iknos.types.intentional.HypothesisState.UNSUPPORTED` (merely
+    insufficient support — the distinction matters: a refuted hypothesis has evidence against
+    it, an unsupported one just too little for it). Get ``aggregate_support``/``_attack`` from
+    :func:`aggregate_evidence`.
 
-    **Ensemble gate (§7.2) is the deferred seam.** §7.2 mandates that a flip *to* ``refuted``
-    be authorised by the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement),
-    never a single judgment. This function computes the *structural* state the QBAF implies;
-    persisting a ``refuted`` flip is gated on that ensemble agreement, which is LLM-/data-bound
-    and lands with the §8 edge-judgment pipeline (a later Phase-4 increment). So the returned
-    ``REFUTED`` is the engine's finding, the gate is the authorisation to act on it.
+    **Ensemble gate (§7.2) is the deferred seam.** §7.2 mandates a flip *to* ``refuted`` be
+    authorised by the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement),
+    never a single judgment. This computes the *structural* state the QBAF implies; persisting a
+    ``refuted`` flip is gated on that ensemble agreement (the §8 edge-judgment pipeline, a later
+    increment). The returned ``REFUTED`` is the engine's finding; the gate authorises acting on it.
     """
-    support_min = bands.support_min if bands.support_min is not None else bands.plausible_min
-    if acceptability >= support_min:
+    if band(acceptability) in (AcceptabilityBand.PLAUSIBLE, AcceptabilityBand.TRUE):
         return HypothesisState.SUPPORTED
     if aggregate_attack > aggregate_support:
         return HypothesisState.REFUTED
