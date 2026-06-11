@@ -42,6 +42,29 @@ class SameAsState(StrEnum):
     CONFIRMED = "confirmed"
 
 
+class BindingState(StrEnum):
+    """The ``state`` property on a ``REFERS_TO`` binding edge (§3.1, §10).
+
+    Reference binding is a **separate, scored decision** — detecting that a mention needs
+    a referent is robust, but choosing *which* entity is error-prone, so it is split out and
+    kept defeasible (§3.1). The state mirrors :class:`SameAsState`'s conservative default:
+
+    - ``CONFIRMED`` — a single referent cleared the high binding bar: the ``Mention``'s
+      denotation is committed.
+    - ``CANDIDATE`` — below that bar, or two referents tie: the binding stays **open**. The
+      mention may carry *several* ``CANDIDATE`` ``REFERS_TO`` edges (the competing referents,
+      §3.1 "may carry multiple candidate targets when ambiguous"), and a proposition resting
+      on an un-confirmed mention is marked ``provisional`` and routed to expert triage.
+
+    An ``unresolved`` mention (no referent above even the candidate bar) writes **no** edge —
+    the absence of a ``REFERS_TO`` is itself the unresolved state, and still marks its
+    proposition provisional.
+    """
+
+    CANDIDATE = "candidate"
+    CONFIRMED = "confirmed"
+
+
 class Role(StrEnum):
     """The ``role`` property on an ``INVOLVES`` edge (§10).
 

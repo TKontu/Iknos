@@ -89,13 +89,19 @@ because Phase 2 is where its absence turns from latent to expensive.*
   - [x] Scope by box/pack; cross-box `SAME_AS` belongs to the working box (§9). *(G2.3 —
         within-source-box resolution: the caller passes one box's entities. Cross-box
         `SAME_AS` in the working box is deferred to the investigation runtime, Phase 6.)*
-- [ ] **Reference binding (§3.1):** detect `Mention`s ("it", "the bearing", "bearing 3")
+- [x] **Reference binding (§3.1):** detect `Mention`s ("it", "the bearing", "bearing 3")
       as a step *separate* from binding; bind each to a canonical entity with a scored,
       defeasible `REFERS_TO` edge via the scoped cascade (local antecedent → in-graph
       entity → domain-pack taxonomy → unresolved). Use a dedicated coreference model +
       entity linking; **do not score bindings by attention.** Confidence from
       consistency + verification. Low-confidence/ambiguous bindings stay open (multiple
       candidates), mark dependent propositions `provisional`, and route to expert triage.
+      *(G2.4 — `core/reference.py`: LLM **detection** only → deterministic lexical binding
+      (no attention) → scored `REFERS_TO` with `BindingState`; ambiguous/unresolved stay
+      open + mark the proposition `provisional`. Thin slice: the in-graph-entity cascade
+      stage. Deferred seams — pronoun/local-discourse-antecedent + taxonomy-anchor stages,
+      multi-sample/verify confidence, expert-triage queue (Phase 7), re-bind belief
+      revision (Phase 3).)*
 - [x] `INVOLVES` edges (fact → actor/object) with `role`; `EVIDENCED_BY` edges (fact →
       proposition/span). *(G2.2 — Fact `EVIDENCED_BY` its Proposition and each Span.)*
 - [ ] Seed each fact's source-reliability/`significance` prior from its box tier (§9,

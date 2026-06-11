@@ -1,0 +1,233 @@
+"""Phase 2 G2.4 integration test — the reference-binding operator end to end.
+
+Real Postgres+AGE with both LLMs (extractor + detector) mocked. The extractor (G2.2) seeds
+a box with Facts whose ``Actor``/``Object`` nodes are the in-graph entities; the binder
+detects each proposition's ``Mention``s and binds them through the scoped cascade — a
+``CONFIRMED`` ``REFERS_TO`` for a single exact referent, ``CANDIDATE`` edges for an
+ambiguous one, and an unresolved (no-edge) pronoun — marking the dependent propositions
+``provisional`` wherever the binding stays open (§3.1).
+"""
+
+import uuid
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from iknos.boxes.serde import case_box
+from iknos.core.extract import ExtractInput, Extractor
+from iknos.core.reference import ReferenceBinder
+from iknos.db.age import bootstrap_session, cypher_map, execute_cypher
+from iknos.types.edges import BindingState
+from iknos.types.nodes import Proposition, Span
+
+pytestmark = pytest.mark.asyncio
+
+
+class _DispatchLLM:
+    """Mock LLM that returns a payload keyed on a substring of the statement.
+
+    Both the extractor and the binder infer concurrently, so a fixed return list cannot be
+    aligned to proposition order — dispatch on the statement content instead. ``key`` selects
+    which response field the operator reads (``entities`` vs ``mentions``).
+    """
+
+    model = "test-model"
+
+    def __init__(self, key: str, table: dict[str, list[dict]]):
+        self._key = key
+        self._table = table
+
+    async def guided_complete(self, messages, schema, sampling):
+        statement = messages[1]["content"]
+        for needle, payload in self._table.items():
+            if needle in statement:
+                return {self._key: payload}
+        return {self._key: []}
+
+
+async def _seed_proposition(session: AsyncSession, *, text_: str) -> tuple[Span, Proposition]:
+    """Create a Document + Span + Proposition (EVIDENCED_BY the Span) the extractor reads."""
+    doc_id = uuid.uuid4()
+    await session.execute(
+        text("INSERT INTO document_content (document_id, raw_text) VALUES (:id, :t)"),
+        {"id": doc_id, "t": text_},
+    )
+    await execute_cypher(session, f"CREATE (:Document {cypher_map({'id': str(doc_id)})})")
+    span = Span(id=uuid.uuid4(), document_id=doc_id, start=0, end=len(text_))
+    await execute_cypher(
+        session,
+        "CREATE (:Span "
+        + cypher_map(
+            {"id": str(span.id), "document_id": str(doc_id), "start": span.start, "end": span.end}
+        )
+        + ")",
+    )
+    prop = Proposition(id=uuid.uuid4(), text=text_)
+    await execute_cypher(
+        session,
+        "CREATE (:Proposition " + cypher_map({"id": str(prop.id), "text": prop.text}) + ")",
+    )
+    await execute_cypher(
+        session,
+        f"MATCH (p:Proposition {cypher_map({'id': str(prop.id)})}), "
+        f"(s:Span {cypher_map({'id': str(span.id)})}) "
+        "CREATE (p)-[:EVIDENCED_BY]->(s)",
+    )
+    await session.commit()
+    return span, prop
+
+
+async def _extract(session: AsyncSession, box, table: dict[str, list[dict]], props) -> None:
+    ex = Extractor(_DispatchLLM("entities", table), concurrency=4)  # type: ignore[arg-type]
+    await ex.extract_propositions(
+        session, [ExtractInput(proposition=p, span_ids=[s.id]) for s, p in props], box
+    )
+
+
+def _binder(table: dict[str, list[dict]]) -> ReferenceBinder:
+    return ReferenceBinder(_DispatchLLM("mentions", table), concurrency=4)  # type: ignore[arg-type]
+
+
+async def _refers_to(session: AsyncSession, box) -> list[tuple[str, str]]:
+    """All REFERS_TO edges in the box as (state, strength) string pairs."""
+    bx = cypher_map({"box": str(box.id)})
+    rows = await execute_cypher(
+        session,
+        f"MATCH (m:Mention {bx})-[r:REFERS_TO]->(e {bx}) RETURN r.state, r.strength",
+        returns="state agtype, strength agtype",
+    )
+    return [(str(st).strip('"'), str(strn)) for st, strn in rows]
+
+
+async def _provisional(session: AsyncSession, prop: Proposition) -> object:
+    rows = await execute_cypher(
+        session,
+        f"MATCH (p:Proposition {cypher_map({'id': str(prop.id)})}) RETURN p.provisional",
+        returns="prov agtype",
+    )
+    return str(rows[0][0])
+
+
+async def test_binder_confirms_proper_name_and_marks_clean(session: AsyncSession) -> None:
+    await bootstrap_session(session)
+    box = case_box("bind-confirm", "1", "test", 0.8)
+    # Two facts introduce the named entity "bearing 3"; the binder then binds a "bearing 3"
+    # mention exactly to it.
+    extract_table = {
+        "failed": [
+            {"label": "bearing 3", "type": "component", "kind": "object", "role": "subject"}
+        ],
+        "inspected": [
+            {"label": "bearing 3", "type": "component", "kind": "object", "role": "object"},
+            {"label": "technician", "type": "person", "kind": "actor", "role": "subject"},
+        ],
+    }
+    p1 = await _seed_proposition(session, text_="Bearing 3 failed.")
+    p2 = await _seed_proposition(session, text_="The technician inspected bearing 3.")
+    await _extract(session, box, extract_table, [p1, p2])
+
+    binder = _binder(
+        {
+            "inspected": [{"surface": "bearing 3", "mention_type": "proper", "kind": "object"}],
+            # "failed" proposition has no referring mention -> empty.
+        }
+    )
+    result = await binder.bind_box(session, box.id)
+
+    # One confirmed binding; the other proposition has no mention.
+    confirmed = [b for b in result.bound if b.state is BindingState.CONFIRMED]
+    assert len(confirmed) == 1
+    edges = await _refers_to(session, box)
+    assert len(edges) == 1
+    assert edges[0][0] == str(BindingState.CONFIRMED)
+    assert 0.0 <= float(edges[0][1]) <= 1.0
+
+    # A confirmed binding does not make its proposition provisional.
+    assert result.provisional_propositions == []
+    assert await _provisional(session, p2[1]) == "null"
+
+    # The bind Action is joinable (§10.1).
+    act = await session.execute(
+        text(
+            "SELECT outputs FROM actions WHERE actor = 'reference-binder' "
+            "AND inputs->>'proposition' = :p"
+        ),
+        {"p": str(p2[1].id)},
+    )
+    assert len(act.one().outputs["confirmed"]) == 1
+
+    # Idempotent re-run: already-bound propositions are skipped, no duplicate edges/mentions.
+    again = await binder.bind_box(session, box.id)
+    assert again.bound == []
+    assert len(await _refers_to(session, box)) == 1
+    bx = cypher_map({"box": str(box.id)})
+    mentions = await execute_cypher(
+        session, f"MATCH (m:Mention {bx}) RETURN count(m)", returns="n agtype"
+    )
+    assert int(str(mentions[0][0])) == 1
+
+
+async def test_binder_keeps_ambiguous_open_and_marks_provisional(session: AsyncSession) -> None:
+    await bootstrap_session(session)
+    box = case_box("bind-ambiguous", "1", "test", 0.8)
+    # Two distinct named bearings exist; a later "the bearing" definite description is
+    # ambiguous between them -> candidate edges, proposition provisional.
+    extract_table = {
+        "Bearing 3 overheated": [
+            {"label": "bearing 3", "type": "component", "kind": "object", "role": "subject"}
+        ],
+        "Bearing 4 overheated": [
+            {"label": "bearing 4", "type": "component", "kind": "object", "role": "subject"}
+        ],
+        "replaced": [
+            {"label": "the bearing", "type": "component", "kind": "object", "role": "object"},
+            {"label": "technician", "type": "person", "kind": "actor", "role": "subject"},
+        ],
+    }
+    p1 = await _seed_proposition(session, text_="Bearing 3 overheated.")
+    p2 = await _seed_proposition(session, text_="Bearing 4 overheated.")
+    p3 = await _seed_proposition(session, text_="The technician replaced the bearing.")
+    await _extract(session, box, extract_table, [p1, p2, p3])
+
+    binder = _binder(
+        {"replaced": [{"surface": "the bearing", "mention_type": "definite", "kind": "object"}]}
+    )
+    result = await binder.bind_box(session, box.id)
+
+    # The "the bearing" mention ties between bearing 3 and bearing 4 -> two candidate edges.
+    edges = await _refers_to(session, box)
+    assert len(edges) == 2
+    assert all(st == str(BindingState.CANDIDATE) for st, _ in edges)
+
+    # The dependent proposition is provisional; no binding is confirmed.
+    assert p3[1].id in result.provisional_propositions
+    assert await _provisional(session, p3[1]) == "true"
+    assert all(b.state is BindingState.CANDIDATE for b in result.bound if b.targets)
+
+
+async def test_binder_leaves_pronoun_unresolved_and_provisional(session: AsyncSession) -> None:
+    await bootstrap_session(session)
+    box = case_box("bind-pronoun", "1", "test", 0.8)
+    extract_table = {
+        "overheated": [{"label": "pump", "type": "equipment", "kind": "object", "role": "subject"}]
+    }
+    p1 = await _seed_proposition(session, text_="It overheated.")
+    await _extract(session, box, extract_table, [p1])
+
+    binder = _binder({"overheated": [{"surface": "It", "mention_type": "pronoun", "kind": None}]})
+    result = await binder.bind_box(session, box.id)
+
+    # A bare pronoun blocks to no in-graph referent (the discourse-antecedent seam) -> no
+    # REFERS_TO edge, but the Mention is recorded and its proposition is provisional.
+    assert await _refers_to(session, box) == []
+    assert len(result.bound) == 1
+    assert result.bound[0].state is None
+    assert p1[1].id in result.provisional_propositions
+    assert await _provisional(session, p1[1]) == "true"
+
+    bx = cypher_map({"box": str(box.id)})
+    mentions = await execute_cypher(
+        session, f"MATCH (m:Mention {bx}) RETURN count(m)", returns="n agtype"
+    )
+    assert int(str(mentions[0][0])) == 1

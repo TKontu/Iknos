@@ -25,7 +25,7 @@ bounding pieces (§5.2, §14, §13) — come *after* the node-creation substrate
 | **G2.1** | **Box operationalization** — the box registry + case box; the shared Box↔AGE serialization the loader and indexes write through | Phase 0 | shipped |
 | **G2.2** | **`extract` operator core** — proposition → `Fact` + `Actor`/`Object` nodes, `INVOLVES`(role) + `EVIDENCED_BY` edges, two annotations initialized, into a box, with an `Action`. **No dedup yet** (fresh nodes) | G2.1 | **shipped (this increment)** |
 | **G2.3** | Entity resolution subsystem (§5.2) — scored `SAME_AS` components, cheap→expensive cascade, conservative under-merge default + `candidate` links | G2.2 | **shipped (this increment)** — thin slice; anchor-canonicalization + belief-revision/contradiction loop deferred |
-| G2.4 | Reference binding (§3.1) — detect `Mention`s separately from binding; scored `REFERS_TO` via the scoped cascade; low-confidence stays open → provisional → triage | G2.2 | planned |
+| G2.4 | Reference binding (§3.1) — detect `Mention`s separately from binding; scored `REFERS_TO` via the scoped cascade; low-confidence stays open → provisional → triage | G2.2 | **shipped (this increment)** — thin slice; pronoun/discourse-antecedent + taxonomy-anchor stages + multi-sample/verify confidence deferred |
 | G2.5 | `PART_OF` abstraction levels (§14) — anchor-first to the pack taxonomy, induce fallback, coverage policy; level *derived* from the subject-role referent | G2.2 (+ G2.3 anchoring) | planned |
 | G2.6 | Conditional credibility (§9.1) gated by epistemic class + sensitivity seeding onto facts | G2.2 | planned |
 | G2.7 | Quarantine **enforcement** (Phase-1 G1.6) — provisional/low-faithfulness propositions cannot drive a `REFUTES` (gated until evidential edges exist) | Phase 4 edges | planned |
@@ -315,3 +315,110 @@ edge keeps the entities separate but the fragmentation visible and the evidence 
 - [x] The canonical entity is the `confirmed`-`SAME_AS`-connected component, read for evidence
       aggregation; every run emits an `Action`.
 - [x] Re-resolving a box writes no duplicate edges (structural idempotency).
+
+---
+
+## G2.4 — Reference binding *(shipped — thin slice)*
+
+**Goal.** A proposition's surface references — a pronoun ("it"), a definite description
+("the bearing"), a named reference ("bearing 3") — denote entities already in the graph.
+**Reference binding is a separate, scored decision, not resolved invisibly** (§3.1):
+*detecting* that a mention needs a referent is robust, but choosing *which* entity is
+error-prone, so the two steps are split (as sign is split from magnitude in §8). G2.4
+detects `Mention`s and binds each to a canonical entity via a defeasible, confidence-bearing
+`REFERS_TO` edge through the scoped cascade (local antecedent → in-graph entity → taxonomy →
+unresolved). The default is **conservative**: a binding is `confirmed` only when a single
+referent clears a high bar; otherwise it stays **open** (one or more `candidate` edges) and
+the dependent proposition is marked `provisional` and routed to expert triage — an
+over-eager binding silently fabricates coreference and corrupts every downstream derivation.
+
+### What shipped
+
+- **`iknos/core/reference.py`.** Pure/DB split on the `core/resolve.py` discipline:
+  - *Pure (DB-free, unit-testable):* `MentionType` (pronoun/definite/proper); the detection
+    schema (`_MentionOut`/`DetectedMentions`) + prompt (`SYSTEM_PROMPT`/`build_messages`,
+    vocab generated from the same enums); `group_referents` (collapse same-label fresh nodes
+    into one canonical referent, with `exclude_ids` for the no-self-bind rule);
+    `block_referents` (the cheap stage — shared-token, kind-scoped); `score_binding` (the
+    deterministic lexical+attribute score — containment + exact label + kind agreement,
+    **never** similarity/attention); `decide_binding` (the conservative bars + tie handling);
+    and the canonical write contracts `mention_to_props` / `refers_to_to_props`.
+  - *`ReferenceBinder`:* the operator (`actor="reference-binder"`, `action_type="bind"`).
+    Box-scoped like the resolver; three-phase like the extractor — (1) serial Action-log
+    idempotency filter, (2) concurrent **detection** holding no DB session (LLM detection
+    only), (3) serial per-proposition persist (Mention vertices + `EVIDENCED_BY` provenance +
+    scored `REFERS_TO` + provisional OR-fold + one `bind` Action). Writes go through the
+    shared `merge_vertex`/`merge_edge` primitives.
+- **`iknos/types/edges.py`** gained `BindingState` (`candidate`/`confirmed`, mirroring
+  `SameAsState`); an unresolved mention writes **no** edge (the absence is the state).
+
+### Decisions
+
+- **Detection ≠ binding (§3.1).** The LLM does detection only and proposes *no* binding; the
+  binding score is deterministic (the `resolve.score_pair` precedent — no LLM in the scoring
+  path). Attention/embedding similarity never scores a binding; the lexical signal is
+  *containment* of the mention's surface in a referent's label (a referring expression is
+  typically a shorter form of a fuller name — "the bearing" ⊂ "bearing 3").
+- **No self-binding.** A mention's referent pool **excludes its own proposition's** extracted
+  entities — the same-clause entity is already captured by `INVOLVES`, not coreference; the
+  antecedent is elsewhere. Without this, a definite description trivially confirm-binds to the
+  fresh node extracted from its own clause and never discovers the cross-proposition referent.
+  This is what makes binding do real work (`group_referents(exclude_ids=…)`).
+- **Conservative, calibrated by the bars.** `confirm` (0.85) requires a *single* referent at
+  an exact label + agreeing kind; a near-tie (within `TIE_MARGIN`) or a merely-contained
+  partial match lands in the `candidate` band — kept **open** with one edge per tied referent
+  (§3.1 "multiple candidate targets when ambiguous"), and the proposition marked provisional.
+- **Provisional OR-fold (§3.1/G1.6).** A proposition resting on an unresolved or only
+  candidate-bound mention is set `provisional = true`; never cleared here (the proposition
+  layer's OR-fold discipline).
+- **Referents are label-grouped, not component-keyed.** Same-label fresh nodes collapse to one
+  referent at the canonical-min id (the `resolve.canonical_id` representative), so binding is
+  robust whether or not entity resolution (G2.3) has run — it need not be ordered after it.
+- **Idempotency keyed on the proposition id.** A proposition with an existing `bind` Action is
+  a no-op (Action-table backed, mirroring `extract._already_extracted`) — including a
+  mention-less proposition, so a re-run over a box settles. Re-binding under a changed pipeline
+  or after new entities arrive is belief revision (Phase 3).
+- **No migration.** `Mention` / `REFERS_TO` exist (migration 0004) and the 0007 label indexes
+  cover both.
+
+### Deferred (kept out of the thin slice — documented seams)
+
+- **Pronoun anaphora / the local-discourse-antecedent stage.** A bare pronoun has no lexical
+  content, so the in-graph-entity stage blocks it to the empty set — this slice **detects** it
+  and leaves it unresolved (→ provisional), the correct conservative behaviour. Binding it
+  needs the discourse-order antecedent stage (a dedicated coreference model, §3.1).
+- **Taxonomy-anchor stage** — binding a mention to a domain-pack taxonomy node needs
+  entity-linking → G2.5 (with the part-whole anchoring).
+- **Relational tie-break** — when several same-kind referents match a definite description
+  equally, this slice keeps them all `candidate`; using shared-fact/role context to break the
+  tie (the `resolve.score_pair` relational signal) is the natural enhancement.
+- **Multi-sample / verify confidence** (§3.1 "confidence from consistency + verification") —
+  this slice's confidence is the single deterministic binding score.
+- **Re-binding as belief revision** (re-run Layer A/B over the affected proposition) → Phase 3.
+- **Expert-triage queue** for open bindings → Phase 7; the slice marks the proposition
+  provisional and records the `candidate` edges the queue will later consume.
+
+### Tests
+
+- **Unit (`tests/unit/test_reference.py`, DB-free):** referent grouping (collapse, kind
+  separation, empty-label drop, `exclude_ids` self-bind exclusion + emptied-group drop);
+  blocking (shared-token requirement, pronoun→empty, kind-guess narrowing); scoring (exact
+  confirm, containment-only candidate, no-overlap/pronoun zero, partial-overlap monotonicity);
+  the decision bars (single-exact confirm, unresolved, tied candidates, single-partial open,
+  deterministic target ordering); and the `Mention`/`REFERS_TO` write contracts.
+- **Integration (`tests/integration/test_reference.py`, live AGE):** seed a box via the
+  extractor (mocked LLM) → bind (mocked detector) → a `confirmed` `REFERS_TO` to a prior named
+  entity with the proposition left non-provisional + the `bind` Action joinable + idempotent
+  re-run (no duplicate mentions/edges); an ambiguous definite description → two `candidate`
+  edges + provisional; a pronoun → no edge, Mention recorded, provisional. (Runs in CI;
+  locally collected only when `DATABASE_URL` is set.)
+
+### Exit criteria (G2.4)
+
+- [x] A proposition's surface references become `Mention` nodes (detection), provenance-linked
+      to their Span(s), separate from binding.
+- [x] Each mention binds to a canonical entity via a scored `REFERS_TO` through the in-graph
+      cascade stage; the score is deterministic (no attention), conservative by the bars.
+- [x] Ambiguous/low-confidence bindings stay **open** (multiple `candidate` targets / no edge)
+      and mark the dependent proposition `provisional`; every run emits an `Action`.
+- [x] Re-binding a settled proposition is a no-op (Action-log idempotency).
