@@ -26,9 +26,12 @@ which need the **Phase 2 adapter** (active-subgraph selection + AGE/UUID→`Deri
 mapping), still open. Layer B is now in
 memory too: the semiring is **decided (G3.5: Gödel `max-min` default)** and the
 **foundedness-gated confidence least-fixpoint** ships (**G3.6: `core/confidence.py::valuate`**,
-cycle-convergent; incremental-on-delta deferred). Still open: the Phase-2 adapter (G3.4)
-feeding both layers real AGE data, the `deduce`/`induce` operators (G3.8), and
-`SAME_AS`-component aggregation (G3.7). See
+cycle-convergent; incremental-on-delta deferred). **G3.4** now wires both layers to real AGE
+data: `core/derivation_adapter.py` reads the *active* subgraph (`valid_to` null, active
+boxes) and assembles the `DerivationGraph` + Layer B side maps, defining the `DERIVED_FROM`
+grouping contract the operators will write. Still open: the `deduce`/`induce` operators
+(G3.8), `SAME_AS`-component aggregation (G3.7), the clingo/SCC/persisted path (G3.3), and
+composed-loop termination (G3.9). See
 `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
 
 ## Layer A — truth maintenance over a commutative group (owns retraction)

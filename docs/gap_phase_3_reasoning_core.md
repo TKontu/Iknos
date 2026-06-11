@@ -26,7 +26,7 @@ for every faster engine that follows.
 | **G3.1** | **Layer A definitional core** — `well_founded_support` least-fixpoint over an abstract `DerivationGraph`; `RecomputeOracle` / `SupportOracle` contract; §12 must-pass cycle tests | Phase 2 (contract only) | shipped |
 | **G3.2** | **Layer A incremental engine** — `IncrementalOracle`: Counting (integer support-count) + semi-naive insertion + **DRed** retraction; correct on acyclic *and* cyclic positive-Horn graphs; randomized diff-test vs `RecomputeOracle` | G3.1 | **shipped (this increment)** |
 | G3.3 | **Cyclic/recursive completeness** — **clingo/ASP** foundedness for non-monotonic / stratified-negation rules; SCC detection to scope DRed over-deletion (perf); persisted `WITH RECURSIVE` / DBSP path | G3.2, G3.4 | planned |
-| G3.4 | **Phase 2 adapter** — select the *active* subgraph (`valid_to` null, active boxes, `SAME_AS`-canonicalized components) and map AGE/UUID ids ↔ `NodeId`; feed Layer A | Phase 2, G2.3 | planned |
+| **G3.4** | **Phase 2 adapter** — select the *active* subgraph (`valid_to` null, active boxes) and map AGE/UUID ids ↔ `NodeId`; assemble `DerivationGraph` + Layer B side maps; feed both layers | Phase 2, G2.3 | **shipped (this increment)** |
 | **G3.5** | **Layer B semiring decision** — the Phase-3-entry fixture (deep vs shallow chain, multi-path) deciding **Viterbi `max-·` vs Gödel `max-min`** *before* any Layer B code (§12, review A6) | — | **shipped (this increment)** |
 | **G3.6** | **Layer B confidence valuation** — least fixpoint over the chosen semiring, computed only over Layer-A-certified nodes; cycle-convergent (incremental-on-delta deferred) | G3.5, G3.2 | **shipped (this increment)** |
 | G3.7 | **`SAME_AS`-component aggregation** — support/confidence accrue to the canonical component; merge/split is a belief-revision trigger re-running A/B on the affected component (§5.2) | G3.2, G3.6, G2.3 | planned |
@@ -218,6 +218,68 @@ ruff + mypy(`src/iknos`) clean; 325 unit tests pass.
   takes them as arguments.
 - **`SAME_AS`-component aggregation** (G3.7) — support/confidence accrue to the canonical
   component; a merge/split re-runs A/B on the affected component.
+
+## G3.4 — Phase 2 adapter (this increment)
+
+**What shipped.** `core/derivation_adapter.py` — the boundary that reads the persisted AGE
+property graph and produces exactly the three inputs the pure engines consume: a
+`DerivationGraph` (Layer A), and the `base_confidence` / `strength` side maps (Layer B). The
+pure layers stay AGE-/UUID-/box-blind; this module stringifies ids at the boundary (as
+`truth_maintenance` always promised) and owns every graph-shape decision.
+
+**Design decisions taken up front:**
+
+- **The active subgraph = bitemporally-current nodes/edges in active boxes.** Selection is
+  `valid_to IS NULL` on nodes *and* `DERIVED_FROM`/node endpoints (a retraction stamps
+  `valid_to`, so a retracted node just drops out of the load), intersected with the
+  **active** (non-deprecated) box set. A derivation resting on a retracted or deprecated-box
+  antecedent correctly fails to fire — the antecedent is absent from the active set, so it is
+  never supported. The load is **partial-tolerant** exactly as `DerivationGraph` documents:
+  an antecedent that is not an active reasoning node stays in the body (dropping it would
+  wrongly make the rule *easier*) and is simply unsupported.
+
+- **The `DERIVED_FROM` grouping contract (defined here, written by G3.8).** A single
+  `DERIVED_FROM` *edge* is **not** a derivation — a conclusion can be grounded by several
+  rule firings (a disjunction) and one firing is a conjunction over its whole body. So every
+  edge of one `deduce`/`induce` act carries the same **`derivation` group-id** and the same
+  step **`strength`** (§7.1); the adapter regroups edges by that id into `Derivation` bodies.
+  This is the contract G3.8 must honour. Fallback for a group-id-less edge: group by
+  conclusion (the safe conjunctive reading), so a hand-written/legacy edge still loads.
+
+- **Base facts = the `EVIDENCED_BY`-grounded reasoning nodes** (only a `Fact` carries
+  `EVIDENCED_BY`); their `base_confidence` is each node's `confidence` property (the §12
+  seed, `extract.seed_confidence`). A node with no confidence defaults to the semiring `one`
+  (a certain leaf), matching the no-verifier seed.
+
+**Pure/DB split (the `core/resolve.py` discipline).** The grouping/filtering is
+`assemble_subgraph` — DB-free, unit-tested with hand-built rows; only
+`DerivationGraphAdapter`'s read methods touch AGE (lazy `iknos.db.age` import). A thin
+`support_and_confidence` wires a loaded subgraph through Layer A → Layer B (the two-layer
+seam) for the read-and-evaluate path the integration test exercises.
+
+**Tests.** `tests/unit/test_derivation_adapter.py` (DB-free): regrouping into conjunctive
+bodies, distinct groups as a disjunction, null-group fallback, active-box gating (excluded
+node starves its dependent), inactive-conclusion drop, partial-reference tolerance,
+divergent-strength conservative `min`, the two-layer seam through both semirings,
+determinism. `tests/integration/test_derivation_adapter.py` (real AGE): an active box with
+two base facts → a `DERIVED_FROM`-grouped conclusion, plus a deprecated-box fact and a
+`valid_to`-stamped fact both correctly excluded; base seeds + strength round-trip; the seam
+scores the conclusion at the Gödel weakest link; and a **retraction** (stamp `valid_to`,
+reload) drops the sole-supported conclusion and removes its confidence (§12 foundedness
+gate). Containment assertions (not global equality) since `load_active` reads the whole
+active subgraph on a shared DB. ruff + mypy(`src/iknos`) clean; 337 unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **`SAME_AS`-component aggregation** (G3.7) — this adapter loads raw reasoning nodes; it
+  does not yet canonicalize them by entity / re-run A/B on a merge/split.
+- **Persisted / incremental maintenance** (G3.3) — this is a full current-state read; the
+  `WITH RECURSIVE` / IVM path is deferred (MVP recompute over the small active subgraph, §13).
+- **Box-scoped / per-investigation selection** — loads the whole active subgraph across all
+  active boxes; a scoped load that still pulls cross-box antecedents is a Phase 6 concern.
+- **Per-antecedent edge strength** — `strength` is one value per derivation (the inference
+  step's confidence), stored equally on the group's edges; varying it per body antecedent
+  within a rule is a §7.1 refinement, not needed by the shipped `valuate` signature.
 
 ## Phase risks / decisions (carried from §12, §13)
 
