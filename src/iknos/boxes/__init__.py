@@ -19,7 +19,9 @@ from iknos.boxes.serde import (
     box_id_for,
     box_to_props,
     case_box,
+    reference_box,
     resolve_tier,
+    working_box,
 )
 
 __all__ = [
@@ -33,5 +35,7 @@ __all__ = [
     "deprecate_box",
     "get_box",
     "list_boxes",
+    "reference_box",
     "resolve_tier",
+    "working_box",
 ]

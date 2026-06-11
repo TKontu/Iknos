@@ -33,7 +33,8 @@ model/prompt/regime/verifier re-extracts (or fails loud) instead of serving a st
 the **MinerU HTTP client** + bytes-in entry point are in; only standing up the live MinerU
 service + table/figure interpretation (Phase 2) remain. Remaining (next): **G1.6** quarantine
 *enforcement* (the `provisional` flag is now set per node; gating it at edge-creation is
-Phase-2-gated); G1.7b (cross-doc reuse) is now shipped, leaving G1.8/G1.10 Part B/G1.11–G1.12.
+Phase-2-gated); G1.7b (cross-doc reuse) and G1.8 (reference amortization) are now shipped,
+leaving G1.10 Part B/G1.11–G1.12.
 
 **2026-06 review** (`review_2026-06_architecture_plan.md`) added **G1.13–G1.19**: two
 critical correctness fixes (G1.13 long-document truncation, G1.14 polarity-blind
@@ -63,8 +64,14 @@ Phase-2-gated (no SUPPORTS/REFUTES creation site to gate yet). **G1.10 Part A (m
 offset spans) is now shipped** (Part B RAPTOR summaries deferred per the §2 cost decision).
 **G1.7b cross-doc "extract once" reuse is now shipped** (`core/reuse.py` + replay path in
 `Propositionizer`; index migration 0012) — an identical-pipeline span anywhere replays cached
-propositions instead of re-running the LLM, so the remaining un-gated Phase-1 cost work is
-**G1.8 reference amortization** (+ optional **G1.12** multi-span provenance and **G1.10 Part B**).
+propositions instead of re-running the LLM. **G1.8 reference amortization is now shipped**
+(`core/reference_corpus.py` + `core/ingest.py::ingest_reference_document`) — a reference-corpus
+document ingests **once** into a reference/schema-tier box and is sealed read-only by a
+`(:Document)-[:MEMBER_OF]->(:Box)` edge; a later investigation re-ingesting identical content
+short-circuits **before** the embedding pass (`reused=True`, no embed/segment/writes), and a
+changed-content re-ingest fails loud (`ReferenceSealError`, mirroring `PackImmutabilityError`).
+So the remaining un-gated Phase-1 cost work is the optional **G1.12** multi-span provenance (+
+**G1.10 Part B** RAPTOR summaries, deferred).
 
 **Fixture corpus (exit-criterion seed) is now shipped** — `tests/fixtures/corpus/`: three
 real documents + a `manifest.toml` of regression anchors, a typed model-free/DB-free loader
@@ -86,8 +93,8 @@ called "Phase-2-gated" were re-checked against the merged code:
 - **G1.11 box on indexes** — partially unblocked (case boxes exist via G2.1), but propositions
   are indexed in Phase 1 *before* any box is assigned at Phase-2 extract time; threading a box
   through ingest needs an architectural decision, so it is sequenced after the un-gated work.
-Genuinely actionable un-gated Phase-1 work now: **G1.8**, **G1.12** (**G1.10 Part A** and
-**G1.7b** are now shipped).
+Genuinely actionable un-gated Phase-1 work now: **G1.12** (**G1.10 Part A**, **G1.7b**, and
+**G1.8** are now shipped).
 
 ## Current implementation (baseline)
 
@@ -280,11 +287,38 @@ silently serving a stale extraction (the production-correctness bug).
 - [ ] Cascade re-extraction: on a stale span, purge its old propositions/edges/index rows and
       recreate (pairs with the resegmentation-cascade deferral in `ingest.py`).
 
-### G1.8 — Amortize reference processing (§6.1)
-- [ ] Reference-corpus / domain-pack boxes are ingested **once** and persisted
+### G1.8 — Amortize reference processing (§6.1) — ✅ shipped
+- [x] Reference-corpus / domain-pack boxes are ingested **once** and persisted
       read-only for reuse across investigations; only case documents are processed
-      per investigation. Depends on the Phase 0 domain-pack scaffold
-      (`gap_phase_0_foundations.md` G0.7) and box tier (`reference`/`schema`).
+      per investigation. *(`core/reference_corpus.py` + `core/ingest.py::
+      ingest_reference_document`.)* Depended on the Phase 0 domain-pack scaffold
+      (`gap_phase_0_foundations.md` G0.7, shipped) and box tier (`reference`/`schema`,
+      shipped via G2.1).
+- [x] **The seal.** A reference document ingests into a reference/schema-tier box
+      (`reference_box` / registry create-or-noop) and is sealed by a
+      `(:Document)-[:MEMBER_OF]->(:Box)` edge carrying `{tier, sealed, input_sha256,
+      valid_from}` + a `seal-reference` Action. The seal keys on the document's own
+      content digest (`document_input_sha256`), **not** the parse/segment hash (which folds
+      in parser/segmenter identity) — so it is the content-identity of the corpus document.
+- [x] **Why it is not just a rename of G1.7's no-op.** Content-addressed caching already
+      no-op'd the *writes* of an identical re-run, but `_ingest_parsed` still called
+      `substrate.embed_document` (the expensive pass) before the write-time guard
+      short-circuited. The seal is read **first**, so a sealed re-ingest returns
+      `reused=True` having skipped embed + segment + persist entirely — §6.1's "amortized,
+      not repaid each time" made real and CI-asserted (`embed_document.assert_not_called()`).
+- [x] **Read-only enforcement** mirrors the pack-immutability discipline: a changed-content
+      re-ingest (or re-seal into a different box) under the same id raises
+      `ReferenceSealError`; a `case`/`working` box is refused up front by the pure
+      `validate_sealable_tier` guard (those are the per-investigation regime —
+      `ingest_document`). Caller-owned transaction, so a committed seal implies committed
+      spans (the reuse short-circuit can trust the seal without re-reading the graph).
+- [x] No migration: a new AGE edge label (`MEMBER_OF`) + node property over the existing
+      `actions` table (schemaless, per the build conventions). Tests:
+      `tests/unit/test_reference_corpus.py` (pure guard/digest/`reference_box`) +
+      live-AGE `tests/integration/test_reference_corpus.py`.
+- Seams (deferred, documented): a **bytes-in** `ingest_reference_document_bytes` (trivial —
+  the seal/reuse core already keys on the content digest the bytes path computes); box-scoped
+  indexing of reference spans is **G1.11**, still gated on the ingest-box threading decision.
 
 ### G1.9 — Span persistence *(the end-to-end blocker, carried)* — ✅ shipped (#18)
 `segmentation.py::segment_document` returns in-memory `(start, end)` tuples;
@@ -622,8 +656,10 @@ more work than adding the slot now.
    flag is set per node, but no SUPPORTS/REFUTES creation site exists yet to gate at). A Phase 2
    *entry* item — land it when evidential edges are first created.
 10. ~~**G1.7b cross-doc reuse**~~ — ✅ identical-pipeline spans replay cached propositions
-    (re-embed + new nodes) instead of re-running the LLM (`core/reuse.py`, migration 0012);
-    **G1.8 reference amortization** is the remaining cost work.
+    (re-embed + new nodes) instead of re-running the LLM (`core/reuse.py`, migration 0012).
+    ~~**G1.8 reference amortization**~~ — ✅ a reference corpus ingests once into a
+    reference/schema-tier box, sealed read-only; a re-ingest skips the whole pipeline
+    (`core/reference_corpus.py`, `ingest_reference_document`).
 11. **G1.10 Part B summaries**, **G1.11 box**, **G1.12 multi-span**,
     **G1.19 RRF fusion** — incremental, some gated on Phase 2.
 
@@ -641,13 +677,14 @@ more work than adding the slot now.
       epistemic_class/faithfulness/provisional`; a low-faithfulness proposition is
       quarantined from driving a `REFUTES`.
 - [ ] `verify` runs on a different model family from the extractor.
-- [~] Re-ingesting unchanged content hits the **content-addressed** cache (not just
+- [x] Re-ingesting unchanged content hits the **content-addressed** cache (not just
       same-span-id); a static reference corpus is processed once and reused. *(#25: re-ingest of
       unchanged content is a true no-op and a changed pipeline correctly re-extracts — keyed on
       `(span_id, content_hash)`. **G1.7b shipped** the cross-content half: identical text anywhere
       now replays the cached extraction instead of re-running the LLM, "not just same-span-id".
-      Reference-corpus amortization — ingest a read-only domain pack once across investigations —
-      is G1.8, the one piece still open here.)*
+      **G1.8 shipped** the reference-corpus half: a reference document ingests once into a
+      reference/schema-tier box, sealed read-only, and a re-ingest across investigations skips the
+      whole pipeline (`ingest_reference_document`).)*
 - [ ] The faithfulness gate metric is wired for Trial A5.
 - [ ] A document **longer than the embedding context** ingests with full dense
       coverage — no silent truncation, no zero vectors in pgvector; window layout

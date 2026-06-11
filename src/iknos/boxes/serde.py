@@ -170,6 +170,40 @@ def working_box(
     )
 
 
+def reference_box(
+    name: str,
+    version: str,
+    source: str,
+    reliability_prior: float,
+    *,
+    interest: SourceInterest | None = None,
+    valid_from: datetime | None = None,
+) -> Box:
+    """Construct a **reference** Box (§9): the read-only domain-knowledge box a reference
+    corpus / domain pack is ingested into **once** and reused across investigations (§6.1).
+
+    Tier ``reference`` (between ``schema`` and ``case``): more entrenched than case
+    evidence, the amortized-knowledge layer reasoning reads but never rewrites per
+    investigation. Same deterministic id + create-only ``valid_from`` discipline as
+    :func:`case_box`, so re-ingesting the same corpus targets the same box. The reference
+    *documents'* spans are sealed read-only against it — see
+    ``core/reference.py::seal_reference_document`` (G1.8). A pack's structured taxonomy
+    loads into its own reference box via ``domain/loader.py``; a reference *corpus* of
+    prose ingests into a box built here.
+    """
+    return Box(
+        id=box_id_for(name, version),
+        name=name,
+        tier=Tier.REFERENCE,
+        version=version,
+        source=source,
+        reliability_prior=reliability_prior,
+        interest=interest,
+        valid_from=valid_from or datetime.now(UTC),
+        status=BoxStatus.ACTIVE,
+    )
+
+
 def box_id_for(name: str, version: str) -> uuid.UUID:
     """The deterministic box id for a ``(name, version)`` key (registry/case boxes)."""
     return uuid.uuid5(_BOX_NAMESPACE, f"{name}@{version}")
