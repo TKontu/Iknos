@@ -33,9 +33,11 @@ because Phase 2 is where its absence turns from latent to expensive.*
       shipped** — Phase 2 consumes propositions and their faithfulness; both fixes
       change what reaches it. *(Shipped in #32 — `feat(ingest): G1.13 slice 1
       truncation guard + G1.14 polarity-aware agreement`.)*
-- [ ] **Structured table payload available (G1.18)** if table extraction is in this
+- [x] **Structured table payload available (G1.18)** if table extraction is in this
       phase's scope — the "rows/cells → propositions with column semantics" task
-      below has nothing to read without it.
+      below has nothing to read without it. *(Shipped in #40 — `feat(ingest): G1.18
+      structured table payload in the parse wire contract`. The payload is now available;
+      the Phase-2 rows/cells→propositions consumer that reads it is not yet built.)*
 
 ## Boxes & tiers (§9)
 
@@ -199,7 +201,7 @@ because Phase 2 is where its absence turns from latent to expensive.*
       producing `Action` (§10.2). *(G2.7 — `provenance/audit`: `fact_provenance` walks
       Fact → Proposition + Span(s) → resolved source text → producing extract `Action`;
       `audit_box_facts` is the box-level invariant (returns the Facts that fail, with the
-      gap reasons). Backed by the migration-0008 partial functional index on
+      gap reasons). Backed by the migration-0009 partial functional index on
       `actions(outputs->>'fact')` so the reach-back stays O(log n).)*
 
 ## Exit criteria

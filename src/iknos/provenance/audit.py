@@ -126,7 +126,7 @@ async def fact_provenance(session: AsyncSession, fact_id: uuid.UUID) -> FactProv
     serves as the existence probe — zero rows means no Fact); (2) the evidencing Spans, each
     resolved to its source text via :func:`~iknos.db.spans.resolve_span_text`; (3) the
     producing ``extract`` Action, newest-first (backed by the partial functional index from
-    migration 0008). Read-only.
+    migration 0009). Read-only.
     """
     from iknos.db.age import execute_cypher, parse_agtype_map, unquote_agtype
 
@@ -184,7 +184,7 @@ async def producing_action(session: AsyncSession, fact_id: uuid.UUID) -> Produci
     """The ``extract`` Action that produced ``fact_id`` (§10.1), newest-first, or ``None``.
 
     Filters on ``actor = 'extractor'`` and ``outputs->>'fact'`` — the exact predicate the
-    migration-0008 partial functional index serves, so this stays O(log n) as the audit log
+    migration-0009 partial functional index serves, so this stays O(log n) as the audit log
     grows unbounded (cf. the G1.7 idempotency index).
     """
     row = (
