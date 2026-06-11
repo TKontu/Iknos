@@ -43,6 +43,7 @@ Scoring is **deterministic and relational** (no LLM in the resolve path, §5.2: 
 shared facts/roles/attributes — *not* similarity; similarity is a blocking signal only).
 """
 
+import math
 import re
 import uuid
 from collections.abc import Mapping
@@ -161,7 +162,7 @@ def _saturate(units: float) -> float:
     Relational evidence accumulates with diminishing returns — the first shared neighbour
     matters most, each subsequent one adds less.
     """
-    return 1.0 - 0.5**units
+    return 1.0 - math.pow(0.5, units)
 
 
 def score_pair(a: EntityRecord, b: EntityRecord) -> float:
