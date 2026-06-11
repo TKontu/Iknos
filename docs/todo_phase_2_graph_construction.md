@@ -59,27 +59,36 @@ because Phase 2 is where its absence turns from latent to expensive.*
 - [x] `extract`: proposition → `Fact` with `Actor`/`Object` nodes. Actors and objects
       are **nodes, not properties** (§5/§10). *(G2.2 — `core/extract.py`: one Fact per
       proposition; entities are fresh `Actor`/`Object` vertices. Dedup is G2.3.)*
-- [ ] **Entity resolution as a subsystem (§5.2), not a dedup pass.** Identity via scored
+- [x] **Entity resolution as a subsystem (§5.2), not a dedup pass.** Identity via scored
       `SAME_AS` edges; the canonical entity is the `SAME_AS`-connected component;
       reasoning aggregates evidence at component level (no destructive id reassignment).
-  - [ ] Cascade like candidate generation: block cheaply (shared tokens, embedding
+      *(G2.3 — `core/resolve.py`: scored `SAME_AS` with `SameAsState`; `canonical_components`
+      reads the connected components. Thin slice; seams below.)*
+  - [x] Cascade like candidate generation: block cheaply (shared tokens, embedding
         neighbourhood, type/box, taxonomy-anchor) → score on **relational/contextual**
         evidence (shared facts/roles/attributes; similarity for blocking only; **not
-        attention**) → resolve into components.
+        attention**) → resolve into components. *(G2.3 — `block_candidates` (shared-token,
+        same-kind) → deterministic relational `score_pair` → `components`. Embedding-neighbourhood
+        and taxonomy-anchor blocking signals deferred — need an entity-embedding store / G2.4–G2.5.)*
   - [ ] **Anchor canonicalizes:** a mention that entity-links to the domain-pack taxonomy
-        takes that node as its canonical identity (anchor-first, §9/§14).
-  - [ ] **Conservative default:** auto-merge only above a high confidence bar; below it
+        takes that node as its canonical identity (anchor-first, §9/§14). *(Deferred → G2.4/G2.5,
+        with the part-whole anchoring; needs entity-linking.)*
+  - [x] **Conservative default:** auto-merge only above a high confidence bar; below it
         keep entities separate but record a `candidate` `SAME_AS` link (bridgeable, not
         committed). Route candidate merges to expert triage; confirm via override (§10.3).
+        *(G2.3 — `decide`/`RESOLVE_CONFIRM_BAR`/`RESOLVE_CANDIDATE_BAR`; `confirmed` vs
+        `candidate` state. Expert-triage queue routing is Phase 7.)*
   - [ ] **Merge/split as belief revision:** asserting/retracting a `SAME_AS` re-runs
         Layer A/B over the affected component (Phase 3); both are logged, bitemporal,
-        reversible.
+        reversible. *(Deferred → Phase 3; this slice writes edges, does not re-run reasoning.)*
   - [ ] **Contradiction→split-review loop:** when `find-contradiction` conflict exists
         only via a merged entity, lower the `SAME_AS` confidence and queue split-review.
         **Hysteresis:** a split raises the re-merge bar; a pair that flips more than a
         bounded number of times is frozen and surfaced as an unstable identity for the
-        expert — never flipped again (§5.2).
-  - [ ] Scope by box/pack; cross-box `SAME_AS` belongs to the working box (§9).
+        expert — never flipped again (§5.2). *(Deferred → Phase 4; needs `find-contradiction`.)*
+  - [x] Scope by box/pack; cross-box `SAME_AS` belongs to the working box (§9). *(G2.3 —
+        within-source-box resolution: the caller passes one box's entities. Cross-box
+        `SAME_AS` in the working box is deferred to the investigation runtime, Phase 6.)*
 - [ ] **Reference binding (§3.1):** detect `Mention`s ("it", "the bearing", "bearing 3")
       as a step *separate* from binding; bind each to a canonical entity with a scored,
       defeasible `REFERS_TO` edge via the scoped cascade (local antecedent → in-graph
