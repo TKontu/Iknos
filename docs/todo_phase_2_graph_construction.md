@@ -12,10 +12,14 @@ organized into boxes/tiers, each traceable to source and logged.
 *Added by the 2026-06 review (`review_2026-06_architecture_plan.md`); each exists
 because Phase 2 is where its absence turns from latent to expensive.*
 
-- [ ] **AGE property indexes merged (G0.R2, `gap_phase_0_residual.md`).** Entity
-      resolution runs continuous per-mention MERGE/MATCH lookups; without expression
-      indexes every one is a label-table seq scan. Verified by `EXPLAIN` through the
-      real `cypher()` path, not by index existence.
+- [x] **AGE property indexes merged (G0.R2, `gap_phase_0_residual.md`).** Entity
+      resolution runs continuous per-mention MERGE/MATCH lookups; without indexes every
+      one is a label-table seq scan. **Done** — migration `0007_age_label_indexes`:
+      GIN on `properties` per vertex label (the `@>` containment filter behind id +
+      box + ad-hoc lookups) and btree on `start_id`/`end_id` per edge label
+      (endpoint joins / `SAME_AS`/`partOf` traversal). Verified by `EXPLAIN` through
+      the real `cypher()` path (`tests/integration/test_age_label_indexes.py`), not by
+      index existence.
 - [ ] **Trial C3 density benchmark run early** (`todo_trials.md` C3 — pulled forward):
       a synthetic graph at target schema density, on the four real query patterns,
       *before* building heavily on AGE. If AGE fails here, the fallback decision
