@@ -140,6 +140,36 @@ def case_box(
     )
 
 
+def working_box(
+    name: str,
+    version: str,
+    source: str,
+    reliability_prior: float,
+    *,
+    interest: SourceInterest | None = None,
+    valid_from: datetime | None = None,
+) -> Box:
+    """Construct a **working** Box (§9): the derived-reasoning box the ``deduce``/``induce``
+    operators (G3.8) write their conclusions into (tier ``working``; "derived → working").
+
+    Same deterministic id + create-only ``valid_from`` discipline as :func:`case_box`, so a
+    re-run targets the same working box and the conclusion writes upsert rather than
+    duplicating. The reasoning core derives *into* this box while reading premises from the
+    case/reference boxes it cites (the cross-box derivation §9 expects).
+    """
+    return Box(
+        id=box_id_for(name, version),
+        name=name,
+        tier=Tier.WORKING,
+        version=version,
+        source=source,
+        reliability_prior=reliability_prior,
+        interest=interest,
+        valid_from=valid_from or datetime.now(UTC),
+        status=BoxStatus.ACTIVE,
+    )
+
+
 def box_id_for(name: str, version: str) -> uuid.UUID:
     """The deterministic box id for a ``(name, version)`` key (registry/case boxes)."""
     return uuid.uuid5(_BOX_NAMESPACE, f"{name}@{version}")

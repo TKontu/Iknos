@@ -8,8 +8,19 @@ off-the-shelf system packages this — it is the substance of the project.
 **Architecture refs:** §12 (two-layer model), §8 (decisions, staged build 1–2), §7.1
 (edge confidence), §6 (`deduce`, `induce`).
 
-**Status — 🟡 G3.1 + G3.2 shipped (Layer A, in-memory); G3.5 + G3.6 shipped (Layer B
-semiring decision + confidence valuation, in-memory).** Well-founded support is
+**Status — 🟢 thin slice complete (G3.1, G3.2, G3.4–G3.9 shipped); only G3.3 (scale/negation
+hardening) deferred by design.** Layer A: G3.1 (`RecomputeOracle`) + G3.2 (`IncrementalOracle`,
+Counting + DRed). Layer B: G3.5 (semiring decision) + G3.6 (`valuate`). G3.4 wires both to real
+AGE (`core/derivation_adapter.py`); G3.8 ships the `deduce`/`induce` operators
+(`core/derive.py`); G3.7 ships `SAME_AS`-component aggregation + merge/split belief revision
+(`core/component_aggregate.py`); G3.9 ships the composed-loop termination *driver*
+(`core/composed_loop.py`, Phase 4 wires the body). **G3.3 — clingo/ASP for stratified
+negation, SCC-scoped DRed, and the persisted `WITH RECURSIVE`/DBSP path — is deliberately
+deferred:** each is gated on a prerequisite that does not yet exist (a negation-rule *producer*
+for clingo — `deduce`/`induce` are positive-Horn; a demonstrated SLA miss for SCC-scoping; the
+scale layer for DBSP, which `todo.md` marks "Phase 3 (MVP), revisit at scale"). Building them
+now would gold-plate before the validation gate (`todo.md`: "do not gold-plate a layer before
+the loop works"). Well-founded support is
 implemented as the **definitional least-fixpoint** (`well_founded_support`, exposed as
 `RecomputeOracle`) over an abstract derivation graph — pure, in-memory, correct on
 acyclic *and* cyclic graphs — in `core/truth_maintenance.py`, with the §12 must-pass
@@ -26,10 +37,20 @@ which need the **Phase 2 adapter** (active-subgraph selection + AGE/UUID→`Deri
 mapping), still open. Layer B is now in
 memory too: the semiring is **decided (G3.5: Gödel `max-min` default)** and the
 **foundedness-gated confidence least-fixpoint** ships (**G3.6: `core/confidence.py::valuate`**,
-cycle-convergent; incremental-on-delta deferred). Still open: the Phase-2 adapter (G3.4)
-feeding both layers real AGE data, the `deduce`/`induce` operators (G3.8), and
-`SAME_AS`-component aggregation (G3.7). See
-`gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
+cycle-convergent; incremental-on-delta deferred). **G3.4** now wires both layers to real AGE
+data: `core/derivation_adapter.py` reads the *active* subgraph (`valid_to` null, active
+boxes) and assembles the `DerivationGraph` + Layer B side maps, defining the `DERIVED_FROM`
+grouping contract the operators will write. **G3.8** ships those operators:
+`core/derive.py` `deduce`/`induce` write `DeductiveConclusion`/`InductiveConclusion` nodes +
+`DERIVED_FROM` groups + provenance + an `Action`, with both annotations **computed by Layer
+A/B** ("engine disposes"). **G3.7** ships `SAME_AS`-component aggregation
+(`core/component_aggregate.py`): support/confidence accrue to the canonical component
+(additive Layer A, `⊕` Layer B), with merge/split as belief-revision triggers that
+re-aggregate. **G3.9** ships the composed-loop **termination driver**
+(`core/composed_loop.py::stabilize`): bounded iteration + oscillation detection that surfaces
+a non-converging region as a finding (the Phase-4 `REFUTES→A→B→QBAF` loop body wires into it).
+Still open: the clingo/SCC/persisted path (G3.3, needs a solver dep + the persisted layer).
+See `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
 
 ## Layer A — truth maintenance over a commutative group (owns retraction)
 
@@ -114,24 +135,43 @@ feeding both layers real AGE data, the `deduce`/`induce` operators (G3.8), and
 - [x] Confirm idempotent confidence is *not* subtracted; retraction lives only in the
       group/count layer. *(G3.6 — `valuate` is a pure fixpoint with no subtraction;
       retraction is entirely Layer A's DRed/count layer. `test_idempotent_rerun_is_stable`.)*
-- [ ] **Aggregate evidence over `SAME_AS` components (§5.2):** support counts and
+- [x] **Aggregate evidence over `SAME_AS` components (§5.2):** support counts and
       confidence accrue to the canonical component, not the raw node. A **merge/split**
       (assert/retract `SAME_AS`) is a belief-revision trigger — re-run Layer A/B over the
-      affected component only.
+      affected component only. *(G3.7 — `core/component_aggregate.py`: `aggregate_components`
+      folds per-node Layer A/B annotations to the canonical component — **additive** support
+      (§12 counting), **`⊕`/max** confidence (idempotent, best evidence); `ComponentReasoner.merge`
+      / `.split` are the belief-revision triggers (assert confirmed `SAME_AS` / bitemporally
+      retract it) that re-aggregate and emit an Action, so over-merge is recoverable. The
+      **affected-component-only** scoping is the deferred incremental refinement — MVP
+      re-aggregates the whole active subgraph, §13.)*
 
 ## Derivation operators (§6)
 
-- [ ] `deduce`: facts/conclusions → `DeductiveConclusion`, with `DERIVED_FROM` edges
-      and provenance to underlying facts' spans.
-- [ ] `induce`: facts → `InductiveConclusion`, marked provisional.
-- [ ] Each derivation emits an `Action` record; each conclusion is traceable to source
-      (§10.2).
-- [ ] Conclusions carry both annotations; confidence comes from Layer B, not raw LLM.
+- [x] `deduce`: facts/conclusions → `DeductiveConclusion`, with `DERIVED_FROM` edges
+      and provenance to underlying facts' spans. *(G3.8 — `core/derive.py::Deriver.deduce`;
+      premises may be Facts **or** prior conclusions (chaining), the `DERIVED_FROM` group
+      honours the G3.4 contract, and provenance to source spans is both structural
+      (`conclusion→DERIVED_FROM→premise→EVIDENCED_BY→Span`) and recorded on the Action.)*
+- [x] `induce`: facts → `InductiveConclusion`, marked provisional. *(G3.8 —
+      `Deriver.induce`; `provisional=True` on the node, required step `strength`.)*
+- [x] Each derivation emits an `Action` record; each conclusion is traceable to source
+      (§10.2). *(G3.8 — one `deriver` Action per derive, recording premises, their source
+      spans, kind, strength, and the conclusion/group/annotation outputs.)*
+- [x] Conclusions carry both annotations; confidence comes from Layer B, not raw LLM.
+      *(G3.8 — `value_conclusion` computes `support_count` from Layer A and `confidence`
+      from Layer B over the augmented graph; the proposal's number never becomes the
+      conclusion's confidence — "engine disposes". The LLM/rule **proposer** that generates
+      candidate derivations is the documented upstream seam.)*
 
 ## Exit criteria
 
-- [ ] A conclusion derived from facts gains support; retracting a sole supporting fact
-      retracts it; retracting one of several does not.
+- [x] A conclusion derived from facts gains support; retracting a sole supporting fact
+      retracts it; retracting one of several does not. *(G3.8 + G3.4 —
+      `tests/integration/test_derive.py`: `deduce` gains support and a Layer B confidence;
+      retracting the sole premise (stamp `valid_to`, reload via the adapter) drops the
+      conclusion. The one-of-several exactness is the Layer A guarantee (G3.1
+      `test_retracting_one_of_several_supports_keeps_conclusion`) the adapter now feeds.)*
 - [ ] **Well-founded support holds:** an ungrounded `DERIVED_FROM` cycle retracts fully
       when its external base support is removed; a grounded cycle is kept.
 - [~] Confidence is computed by Layer B and recomputed only on the affected sub-graph;
@@ -141,10 +181,16 @@ feeding both layers real AGE data, the `deduce`/`induce` operators (G3.8), and
 - [x] A cyclic derivation test converges (Layer B) **and** is correctly founded/unfounded
       (Layer A). *(G3.6 `test_cyclic_valuation_converges_to_a_gated_fixpoint` over Layer A's
       certified set; grounded vs unfounded cycle handling is the G3.1/G3.2 + G3.6 seam.)*
-- [ ] **Composed-loop termination:** the retraction feedback loop (REFUTES → retract →
+- [~] **Composed-loop termination:** the retraction feedback loop (REFUTES → retract →
       Layer A → Layer B → QBAF → …) runs with an **iteration bound + oscillation
       detection**; on non-convergence the unstable sub-region is surfaced as a finding,
-      never silently re-iterated (§12, §7.2).
+      never silently re-iterated (§12, §7.2). *(G3.9 — the **driver** ships:
+      `core/composed_loop.py::stabilize` bounds the iteration, detects oscillation (returns
+      the cycle as the unstable region) and divergence, and **always terminates** with a
+      structured outcome (`Stability.{CONVERGED,OSCILLATING,DIVERGED}`) — non-convergence is
+      a finding, never re-iterated. The actual loop **body** (`REFUTES→A→B→QBAF`) needs the
+      Phase 4 evidential/QBAF layer; Phase 4 supplies `step` and maps the unstable region to a
+      graph finding. Monotonic-in-effort re-inference caching (§6.1) is a separate seam.)*
 - [ ] (Feeds the validation gate jointly with Phase 4.)
 
 ## Phase risks / decisions

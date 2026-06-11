@@ -25,13 +25,13 @@ for every faster engine that follows.
 |----|-----------|------------|-------|
 | **G3.1** | **Layer A definitional core** — `well_founded_support` least-fixpoint over an abstract `DerivationGraph`; `RecomputeOracle` / `SupportOracle` contract; §12 must-pass cycle tests | Phase 2 (contract only) | shipped |
 | **G3.2** | **Layer A incremental engine** — `IncrementalOracle`: Counting (integer support-count) + semi-naive insertion + **DRed** retraction; correct on acyclic *and* cyclic positive-Horn graphs; randomized diff-test vs `RecomputeOracle` | G3.1 | **shipped (this increment)** |
-| G3.3 | **Cyclic/recursive completeness** — **clingo/ASP** foundedness for non-monotonic / stratified-negation rules; SCC detection to scope DRed over-deletion (perf); persisted `WITH RECURSIVE` / DBSP path | G3.2, G3.4 | planned |
-| G3.4 | **Phase 2 adapter** — select the *active* subgraph (`valid_to` null, active boxes, `SAME_AS`-canonicalized components) and map AGE/UUID ids ↔ `NodeId`; feed Layer A | Phase 2, G2.3 | planned |
+| G3.3 | **Cyclic/recursive completeness** — **clingo/ASP** foundedness for non-monotonic / stratified-negation rules; SCC detection to scope DRed over-deletion (perf); persisted `WITH RECURSIVE` / DBSP path | G3.2, G3.4 | **deferred by design** (gated: no negation-rule producer yet; perf/scale, post-gate) |
+| **G3.4** | **Phase 2 adapter** — select the *active* subgraph (`valid_to` null, active boxes) and map AGE/UUID ids ↔ `NodeId`; assemble `DerivationGraph` + Layer B side maps; feed both layers | Phase 2, G2.3 | **shipped (this increment)** |
 | **G3.5** | **Layer B semiring decision** — the Phase-3-entry fixture (deep vs shallow chain, multi-path) deciding **Viterbi `max-·` vs Gödel `max-min`** *before* any Layer B code (§12, review A6) | — | **shipped (this increment)** |
 | **G3.6** | **Layer B confidence valuation** — least fixpoint over the chosen semiring, computed only over Layer-A-certified nodes; cycle-convergent (incremental-on-delta deferred) | G3.5, G3.2 | **shipped (this increment)** |
-| G3.7 | **`SAME_AS`-component aggregation** — support/confidence accrue to the canonical component; merge/split is a belief-revision trigger re-running A/B on the affected component (§5.2) | G3.2, G3.6, G2.3 | planned |
-| G3.8 | **Derivation operators** — `deduce` (→ `DeductiveConclusion`) and `induce` (→ provisional `InductiveConclusion`), `DERIVED_FROM` + provenance, each emitting an `Action` (§6, §10.2) | G3.4 | planned |
-| G3.9 | **Composed-loop termination** — iteration bound + oscillation detection on REFUTES→retract→A→B→QBAF; non-convergence surfaced as a finding (§12, §7.2) | Phase 4 | planned |
+| **G3.7** | **`SAME_AS`-component aggregation** — support/confidence accrue to the canonical component; merge/split is a belief-revision trigger re-running A/B on the affected component (§5.2) | G3.2, G3.6, G2.3 | **shipped (this increment)** |
+| **G3.8** | **Derivation operators** — `deduce` (→ `DeductiveConclusion`) and `induce` (→ provisional `InductiveConclusion`), `DERIVED_FROM` group + provenance, each emitting an `Action`; conclusion annotations computed by Layer A/B (§6, §10.2) | G3.4 | **shipped (this increment)** |
+| **G3.9** | **Composed-loop termination** — iteration bound + oscillation detection on REFUTES→retract→A→B→QBAF; non-convergence surfaced as a finding (§12, §7.2). *Driver* shipped (pure); the Phase-4 loop body wires into it | Phase 4 | **driver shipped (this increment)** |
 
 Cross-cutting: every implementation of `SupportOracle` is **diff-tested against
 `RecomputeOracle`** — the oracle is the contract. Layer A answers *membership* and
@@ -218,6 +218,221 @@ ruff + mypy(`src/iknos`) clean; 325 unit tests pass.
   takes them as arguments.
 - **`SAME_AS`-component aggregation** (G3.7) — support/confidence accrue to the canonical
   component; a merge/split re-runs A/B on the affected component.
+
+## G3.4 — Phase 2 adapter (this increment)
+
+**What shipped.** `core/derivation_adapter.py` — the boundary that reads the persisted AGE
+property graph and produces exactly the three inputs the pure engines consume: a
+`DerivationGraph` (Layer A), and the `base_confidence` / `strength` side maps (Layer B). The
+pure layers stay AGE-/UUID-/box-blind; this module stringifies ids at the boundary (as
+`truth_maintenance` always promised) and owns every graph-shape decision.
+
+**Design decisions taken up front:**
+
+- **The active subgraph = bitemporally-current nodes/edges in active boxes.** Selection is
+  `valid_to IS NULL` on nodes *and* `DERIVED_FROM`/node endpoints (a retraction stamps
+  `valid_to`, so a retracted node just drops out of the load), intersected with the
+  **active** (non-deprecated) box set. A derivation resting on a retracted or deprecated-box
+  antecedent correctly fails to fire — the antecedent is absent from the active set, so it is
+  never supported. The load is **partial-tolerant** exactly as `DerivationGraph` documents:
+  an antecedent that is not an active reasoning node stays in the body (dropping it would
+  wrongly make the rule *easier*) and is simply unsupported.
+
+- **The `DERIVED_FROM` grouping contract (defined here, written by G3.8).** A single
+  `DERIVED_FROM` *edge* is **not** a derivation — a conclusion can be grounded by several
+  rule firings (a disjunction) and one firing is a conjunction over its whole body. So every
+  edge of one `deduce`/`induce` act carries the same **`derivation` group-id** and the same
+  step **`strength`** (§7.1); the adapter regroups edges by that id into `Derivation` bodies.
+  This is the contract G3.8 must honour. Fallback for a group-id-less edge: group by
+  conclusion (the safe conjunctive reading), so a hand-written/legacy edge still loads.
+
+- **Base facts = the `EVIDENCED_BY`-grounded reasoning nodes** (only a `Fact` carries
+  `EVIDENCED_BY`); their `base_confidence` is each node's `confidence` property (the §12
+  seed, `extract.seed_confidence`). A node with no confidence defaults to the semiring `one`
+  (a certain leaf), matching the no-verifier seed.
+
+**Pure/DB split (the `core/resolve.py` discipline).** The grouping/filtering is
+`assemble_subgraph` — DB-free, unit-tested with hand-built rows; only
+`DerivationGraphAdapter`'s read methods touch AGE (lazy `iknos.db.age` import). A thin
+`support_and_confidence` wires a loaded subgraph through Layer A → Layer B (the two-layer
+seam) for the read-and-evaluate path the integration test exercises.
+
+**Tests.** `tests/unit/test_derivation_adapter.py` (DB-free): regrouping into conjunctive
+bodies, distinct groups as a disjunction, null-group fallback, active-box gating (excluded
+node starves its dependent), inactive-conclusion drop, partial-reference tolerance,
+divergent-strength conservative `min`, the two-layer seam through both semirings,
+determinism. `tests/integration/test_derivation_adapter.py` (real AGE): an active box with
+two base facts → a `DERIVED_FROM`-grouped conclusion, plus a deprecated-box fact and a
+`valid_to`-stamped fact both correctly excluded; base seeds + strength round-trip; the seam
+scores the conclusion at the Gödel weakest link; and a **retraction** (stamp `valid_to`,
+reload) drops the sole-supported conclusion and removes its confidence (§12 foundedness
+gate). Containment assertions (not global equality) since `load_active` reads the whole
+active subgraph on a shared DB. ruff + mypy(`src/iknos`) clean; 337 unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **`SAME_AS`-component aggregation** (G3.7) — this adapter loads raw reasoning nodes; it
+  does not yet canonicalize them by entity / re-run A/B on a merge/split.
+- **Persisted / incremental maintenance** (G3.3) — this is a full current-state read; the
+  `WITH RECURSIVE` / IVM path is deferred (MVP recompute over the small active subgraph, §13).
+- **Box-scoped / per-investigation selection** — loads the whole active subgraph across all
+  active boxes; a scoped load that still pulls cross-box antecedents is a Phase 6 concern.
+- **Per-antecedent edge strength** — `strength` is one value per derivation (the inference
+  step's confidence), stored equally on the group's edges; varying it per body antecedent
+  within a rule is a §7.1 refinement, not needed by the shipped `valuate` signature.
+
+## G3.8 — Derivation operators (this increment)
+
+**What shipped.** `core/derive.py` — the `deduce`/`induce` **engine** operators (§6): premises
+(Facts *or* prior conclusions — chaining composes) → a new `Conclusion` (the `types/nodes.py`
+projection added this increment, AGE label `DeductiveConclusion` / `InductiveConclusion`),
+written with its `DERIVED_FROM` group (the G3.4 grouping contract), provenance, and an
+`Action`. `boxes/serde.py` gains the `working_box` constructor (tier `working`) the operators
+derive into.
+
+**The load-bearing decision: "LLM proposes, engine disposes" is enforced structurally.** The
+operator takes a `DerivationProposal` (premises, claim text, kind, step strength) — what an
+upstream proposer puts forward — and **recomputes** the conclusion's two §12 annotations from
+the engine, never the proposal: `support_count` from Layer A's grounding multiplicity,
+`confidence` from Layer B's least-fixpoint valuation. So no proposer number mutates maintained
+reasoning state; the claim text is content, but membership and strength are the engine's.
+`value_conclusion` does this on the graph **augmented in memory** with the proposed
+derivation, so the node is written **once** with final annotations (no write-then-patch), all
+in one transaction; an ungrounded proposal still writes valid structure but lands `(0, 0.0)`
+and revives if a premise later grounds (the Layer A semantics).
+
+**Provenance (§10.2), two ways.** Structurally via `conclusion -[:DERIVED_FROM]-> premise
+-[:EVIDENCED_BY]-> Span`, and in the audit log via the `Action` recording each premise's
+source spans. Deliberately **no `EVIDENCED_BY` from a conclusion** — that edge is the
+base-fact marker the adapter keys on, so writing it would make G3.4 misread a derived node as
+evidence-grounded.
+
+**Tests.** `tests/unit/test_derive.py` (DB-free): `value_conclusion` (weakest-link / step
+discount / Viterbi / ungrounded→zero / chaining), the write contracts
+(`conclusion_to_props`, `derivation_edge_props`), `working_box`. `tests/integration/test_derive.py`
+(real AGE): `deduce` writes a conclusion whose annotations are Layer-A/B-computed (not the
+input), a shared-group `DERIVED_FROM` pair, an `Action` joinable with the premises' spans, and
+the adapter re-reads it as supported; **retraction** of the sole premise drops it; `induce`
+marks `provisional` and a conclusion chains onto another conclusion. ruff + mypy(`src/iknos`)
+clean; 346 unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **The LLM/rule proposer** that *generates* `DerivationProposal`s (which premises, what
+  claim, what step strength) — hypothesis/derivation generation, a Phase-4-adjacent concern.
+  The operator accepts a pre-formed proposal precisely to make the "engine disposes" boundary
+  explicit and the engine testable without an LLM.
+- **Conclusion dedup / disjunctive accrual** — each `derive` mints a fresh node, so two
+  derivations of the *same* claim are two nodes, not one with `support_count = 2`. Same-claim
+  recognition (the conclusion analogue of entity resolution) ties to G3.7.
+- **Annotation propagation to existing affected nodes** — a new derivation only *adds*
+  support (never lowers an existing node's annotations); rewriting every changed node's stored
+  annotations per derivation is the incremental persisted-write path (with G3.3). Downstream
+  reads recompute via the adapter regardless.
+
+## G3.7 — `SAME_AS`-component aggregation (this increment)
+
+**What shipped.** `core/component_aggregate.py` — where, once G2.3 draws the `SAME_AS` edges,
+evidence actually *accumulates* at the entity level (§5.2: "reasoning aggregates evidence at
+the component level"). `aggregate_components` folds the per-node Layer A/B annotations to the
+canonical component; `ComponentReasoner` does the AGE reads + the merge/split belief revisions.
+
+**The two annotations aggregate by their own algebra (§12), never merged.** Per canonical
+component: **support** accrues **additively** (Σ of the involving nodes' integer
+support-counts — more mentions ⇒ more support, the counting/group side); **confidence**
+accrues by the semiring **`⊕`** (`max` — best available evidence; idempotent + absorptive, so
+overlapping/re-presented evidence never inflates it). A node mentioning two *merged* members
+accrues **once** (the `nodes` set), so support is not self-double-counted. Unsupported nodes
+contribute nothing (the §12 foundedness gate carries through).
+
+**Merge/split is belief revision (§5.2), and it is recoverable.** `ComponentReasoner.merge`
+asserts a confirmed `SAME_AS` (canonical-direction upsert, the resolve.py key discipline);
+`.split` **bitemporally retracts** it (stamps `valid_to`, never a destructive delete) — both
+re-aggregate and emit a `belief-revision` Action (§10.1). In the current graph model a
+`SAME_AS` change does not touch `DERIVED_FROM`/`EVIDENCED_BY` (identity, not derivation
+grounding), so the revision *is* exactly this re-aggregation; a split separates the components
+again, so "over-merging is recoverable". The contradiction→split-review loop that *lowers a
+wrong merge's confidence* needs `find-contradiction` + the QBAF and is Phase 4 / G3.9.
+
+**Tests.** `tests/unit/test_component_aggregate.py` (DB-free): additive support + max
+confidence on merge, singleton self-aggregation, intra-node no-double-count, idempotent
+confidence, foundedness gate, lexicographic canonical, split→singletons recovery.
+`tests/integration/test_component_aggregate.py` (real AGE): two duplicate-actor facts →
+merge accrues to one canonical (support 2, confidence max) → split recovers two; a **candidate**
+`SAME_AS` (below the bar) correctly does **not** merge. ruff + mypy(`src/iknos`) clean; 353
+unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **Affected-component-only recompute** — MVP re-aggregates the whole active subgraph (small
+  per investigation, §13); scoping to the touched component is the incremental refinement
+  (with G3.3's persisted maintenance).
+- **The contradiction→split-review loop + hysteresis** (§5.2, §6) — lowering a wrong merge's
+  `SAME_AS` confidence is the Phase 4 `find-contradiction`/QBAF path (and G3.9's composed loop).
+
+## G3.9 — Composed-loop termination driver (this increment)
+
+**What shipped.** `core/composed_loop.py::stabilize` — the §12/§13 termination discipline as a
+pure, generic driver. The reasoning core's outer loop (`REFUTES→retract→A→B→QBAF`) is **not
+guaranteed to converge**, and §13 is explicit that a non-converged/oscillating region is a
+**finding** (genuinely circular or balanced evidence) to be *bounded, detected, and surfaced*
+— "not smoothed into a false verdict". `stabilize` runs a state-transition `step` to a
+fixpoint under a hard iteration bound and returns a structured `StabilizationResult`:
+**CONVERGED** (the fixpoint), **OSCILLATING** (a return to an earlier state — the cycle is
+returned as the unstable region), or **DIVERGED** (bound hit). It **always terminates** and
+never silently re-iterates; `unstable_region()` is the subgraph the caller surfaces as a
+finding.
+
+**Design notes.** Generic over the state type `S` and `step` (PEP-695 generics), with a `key`
+hook for unhashable states (a dict region → `frozenset(items)`); no DB/LLM/graph dependency,
+so it is unit-testable with toy state machines and reusable for the §5.2 merge↔split
+hysteresis loop, which names the same "surface the unstable region, don't loop on it"
+discipline. It is the *outer* analogue of Layer B's internal `valuate` bound — but where
+`valuate` is *guaranteed* to converge (absorptive/ω-continuous) and the bound is a backstop,
+here non-convergence is *expected* and the bound + cycle detection are the product behaviour.
+
+**Tests** (`tests/unit/test_composed_loop.py`, DB-free): converges to a fixpoint (and in one
+step), detects a 2-cycle and a longer cycle-with-tail (surfacing only the recurring region),
+bounds a strictly-increasing/never-repeating loop as DIVERGED, handles unhashable dict states
+via `key`, rejects `max_iterations < 1`, and always terminates on a pathological step. ruff +
+mypy(`src/iknos`) clean; 361 unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **The actual composed step** — wiring `REFUTES→retract→A→B→QBAF` into `step` needs the
+  Phase 4 evidential/QBAF layer (it does not exist yet). This is the *driver*; Phase 4 supplies
+  the body and maps the unstable region to a graph finding. So G3.9 is "driver shipped", the
+  full exit criterion completing with Phase 4.
+- **Monotonic-in-effort re-inference** (§12, §6.1) — bounding expensive LLM re-inference to
+  once per evidence-state (content-addressed cache key + region state hash) layers on top of
+  this bound; not part of the driver.
+
+## G3.3 — deferred by design (not built; rationale recorded)
+
+G3.3 is the **scale/negation hardening** increment, and each of its three parts is gated on a
+prerequisite that does not exist at the close of the Phase 3 thin slice. Building any of them
+now would violate `todo.md`'s "do not gold-plate a layer before the loop works" and "do not
+harden any layer until the gate passes":
+
+- **clingo/ASP for non-monotonic / stratified negation** — there is **no producer of
+  negation rules** yet. The `Derivation` model is positive Horn (a conjunctive body, no
+  negative literals), `deduce`/`induce` emit only positive derivations, and negation/aggregation
+  in rule bodies arrives with domain rules / `find-contradiction` (Phase 4). A clingo oracle for
+  a rule shape nothing emits is speculative; it should land *with* its first producer, extending
+  the model with negative literals + a stratification check at that point. The positive-Horn
+  cyclic fragment — the whole of what Phase 3 actually produces — is already correct (G3.2 DRed +
+  the diff-test).
+- **SCC-scoped DRed** — explicitly a **performance refinement, not a correctness one** (current
+  DRed is correct, it merely over-deletes a superset of the affected SCC). Optimizing a hot path
+  before any demonstrated SLA miss is premature; revisit if retraction latency misses the gate's
+  SLA (§13).
+- **Persisted `WITH RECURSIVE` / DBSP** — `todo.md` marks truth-maintenance placement
+  "Phase 3 (MVP), revisit at scale". The in-memory engine *is* the MVP algorithm; persisting it
+  is a scale concern past the validation gate.
+
+So Phase 3's reasoning core is **complete as a thin slice** (the extract → resolve → derive →
+certify → value → aggregate loop runs end to end on real AGE), with G3.3 the named, justified
+post-gate hardening.
 
 ## Phase risks / decisions (carried from §12, §13)
 
