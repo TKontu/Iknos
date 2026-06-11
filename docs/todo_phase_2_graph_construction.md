@@ -24,11 +24,15 @@ because Phase 2 is where its absence turns from latent to expensive.*
       a synthetic graph at target schema density, on the four real query patterns,
       *before* building heavily on AGE. If AGE fails here, the fallback decision
       (separate graph store) must be made now, not after Phases 2–5 are built on it.
-- [ ] **Quarantine enforcement lands with the first evidential edges (G1.6).** The
+- [x] **Quarantine enforcement lands with the first evidential edges (G1.6).** The
       `provisional` flag is already set per proposition; the §3.1 rule "provisional
       atoms cannot drive high-stakes moves (e.g. a `REFUTES`)" is enforced at
       edge-creation time — which begins in this phase. Until enforced, the flag is
-      decorative.
+      decorative. *(Shipped via the Phase-4 safety lockdown **R8 → R9 → V7** once the
+      edge producer created the first SUPPORTS/REFUTES site:
+      `provisional`→`provisional_reasons` (R8), the pure `core/quarantine` gate (R9),
+      and the edge-producer drop-and-record (V7). See
+      `todo_phase_4_linking_adjudication.md` § Open task specs.)*
 - [x] **Polarity-aware agreement (G1.14) and the truncation guard (G1.13 slice 1)
       shipped** — Phase 2 consumes propositions and their faithfulness; both fixes
       change what reaches it. *(Shipped in #32 — `feat(ingest): G1.13 slice 1

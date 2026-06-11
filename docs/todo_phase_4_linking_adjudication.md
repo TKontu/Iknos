@@ -69,12 +69,13 @@ are the next increments. Full per-slice decision records: `docs/archive/gap_phas
 
 **Sequencing override (2026-06-11 review, F1/F2).** Before the remaining G4.5
 slices (channel producers, operators): the **safety lockdown must land** —
-R8 → R9 → V7 (quarantine enforcement in the edge producer) → V8 (the
-`persist_verdicts` ensemble filter, i.e. the "consumer-filter" slice of G4.5,
-wired to the slice-1 `authorise` and holding un-authorised flips as a
-`pending_refutation` finding) — because the REFUTES creation site exists with
-§3.1 quarantine unenforced, and `persist_verdicts` still writes whatever state
-it is given. And before G4.6 can run at all: the **gate assets** V1 (planted
+**R8 → R9 → V7 (quarantine enforcement in the edge producer) shipped** (the
+`provisional`→`provisional_reasons` set, the pure `core/quarantine` gate, and
+the edge-producer drop-and-record); **V8** (the `persist_verdicts` ensemble
+filter, i.e. the "consumer-filter" slice of G4.5, wired to the slice-1
+`authorise` and holding un-authorised flips as a `pending_refutation` finding)
+is the remaining lockdown slice — `persist_verdicts` still writes whatever
+state it is given. And before G4.6 can run at all: the **gate assets** V1 (planted
 corpus), V2 (gold labels — longest lead, start the annotator recruitment now),
 V3 (metrics harness), plus the E1 baselines V4–V6 — specs in `todo_trials.md`.
 The lockdown specs are in *Open task specs* below.
@@ -161,12 +162,15 @@ The lockdown specs are in *Open task specs* below.
       per-model recalibration (the fitted consistency→correctness curve, identity until G4.6) and
       tier-differentiated significance (the `SignificancePolicy` is uniform until G4.6 calibrates
       it).)*
-- [ ] **Quarantine enforcement at the edge-creation site (V7, needs R8+R9):** a
+- [x] **Quarantine enforcement at the edge-creation site (V7, needs R8+R9):** a
       provisional-sourced `REFUTES` (or sole-support `SUPPORTS`) is dropped from the
       plan and recorded on the `Action` as `quarantined` — never persisted, never a
       silent skip (§3.1). The judge still sees the evidence; quarantine gates the
-      *write*. *Must land before the remaining G4.5 slices.*
-      (spec in *Open task specs* below.)
+      *write*. *(Shipped — R8 `provisional_reasons` set + R9 `core/quarantine`
+      (`Stakes`, `assert_not_quarantined`) + V7 `edge_producer` drop-and-record
+      (`edge_stakes`, `_load_provisional_reasons`, `QuarantineRecord`,
+      `outputs.quarantined`); `qbaf_adapter` untouched, a quarantined edge is simply
+      never written. Spec in *Open task specs* below.)*
 - [ ] `corroborate` operator: hypothesis → gather supporting/refuting evidence.
 - [~] `find-contradiction` operator + **ensemble gate** (multi-sample LLM + symbolic +
       temporal agreement) required before any `REFUTES` (§7.2). *(G4.5 slice 1 —
@@ -261,11 +265,12 @@ The lockdown specs are in *Open task specs* below.
 ## Open task specs *(merged from `archive/gap_review_2026-06.md` R4/R8/R9 and `archive/gap_review_2026-06-11.md` V7/V8/V9, 2026-06-11 — execute as written; one task per PR, branch `fix/<id>-<slug>`)*
 
 Work-stream order: **R8 → R9 → V7 → V8** (the safety lockdown — before the remaining
-G4.5 slices), and **R4 → V9** (gate ANN infrastructure — with the gate trials).
+G4.5 slices); **R8/R9/V7 are shipped**, **V8** is the remaining lockdown slice. And
+**R4 → V9** (gate ANN infrastructure — with the gate trials).
 Migrations: set `down_revision` to the actual head (`alembic heads`) — numbering in
 older specs is stale.
 
-### R8 — `provisional` boolean → `provisional_reasons` set
+### R8 — `provisional` boolean → `provisional_reasons` set *(shipped)*
 
 One flag currently carries three meanings; triage (§11.1) needs the reason, the
 quarantine gate (R9) needs non-emptiness. Known reasons now: `low_faithfulness`
@@ -290,7 +295,15 @@ Accept: low-faithfulness proposition persists `["low_faithfulness"]` + legacy
 `null`; no production read of the boolean except the legacy write. Tests:
 `test_epistemic.py` (threshold edge), `test_proposition_layer.py` (persisted fields).
 
-### R9 — quarantine gate function (pure)
+**Shipped** (commit `refactor(epistemic): R8 …`). One deviation worth recording: a
+G1.14 **polarity-unstable twin** had no enumerated reason — it maps to
+`LOW_FAITHFULNESS` (an instability on the same consistency/faithfulness axis, §3.1),
+so no fourth member was invented. `_legacy_provisional(faithfulness, reasons)` keeps
+the three-state boolean (`null` = unassessed). `reference.py` OR-folds
+`UNRESOLVED_REFERENCE` via read-modify-write; `reuse.py` round-trips the JSON-string
+list.
+
+### R9 — quarantine gate function (pure) *(shipped)*
 
 New module `src/iknos/core/quarantine.py`: `QuarantinedPropositionError`;
 `Stakes(StrEnum)` `LOW`/`HIGH`; `assert_not_quarantined(proposition_reasons:
@@ -301,7 +314,10 @@ docstring states the call contract: every path that creates a `REFUTES`, or a
 writing. Tests (`test_quarantine.py`): the three-row truth table; importable
 without `DATABASE_URL`.
 
-### V7 — quarantine enforcement in the edge producer *(needs R8+R9)*
+**Shipped** (commit `feat(quarantine): R9 …`) exactly as specified — the error carries
+the offending `reasons` for the caller's audit record.
+
+### V7 — quarantine enforcement in the edge producer *(needs R8+R9) — shipped*
 
 `core/edge_producer.py` is the live `SUPPORTS`/`REFUTES` creation site and never
 consults provisional state. Read the module docstring + `plan_hypothesis` /
@@ -328,6 +344,13 @@ stakes table + plan-level drop; integration provisional→fact→produce→no RE
 edge + Action carries `quarantined`. Do not: filter at the candidate/judge stage
 (the judge should still see the evidence — quarantine gates the *write*); touch
 `qbaf_adapter.py` (V8).
+
+**Shipped** (commit `feat(adjudication): V7 …`) as specified: `edge_stakes` +
+`_load_provisional_reasons` + `QuarantineRecord`; `plan_hypothesis` drops and records;
+`EdgeProductionResult.quarantined` surfaces the drops; result rows are built from the
+*planned* edges so a dropped edge is never reported persisted; `qbaf_adapter.py`
+untouched. The sole-support count is taken **before** any quarantine drop (so dropping
+one provisional supporter does not retroactively promote another to "sole").
 
 ### V8 — `persist_verdicts` ensemble filter *(the G4.5 consumer-filter slice)*
 
