@@ -502,7 +502,10 @@ E3 (retrospective real)  ── gate ──►  any efficacy claim (validity lad
 everything and depends on nothing unbuilt); C3 moves from "scale trial" to Phase 2
 entry; G1.14 (polarity-aware clustering) lands **before** A5 fits
 `PROP_AGREEMENT_THRESHOLD`, or the calibration bakes the polarity-blind bug in;
-A5 additionally evaluates `min` vs `×` as the faithfulness combiner (§12 note).
+A5's combiner check is now **falsification, not a choice** — the default is decided
+(§3.1: `verify × calibrate(agreement)`, `min` rejected); A5 verifies the decision
+empirically and lands after G1.20 (`calibrate` seam) so thresholds fit the final code
+path.
 
 **Run earliest (can fail and force redesign/descope):** **E1 (beat the cheap baseline —
 the go/no-go on the whole approach)**, A5 (extraction faithfulness) and A6 (entity
