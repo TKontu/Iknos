@@ -35,8 +35,11 @@ grouping contract the operators will write. **G3.8** ships those operators:
 A/B** ("engine disposes"). **G3.7** ships `SAME_AS`-component aggregation
 (`core/component_aggregate.py`): support/confidence accrue to the canonical component
 (additive Layer A, `⊕` Layer B), with merge/split as belief-revision triggers that
-re-aggregate. Still open: the clingo/SCC/persisted path (G3.3) and composed-loop termination
-(G3.9). See `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
+re-aggregate. **G3.9** ships the composed-loop **termination driver**
+(`core/composed_loop.py::stabilize`): bounded iteration + oscillation detection that surfaces
+a non-converging region as a finding (the Phase-4 `REFUTES→A→B→QBAF` loop body wires into it).
+Still open: the clingo/SCC/persisted path (G3.3, needs a solver dep + the persisted layer).
+See `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
 
 ## Layer A — truth maintenance over a commutative group (owns retraction)
 
@@ -167,10 +170,16 @@ re-aggregate. Still open: the clingo/SCC/persisted path (G3.3) and composed-loop
 - [x] A cyclic derivation test converges (Layer B) **and** is correctly founded/unfounded
       (Layer A). *(G3.6 `test_cyclic_valuation_converges_to_a_gated_fixpoint` over Layer A's
       certified set; grounded vs unfounded cycle handling is the G3.1/G3.2 + G3.6 seam.)*
-- [ ] **Composed-loop termination:** the retraction feedback loop (REFUTES → retract →
+- [~] **Composed-loop termination:** the retraction feedback loop (REFUTES → retract →
       Layer A → Layer B → QBAF → …) runs with an **iteration bound + oscillation
       detection**; on non-convergence the unstable sub-region is surfaced as a finding,
-      never silently re-iterated (§12, §7.2).
+      never silently re-iterated (§12, §7.2). *(G3.9 — the **driver** ships:
+      `core/composed_loop.py::stabilize` bounds the iteration, detects oscillation (returns
+      the cycle as the unstable region) and divergence, and **always terminates** with a
+      structured outcome (`Stability.{CONVERGED,OSCILLATING,DIVERGED}`) — non-convergence is
+      a finding, never re-iterated. The actual loop **body** (`REFUTES→A→B→QBAF`) needs the
+      Phase 4 evidential/QBAF layer; Phase 4 supplies `step` and maps the unstable region to a
+      graph finding. Monotonic-in-effort re-inference caching (§6.1) is a separate seam.)*
 - [ ] (Feeds the validation gate jointly with Phase 4.)
 
 ## Phase risks / decisions

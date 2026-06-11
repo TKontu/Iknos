@@ -31,7 +31,7 @@ for every faster engine that follows.
 | **G3.6** | **Layer B confidence valuation** — least fixpoint over the chosen semiring, computed only over Layer-A-certified nodes; cycle-convergent (incremental-on-delta deferred) | G3.5, G3.2 | **shipped (this increment)** |
 | **G3.7** | **`SAME_AS`-component aggregation** — support/confidence accrue to the canonical component; merge/split is a belief-revision trigger re-running A/B on the affected component (§5.2) | G3.2, G3.6, G2.3 | **shipped (this increment)** |
 | **G3.8** | **Derivation operators** — `deduce` (→ `DeductiveConclusion`) and `induce` (→ provisional `InductiveConclusion`), `DERIVED_FROM` group + provenance, each emitting an `Action`; conclusion annotations computed by Layer A/B (§6, §10.2) | G3.4 | **shipped (this increment)** |
-| G3.9 | **Composed-loop termination** — iteration bound + oscillation detection on REFUTES→retract→A→B→QBAF; non-convergence surfaced as a finding (§12, §7.2) | Phase 4 | planned |
+| **G3.9** | **Composed-loop termination** — iteration bound + oscillation detection on REFUTES→retract→A→B→QBAF; non-convergence surfaced as a finding (§12, §7.2). *Driver* shipped (pure); the Phase-4 loop body wires into it | Phase 4 | **driver shipped (this increment)** |
 
 Cross-cutting: every implementation of `SupportOracle` is **diff-tested against
 `RecomputeOracle`** — the oracle is the contract. Layer A answers *membership* and
@@ -369,6 +369,43 @@ unit tests pass.
   (with G3.3's persisted maintenance).
 - **The contradiction→split-review loop + hysteresis** (§5.2, §6) — lowering a wrong merge's
   `SAME_AS` confidence is the Phase 4 `find-contradiction`/QBAF path (and G3.9's composed loop).
+
+## G3.9 — Composed-loop termination driver (this increment)
+
+**What shipped.** `core/composed_loop.py::stabilize` — the §12/§13 termination discipline as a
+pure, generic driver. The reasoning core's outer loop (`REFUTES→retract→A→B→QBAF`) is **not
+guaranteed to converge**, and §13 is explicit that a non-converged/oscillating region is a
+**finding** (genuinely circular or balanced evidence) to be *bounded, detected, and surfaced*
+— "not smoothed into a false verdict". `stabilize` runs a state-transition `step` to a
+fixpoint under a hard iteration bound and returns a structured `StabilizationResult`:
+**CONVERGED** (the fixpoint), **OSCILLATING** (a return to an earlier state — the cycle is
+returned as the unstable region), or **DIVERGED** (bound hit). It **always terminates** and
+never silently re-iterates; `unstable_region()` is the subgraph the caller surfaces as a
+finding.
+
+**Design notes.** Generic over the state type `S` and `step` (PEP-695 generics), with a `key`
+hook for unhashable states (a dict region → `frozenset(items)`); no DB/LLM/graph dependency,
+so it is unit-testable with toy state machines and reusable for the §5.2 merge↔split
+hysteresis loop, which names the same "surface the unstable region, don't loop on it"
+discipline. It is the *outer* analogue of Layer B's internal `valuate` bound — but where
+`valuate` is *guaranteed* to converge (absorptive/ω-continuous) and the bound is a backstop,
+here non-convergence is *expected* and the bound + cycle detection are the product behaviour.
+
+**Tests** (`tests/unit/test_composed_loop.py`, DB-free): converges to a fixpoint (and in one
+step), detects a 2-cycle and a longer cycle-with-tail (surfacing only the recurring region),
+bounds a strictly-increasing/never-repeating loop as DIVERGED, handles unhashable dict states
+via `key`, rejects `max_iterations < 1`, and always terminates on a pathological step. ruff +
+mypy(`src/iknos`) clean; 361 unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **The actual composed step** — wiring `REFUTES→retract→A→B→QBAF` into `step` needs the
+  Phase 4 evidential/QBAF layer (it does not exist yet). This is the *driver*; Phase 4 supplies
+  the body and maps the unstable region to a graph finding. So G3.9 is "driver shipped", the
+  full exit criterion completing with Phase 4.
+- **Monotonic-in-effort re-inference** (§12, §6.1) — bounding expensive LLM re-inference to
+  once per evidence-state (content-addressed cache key + region state hash) layers on top of
+  this bound; not part of the driver.
 
 ## Phase risks / decisions (carried from §12, §13)
 
