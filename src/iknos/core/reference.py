@@ -37,7 +37,9 @@ Scope deliberately left to later slices (documented seams):
   correct conservative behaviour, not a silent miss. Binding them needs the discourse-order
   antecedent stage (a dedicated coreference model, §3.1) → a later increment.
 - **Taxonomy-anchor stage.** Binding a mention to a domain-pack taxonomy node needs
-  entity-linking → G2.5 (with the part-whole anchoring).
+  entity-linking, now shipped (``core/anchor``, G2.8). Unblocked → a later increment adds the
+  ``REFERS_TO``-to-taxonomy cascade stage reusing that linker (G2.8 slice 2 wired the linker
+  into ``resolve``/``partwhole``, not yet into this binder).
 - **Relational disambiguation.** When several same-kind referents match a definite
   description equally, this slice keeps them all as ``CANDIDATE`` (ambiguous → open); using
   shared-fact/role context to *break* the tie (the ``resolve.score_pair`` relational signal)
