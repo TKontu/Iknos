@@ -486,7 +486,12 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
       per proposition. Consequences to handle: one-time loud re-key on deploy (the
       extraction hash changes — same class as G1.15's first deploy, correct and loud);
       G1.7b replay copies faithfulness only when the *verify* stage identity matches,
-      else replays the extraction and queues the spans for verify-backfill. Tests:
-      verifier off→on completes faithfulness with **zero** extractor LLM calls;
-      verifier upgrade re-verifies without re-extracting; extraction cache hit-rate
-      unaffected by verifier config.
+      else replays the extraction and queues the spans for verify-backfill.
+      **Interaction with shipped G1.7r (#68):** cascade re-extraction currently
+      fires on *any* pipeline-identity change including the verifier sig — after
+      this split, a verifier-only change must trigger **verify-backfill, not
+      cascade re-extraction** (no propositions are purged for a verifier change);
+      update G1.7r's trigger condition accordingly. Tests:
+      verifier off→on completes faithfulness with **zero** extractor LLM calls and
+      **zero** purged propositions; verifier upgrade re-verifies without
+      re-extracting; extraction cache hit-rate unaffected by verifier config.

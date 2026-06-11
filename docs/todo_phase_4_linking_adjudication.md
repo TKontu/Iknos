@@ -279,7 +279,12 @@ quarantine gate (R9) needs non-emptiness. Known reasons now: `low_faithfulness`
    §3.1's decided rule: unassessed grounding is provisional, never coerced toward
    trusted; this changes the previously-documented verifier-off behavior, see G1.21
    in `todo_phase_1_ingest.md`; else empty). Migrate callers rather than keeping a
-   bool wrapper.
+   bool wrapper. **Merge-order note (2026-06-11):** PR #67 implements R8 with the
+   original three members and `None → set()` — written before this amendment
+   landed. That is fine: merge #67 as-is; **G1.21 then delivers the fourth member
+   and the `None → {UNASSESSED_FAITHFULNESS}` mapping** as the follow-up. Until
+   G1.21 lands, the quarantine gate does *not* hold back unverified (verifier-off)
+   propositions — the D2 rule in §3.1 is spec-ahead-of-code there.
 2. `types/nodes.py::Proposition`: `provisional: bool | None` →
    `provisional_reasons: list[str]` (default `[]`; list for stable serialization,
    set semantics — dedupe on write).

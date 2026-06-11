@@ -163,7 +163,7 @@ into the owning phase/gap doc as an active task.
 | G1.11 — box scoping on dense/sparse indexes | `todo_phase_1_ingest.md` *Open work* | first hybrid-retrieval consumer (Phase 6 `retrieve`) | waiting |
 | G1.19 — RRF rank fusion | `todo_phase_1_ingest.md` *Open work* | same trigger as G1.11 | waiting |
 | G1.12 — multi-span provenance | `todo_phase_1_ingest.md` *Open work* | a consumer needs >1 span per proposition | waiting (optional) |
-| G1.7 cascade re-extraction on stale spans | `todo_phase_1_ingest.md` *Open work* | a model/prompt change must purge-and-recreate in production | waiting |
+| G1.7 cascade re-extraction on stale spans | `todo_phase_1_ingest.md` *Open work* | a model/prompt change must purge-and-recreate in production | **CLOSED** — shipped as G1.7r (#68) |
 | G3.3 — clingo foundedness for recursion/negation | `todo_phase_3_reasoning_core.md` *Build record* | first negation/recursive rule producer (domain-pack rules) | waiting |
 | Bitemporal as-of range indexes | migration `0007` docstring | Phase 5 supersession reader defines the as-of query shape | waiting |
 | Per-model recalibration curve (identity until calibrated) | `todo_phase_4_*.md` status block | G4.6 produces calibration data | waiting (G4.6) |
@@ -232,20 +232,17 @@ cite a gap file by name resolve there):
       `{duration_ms, n_spans, n_skipped_whitespace}`. `time.monotonic()` deltas;
       absent usage → keys omitted, never zeroed. Cost discipline (§6.1) and Trials
       A/C consume these numbers.
-- [ ] **V11 — unit tests for untested infrastructure modules.** Check existing
-      coverage first (`test_age_cypher_map.py` covers `cypher_map` — don't
-      duplicate). Add: `test_age_cypher.py` (`_dollar_quote_tag` escalation incl. a
-      body containing the escalated tag; assembled statement has the tag exactly
-      twice, no bare `$$`; identifier validation — if graph-name validation is
-      missing, add the one-line guard with its test); `test_action_log.py` (record
-      construction: required fields, JSON-serializable payloads — extract a pure
-      `build_action` seam if the module is all-DB, behavior-identical);
-      `test_audit.py` (pure parts of reach-back assembly); `test_boxes_registry.py`
-      + `test_domain_loader.py` (serde round-trip; loader invariants on a minimal
-      in-memory pack; malformed-pack error); `test_config.py` (defaults without
-      env; env overrides; no DB on import). Pure where the module is pure;
-      integration tests keep owning round-trips; don't chase coverage into
-      ORM/type modules.
+- [~] **V11 — unit tests for untested infrastructure modules** *(in progress —
+      domain-loader result-builder tests #64, `_build_cypher_sql` seam + assembly
+      tests #65, `GRAPH_NAME` identifier validation + tests #66 shipped)*. Check
+      existing coverage first (`test_age_cypher_map.py` covers `cypher_map` — don't
+      duplicate). Remaining: `test_action_log.py` (record construction: required
+      fields, JSON-serializable payloads — extract a pure `build_action` seam if
+      the module is all-DB, behavior-identical); `test_audit.py` (pure parts of
+      reach-back assembly); `test_boxes_registry.py` (serde round-trip);
+      `test_config.py` (defaults without env; env overrides; no DB on import).
+      Pure where the module is pure; integration tests keep owning round-trips;
+      don't chase coverage into ORM/type modules.
 
 ## Conventions for executing agents *(applies to every task in every phase file)*
 
