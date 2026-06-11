@@ -521,7 +521,10 @@ a newly extracted fact can overturn an earlier conclusion. Four additions follow
 Each hypothesis is recomputed — supported / unsupported / refuted — from its current
 incoming evidence and the confidences on those edges. A flip to `refuted` requires the
 **ensemble gate** (multi-sample LLM + symbolic + temporal agreement), never a single
-judgment.
+judgment. The gate is **structural in the writer**: a computed `refuted` the ensemble does
+not authorise is *held* at the hypothesis's prior state with a `pending_refutation` flag
+(surfaced as a finding, §13), never silently flipped or dropped — `refuted` is unreachable
+without an authorising gate decision.
 
 ### 7.3 Belief revision
 

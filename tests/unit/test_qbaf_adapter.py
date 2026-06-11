@@ -3,16 +3,26 @@
 Mirrors ``test_derivation_adapter.py`` (the G3.4 unit tests): the grouping/filtering and the
 evaluate step are exercised with hand-built rows, leaving the AGE reads/writes to the
 integration test. Covers sign routing, active-box gating, dead-endpoint drop, the §12 base-score
-seam, and the computed verdict (supported / refuted / unsupported).
+seam, the computed verdict (supported / refuted / unsupported), and the §7.2 persist gate's pure
+decision (:func:`refutation_held`, V8) over real :func:`~iknos.core.ensemble_gate.authorise`
+decisions.
 """
 
 import pytest
 
 from iknos.core.derivation_adapter import NodeRow
+from iknos.core.ensemble_gate import (
+    DEFAULT_GATE,
+    GateChannel,
+    affirming,
+    authorise,
+    dissenting,
+)
 from iknos.core.qbaf_adapter import (
     EvidenceRow,
     adjudicate,
     assemble_baf,
+    refutation_held,
 )
 from iknos.types.edges import EdgeSign
 from iknos.types.intentional import AcceptabilityBand, HypothesisState
@@ -115,3 +125,55 @@ def test_adjudicate_skips_a_hypothesis_outside_the_active_subgraph() -> None:
     """A hypothesis id not present in the loaded subgraph yields no verdict (nothing to score)."""
     out = adjudicate(assemble_baf([_node("h")], []), ["h", "gone"])
     assert {v.id for v in out.verdicts} == {"h"}
+
+
+# --------------------------------------------------------------------------------------------
+# §7.2 persist gate — refutation_held over real ensemble decisions (V8)
+# --------------------------------------------------------------------------------------------
+
+# GateDecisions built through the *real* authorise (the spec: don't mock the gate). DEFAULT_GATE
+# requires {LLM, SYMBOLIC}; a dissent vetoes under every policy.
+_AUTHORISED = authorise(
+    [affirming(GateChannel.LLM), affirming(GateChannel.SYMBOLIC)], gate=DEFAULT_GATE
+)
+_WITHHELD = authorise([affirming(GateChannel.LLM)], gate=DEFAULT_GATE)  # SYMBOLIC required, absent
+_VETOED = authorise(
+    [affirming(GateChannel.LLM), dissenting(GateChannel.SYMBOLIC)], gate=DEFAULT_GATE
+)
+
+
+def test_decisions_are_what_we_think() -> None:
+    # Sanity on the real gate so the held-table below means what it says.
+    assert _AUTHORISED.authorised is True
+    assert _WITHHELD.is_finding is True and not _WITHHELD.authorised
+    assert _VETOED.is_finding is True and not _VETOED.authorised
+
+
+def test_refutation_held_only_for_a_refuted_state() -> None:
+    # A non-refuted verdict is never held, regardless of any decision (the gate only gates flips).
+    for state in (HypothesisState.SUPPORTED, HypothesisState.UNSUPPORTED):
+        assert refutation_held(state, None) is False
+        assert refutation_held(state, _WITHHELD) is False
+        assert refutation_held(state, _AUTHORISED) is False
+
+
+def test_refutation_held_truth_table_for_refuted() -> None:
+    # refuted + authorising → flip allowed (not held); refuted + withheld/vetoed/no-decision → held.
+    assert refutation_held(HypothesisState.REFUTED, _AUTHORISED) is False
+    assert refutation_held(HypothesisState.REFUTED, _WITHHELD) is True
+    assert refutation_held(HypothesisState.REFUTED, _VETOED) is True
+    # No decision at all (no ensemble ran) is treated as not-authorised — withheld, never defaulted.
+    assert refutation_held(HypothesisState.REFUTED, None) is True
+
+
+def test_persist_result_surfaces_held_as_a_finding() -> None:
+    from iknos.core.qbaf_adapter import (
+        PENDING_REFUTATION_REASON,
+        HeldRefutation,
+        PersistResult,
+    )
+
+    held = HeldRefutation(id="h1", held_state=HypothesisState.UNSUPPORTED, decision=_WITHHELD)
+    assert held.reason == PENDING_REFUTATION_REASON
+    assert PersistResult(written=1, held=(held,)).is_finding is True
+    assert PersistResult(written=2).is_finding is False

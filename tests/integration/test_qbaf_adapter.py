@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.boxes.serde import box_to_props, case_box
+from iknos.core.ensemble_gate import DEFAULT_GATE, GateChannel, affirming, authorise
 from iknos.core.qbaf_adapter import QbafAdapter
 from iknos.db.age import bootstrap_session, execute_cypher, merge_edge, merge_vertex, unquote_agtype
 from iknos.types.intentional import AcceptabilityBand, HypothesisState
@@ -139,9 +140,11 @@ async def test_persist_writes_acceptability_and_state_without_clobbering_confide
     await session.commit()
 
     result = await QbafAdapter().evaluate(session)
-    written = await QbafAdapter().persist_verdicts(session, result.verdicts)
+    persisted = await QbafAdapter().persist_verdicts(session, result.verdicts)
     await session.commit()
-    assert written >= 1
+    # A SUPPORTED verdict is not a refutation — written, nothing held (V8).
+    assert persisted.written >= 1
+    assert persisted.held == () and persisted.is_finding is False
 
     acc, state, conf = await _read_hypothesis(session, h)
     # combine(0.4, 0.8, 0) = 0.4 + 0.6·0.8 = 0.88; state supported; band not stored.
@@ -172,3 +175,101 @@ async def test_retracting_a_supporter_lowers_acceptability(session: AsyncSession
     after = next(v for v in (await QbafAdapter().evaluate(session)).verdicts if v.id == hs)
     assert after.acceptability == pytest.approx(0.3)  # back to base — evidence gone
     assert after.acceptability < before.acceptability
+
+
+async def _read_hyp_gate_state(session: AsyncSession, hid: uuid.UUID) -> tuple[str, str, str]:
+    """Read back (acceptability, state, pending_refutation) of a Hypothesis as raw agtype."""
+    rows = await execute_cypher(
+        session,
+        f"MATCH (h:Hypothesis {{id: '{hid}'}}) "
+        "RETURN h.acceptability, h.state, h.pending_refutation",
+        returns="acc agtype, state agtype, pending agtype",
+    )
+    acc, state, pending = rows[0]
+    return str(acc), unquote_agtype(state), str(pending)
+
+
+async def _seed_refuted(session: AsyncSession, name: str) -> uuid.UUID:
+    """A hypothesis the QBAF computes a structural ``refuted`` for (net attack, no support)."""
+    box = case_box(name, "1", "test", 0.8)
+    await _put_box(session, box)
+    h = await _put_hypothesis(session, box.id, confidence=0.5)
+    f = await _put_fact(session, box.id, confidence=1.0)
+    await _put_evidence(session, source=f, target=h, box=box.id, label="REFUTES", strength=0.9)
+    await session.commit()
+    return h
+
+
+async def test_persist_holds_unauthorised_refutation_then_flips_when_authorised(
+    session: AsyncSession,
+) -> None:
+    """V8/§7.2: a structural ``refuted`` is held (state kept, acceptability written,
+    ``pending_refutation`` flagged, surfaced as a finding) without an authorising gate decision, and
+    flips to ``refuted`` once an authorising :func:`authorise` decision is supplied."""
+    await bootstrap_session(session)
+    h = await _seed_refuted(session, "v8-hold")
+    adapter = QbafAdapter()
+    result = await adapter.evaluate(session)
+    (v,) = result.verdicts
+    assert v.state is HypothesisState.REFUTED  # the engine's structural finding
+
+    # 1) No gate decision → the flip is HELD.
+    held = await adapter.persist_verdicts(session, result.verdicts)
+    await session.commit()
+    assert held.written == 1 and held.is_finding
+    (hr,) = held.held
+    assert hr.id == str(h) and hr.held_state is HypothesisState.UNSUPPORTED
+    assert hr.reason == "ensemble_gate_pending" and hr.decision is None
+    acc, state, pending = await _read_hyp_gate_state(session, h)
+    assert float(acc) == pytest.approx(v.acceptability)  # acceptability still written
+    assert state == "unsupported"  # held at prior (none → unsupported), NOT refuted
+    assert pending == "true"
+
+    # 2) An authorising decision (real gate) → the flip persists, pending cleared.
+    decision = authorise(
+        [affirming(GateChannel.LLM), affirming(GateChannel.SYMBOLIC)], gate=DEFAULT_GATE
+    )
+    out = await adapter.persist_verdicts(
+        session, result.verdicts, gate_decisions={str(h): decision}
+    )
+    await session.commit()
+    assert out.written == 1 and out.held == () and out.is_finding is False
+    _, state, pending = await _read_hyp_gate_state(session, h)
+    assert state == "refuted"
+    assert pending == "false"
+
+
+async def test_persist_clears_pending_when_a_later_verdict_is_no_longer_refuted(
+    session: AsyncSession,
+) -> None:
+    """A held refutation lifts when the hypothesis is no longer structurally refuted (the attacker
+    retracted) — the next persist writes the non-refuted state and clears ``pending_refutation``."""
+    await bootstrap_session(session)
+    h = await _seed_refuted(session, "v8-clear")
+    adapter = QbafAdapter()
+
+    # Hold the unauthorised refutation first.
+    refuted = await adapter.evaluate(session)
+    await adapter.persist_verdicts(session, refuted.verdicts)
+    await session.commit()
+    _, _, pending = await _read_hyp_gate_state(session, h)
+    assert pending == "true"
+
+    # Retract the attacker → the hypothesis is no longer refuted; persisting clears the flag.
+    rows = await execute_cypher(
+        session,
+        f"MATCH (f)-[:REFUTES]->(:Hypothesis {{id: '{h}'}}) RETURN f.id",
+        returns="fid agtype",
+    )
+    await _retract_node(session, uuid.UUID(unquote_agtype(rows[0][0])))
+    await session.commit()
+
+    result2 = await adapter.evaluate(session)
+    (v2,) = result2.verdicts
+    assert v2.state is HypothesisState.UNSUPPORTED  # base only, no active evidence
+    out = await adapter.persist_verdicts(session, result2.verdicts)
+    await session.commit()
+    assert out.held == () and out.is_finding is False
+    _, state, pending = await _read_hyp_gate_state(session, h)
+    assert state == "unsupported"
+    assert pending == "false"
