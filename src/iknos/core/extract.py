@@ -132,6 +132,11 @@ ENTITY_SCHEMA = FactEntities.model_json_schema()
 # later concern — this slice's idempotency only skips an already-extracted proposition.
 EXTRACT_SCHEMA_VERSION = 1
 
+# Action actor for the extract operator (§10.1) — the single source of this string, shared
+# by the idempotency lookup, the emitted Action, and the audit reach-back (provenance.audit)
+# so the "who produced this Fact" join can never drift across call sites.
+EXTRACTOR_ACTOR = "extractor"
+
 
 SYSTEM_PROMPT = (
     "You identify the entities a single factual statement is about, so they can become "
@@ -316,10 +321,10 @@ class Extractor:
         """
         row = await session.execute(
             text(
-                "SELECT 1 FROM actions WHERE actor = 'extractor' AND action_type = 'extract' "
+                "SELECT 1 FROM actions WHERE actor = :actor AND action_type = 'extract' "
                 "AND inputs->>'proposition' = :pid LIMIT 1"
             ),
-            {"pid": str(proposition_id)},
+            {"actor": EXTRACTOR_ACTOR, "pid": str(proposition_id)},
         )
         return row.scalar_one_or_none() is not None
 
@@ -411,7 +416,7 @@ class Extractor:
 
         action_id = await record_action(
             session,
-            actor="extractor",
+            actor=EXTRACTOR_ACTOR,
             action_type="extract",
             inputs={
                 "proposition": str(prop.id),

@@ -45,6 +45,16 @@ class Action(Base):
             text("timestamp DESC"),
             postgresql_where=text("actor = 'propositionizer'"),
         ),
+        # Backs the §10.2 audit reach-back (G2.7, provenance.audit::producing_action): the
+        # newest extract Action naming a given Fact in its outputs. Functional (the fact id
+        # lives in JSONB outputs) + partial on the extract actor; declared here so the
+        # autogenerate-drift gate sees it. Migration 0008.
+        Index(
+            "ix_actions_extract_fact",
+            text("(outputs->>'fact')"),
+            text("timestamp DESC"),
+            postgresql_where=text("actor = 'extractor'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
