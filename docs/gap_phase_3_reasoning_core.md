@@ -25,7 +25,7 @@ for every faster engine that follows.
 |----|-----------|------------|-------|
 | **G3.1** | **Layer A definitional core** — `well_founded_support` least-fixpoint over an abstract `DerivationGraph`; `RecomputeOracle` / `SupportOracle` contract; §12 must-pass cycle tests | Phase 2 (contract only) | shipped |
 | **G3.2** | **Layer A incremental engine** — `IncrementalOracle`: Counting (integer support-count) + semi-naive insertion + **DRed** retraction; correct on acyclic *and* cyclic positive-Horn graphs; randomized diff-test vs `RecomputeOracle` | G3.1 | **shipped (this increment)** |
-| G3.3 | **Cyclic/recursive completeness** — **clingo/ASP** foundedness for non-monotonic / stratified-negation rules; SCC detection to scope DRed over-deletion (perf); persisted `WITH RECURSIVE` / DBSP path | G3.2, G3.4 | planned |
+| G3.3 | **Cyclic/recursive completeness** — **clingo/ASP** foundedness for non-monotonic / stratified-negation rules; SCC detection to scope DRed over-deletion (perf); persisted `WITH RECURSIVE` / DBSP path | G3.2, G3.4 | **deferred by design** (gated: no negation-rule producer yet; perf/scale, post-gate) |
 | **G3.4** | **Phase 2 adapter** — select the *active* subgraph (`valid_to` null, active boxes) and map AGE/UUID ids ↔ `NodeId`; assemble `DerivationGraph` + Layer B side maps; feed both layers | Phase 2, G2.3 | **shipped (this increment)** |
 | **G3.5** | **Layer B semiring decision** — the Phase-3-entry fixture (deep vs shallow chain, multi-path) deciding **Viterbi `max-·` vs Gödel `max-min`** *before* any Layer B code (§12, review A6) | — | **shipped (this increment)** |
 | **G3.6** | **Layer B confidence valuation** — least fixpoint over the chosen semiring, computed only over Layer-A-certified nodes; cycle-convergent (incremental-on-delta deferred) | G3.5, G3.2 | **shipped (this increment)** |
@@ -406,6 +406,33 @@ mypy(`src/iknos`) clean; 361 unit tests pass.
 - **Monotonic-in-effort re-inference** (§12, §6.1) — bounding expensive LLM re-inference to
   once per evidence-state (content-addressed cache key + region state hash) layers on top of
   this bound; not part of the driver.
+
+## G3.3 — deferred by design (not built; rationale recorded)
+
+G3.3 is the **scale/negation hardening** increment, and each of its three parts is gated on a
+prerequisite that does not exist at the close of the Phase 3 thin slice. Building any of them
+now would violate `todo.md`'s "do not gold-plate a layer before the loop works" and "do not
+harden any layer until the gate passes":
+
+- **clingo/ASP for non-monotonic / stratified negation** — there is **no producer of
+  negation rules** yet. The `Derivation` model is positive Horn (a conjunctive body, no
+  negative literals), `deduce`/`induce` emit only positive derivations, and negation/aggregation
+  in rule bodies arrives with domain rules / `find-contradiction` (Phase 4). A clingo oracle for
+  a rule shape nothing emits is speculative; it should land *with* its first producer, extending
+  the model with negative literals + a stratification check at that point. The positive-Horn
+  cyclic fragment — the whole of what Phase 3 actually produces — is already correct (G3.2 DRed +
+  the diff-test).
+- **SCC-scoped DRed** — explicitly a **performance refinement, not a correctness one** (current
+  DRed is correct, it merely over-deletes a superset of the affected SCC). Optimizing a hot path
+  before any demonstrated SLA miss is premature; revisit if retraction latency misses the gate's
+  SLA (§13).
+- **Persisted `WITH RECURSIVE` / DBSP** — `todo.md` marks truth-maintenance placement
+  "Phase 3 (MVP), revisit at scale". The in-memory engine *is* the MVP algorithm; persisting it
+  is a scale concern past the validation gate.
+
+So Phase 3's reasoning core is **complete as a thin slice** (the extract → resolve → derive →
+certify → value → aggregate loop runs end to end on real AGE), with G3.3 the named, justified
+post-gate hardening.
 
 ## Phase risks / decisions (carried from §12, §13)
 

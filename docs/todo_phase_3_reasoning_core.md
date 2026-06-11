@@ -8,8 +8,19 @@ off-the-shelf system packages this — it is the substance of the project.
 **Architecture refs:** §12 (two-layer model), §8 (decisions, staged build 1–2), §7.1
 (edge confidence), §6 (`deduce`, `induce`).
 
-**Status — 🟡 G3.1 + G3.2 shipped (Layer A, in-memory); G3.5 + G3.6 shipped (Layer B
-semiring decision + confidence valuation, in-memory).** Well-founded support is
+**Status — 🟢 thin slice complete (G3.1, G3.2, G3.4–G3.9 shipped); only G3.3 (scale/negation
+hardening) deferred by design.** Layer A: G3.1 (`RecomputeOracle`) + G3.2 (`IncrementalOracle`,
+Counting + DRed). Layer B: G3.5 (semiring decision) + G3.6 (`valuate`). G3.4 wires both to real
+AGE (`core/derivation_adapter.py`); G3.8 ships the `deduce`/`induce` operators
+(`core/derive.py`); G3.7 ships `SAME_AS`-component aggregation + merge/split belief revision
+(`core/component_aggregate.py`); G3.9 ships the composed-loop termination *driver*
+(`core/composed_loop.py`, Phase 4 wires the body). **G3.3 — clingo/ASP for stratified
+negation, SCC-scoped DRed, and the persisted `WITH RECURSIVE`/DBSP path — is deliberately
+deferred:** each is gated on a prerequisite that does not yet exist (a negation-rule *producer*
+for clingo — `deduce`/`induce` are positive-Horn; a demonstrated SLA miss for SCC-scoping; the
+scale layer for DBSP, which `todo.md` marks "Phase 3 (MVP), revisit at scale"). Building them
+now would gold-plate before the validation gate (`todo.md`: "do not gold-plate a layer before
+the loop works"). Well-founded support is
 implemented as the **definitional least-fixpoint** (`well_founded_support`, exposed as
 `RecomputeOracle`) over an abstract derivation graph — pure, in-memory, correct on
 acyclic *and* cyclic graphs — in `core/truth_maintenance.py`, with the §12 must-pass
