@@ -28,7 +28,9 @@ bounding pieces (§5.2, §14, §13) — come *after* the node-creation substrate
 | G2.4 | Reference binding (§3.1) — detect `Mention`s separately from binding; scored `REFERS_TO` via the scoped cascade; low-confidence stays open → provisional → triage | G2.2 | **shipped (this increment)** — thin slice; pronoun/discourse-antecedent + taxonomy-anchor stages + multi-sample/verify confidence deferred |
 | G2.5 | `PART_OF` abstraction levels (§14) — anchor-first to the pack taxonomy, induce fallback, coverage policy; level *derived* from the subject-role referent | G2.2 (+ G2.3 anchoring) | **shipped (this increment)** — the induce path + cycle-safe `partOf` closure + derived-level read; anchoring (needs entity-linking) + embedding/IC level estimation deferred |
 | G2.6 | Conditional credibility (§9.1) gated by epistemic class + sensitivity seeding onto facts | G2.2 | **shipped (this increment)** — derived-not-stored credibility computation + sensitivity seed; the per-claim alignment-judging pass deferred |
-| G2.7 | Quarantine **enforcement** (Phase-1 G1.6) — provisional/low-faithfulness propositions cannot drive a `REFUTES` (gated until evidential edges exist) | Phase 4 edges | planned |
+| G2.7 | Provenance & audit (§10.2) — checkable Fact reach-back (Fact → spans → source text → producing `Action`) + the box-level invariant, backed by a partial functional index | G2.2 | **shipped (#42)** — `provenance/audit`; the universal per-node/edge crawler is the deferred seam |
+| **G2.8** | **Entity-linking / taxonomy anchoring** (§5.2/§9/§14) — link case entities to the active pack taxonomy via a scored `ANCHORS_TO`; the *primary, reliable* identity/level path G2.3/G2.4/G2.5 defer to | G2.2 (+ G0.7 packs) | **shipped (this increment — slice 1)** — the linking operator + `ANCHORS_TO` edges + coverage metric; the anchor-canonicalization fold (into `resolve`) + anchor-first level (into `partwhole`) + the reference-binder taxonomy stage are slice 2 |
+| G2.9 | Quarantine **enforcement** (Phase-1 G1.6) — provisional/low-faithfulness propositions cannot drive a `REFUTES` (gated until evidential edges exist) | Phase 4 edges | planned |
 
 Cross-cutting (enforced from G2.2 on): every created node/edge has a non-empty
 provenance path to `Span`(s) and a producing `Action` (§10.1/§10.2); two annotations
@@ -610,3 +612,113 @@ that is the correct cold-start behaviour, everything provisional.
       depth (uncertain/multiple when ambiguous), never a stored scalar.
 - [x] Induced edges carry the meronymy type + `provenance=induced` + confidence + two
       annotations + bitemporal fields; re-inducing a box writes no duplicate edges.
+
+---
+
+## G2.8 — Entity-linking / taxonomy anchoring *(shipped — slice 1)*
+
+**Goal.** Build the **anchor** mechanism (§5.2/§9/§14): entity-link a case box's
+`Actor`/`Object` entities to the active domain pack(s)' curated taxonomy `Object` nodes,
+recording each link as a scored, directed `ANCHORS_TO` edge. Anchoring is the *primary,
+reliable* identity/level path that G2.3 (anchor-canonicalization), G2.4 (taxonomy-anchor
+binding), and G2.5 (anchor-first levels, coverage policy) all defer to — and "the reliability
+driver across domains" (§ phase risks): a domain works well exactly when its pack covers most
+referents. **Slice 1** ships the linking subsystem **purely additively** — a new module, a new
+edge label, no edits to the shipped `resolve`/`partwhole` — so the foundation lands reviewable
+and un-regressing; **slice 2** wires the consumers (below).
+
+### What shipped
+
+- **`iknos/core/anchor.py`.** Pure/DB split on the `core/resolve.py` discipline:
+  - *Pure (DB-free, unit-testable):* `TaxonomyNode` (a pack `Object` candidate); `block_anchors`
+    (cheap lexical blocking — shared normalized tokens, **no** kind gate since a pack taxonomy
+    is single-kind, so a mis-classified case `Actor` can still anchor); `score_anchor` (the
+    deterministic lexical score — best-direction token containment + an exact-normalized-label
+    bonus that alone reaches the confirm bar + a faint, never-disconfirming type bonus);
+    `decide_anchor` (the conservative bars + tie handling); and **`anchors_to_props`** (the
+    single canonical `ANCHORS_TO` write contract, cf. `resolve.same_as_to_props`).
+  - *`EntityLinker`:* the operator (`actor="entity-linker"`, `action_type="anchor"`). Box-scoped
+    like the resolver; `anchor_box` runs load (active-pack taxonomy + case entities as canonical
+    referents) → block → score → decide → persist with one `anchor` Action, then commits.
+    `anchored_targets` (the confirmed-anchor read slice-2 canonicalization consumes) and
+    `coverage` (the §14 coverage-policy metric) are the reads.
+- **`iknos/types/edges.py`** gained `AnchorState` (`candidate`/`confirmed`, mirroring
+  `SameAsState`/`BindingState`) for the `ANCHORS_TO` edge.
+- **Migration `0011_anchors_to_label`** creates the `ANCHORS_TO` elabel (the 0004 pattern) +
+  the `start_id`/`end_id` endpoint btree indexes (the 0007 pattern) the per-entity link
+  existence check and the coverage/`anchored_targets` reads traverse.
+
+### Decisions
+
+- **A dedicated `ANCHORS_TO` edge, not an overloaded `SAME_AS`.** Anchoring crosses boxes
+  (case → reference pack) and is **directional** (case entity → taxonomy node), which encodes
+  *anchor canonicalizes* (§5.2/§14): the taxonomy node is the authoritative identity. A peer
+  `SAME_AS` would make the canonical merely the within-box min-id of a component — the wrong
+  semantics — and §9 keeps cross-box identity out of the within-box resolution component. The
+  separate label also keeps each subsystem's edge set independently queryable and indexable.
+- **Deterministic, lexical, no LLM/embeddings** (the `resolve`/`reference` precedent). Anchoring
+  scores on token containment + exact normalized-label match (the controlled-vocabulary signal);
+  similarity is barred (§5.2 blocking-only), embedding cosine / lexical concreteness are the
+  *wrong* level proxies (§14). So the whole pass is deterministic and structurally idempotent —
+  re-anchoring an unchanged (box, taxonomy) upserts the same edges; the `anchor` Action is an
+  audit record per run, not an idempotency key (cf. `resolve`).
+- **Conservative under-anchor.** An exact label match to a *single* taxonomy node confirms;
+  containment-only, or a tie between taxonomy nodes (a cross-pack homonym — a "valve" in two
+  active packs), stays **open** as `CANDIDATE` edges for expert disambiguation (§ phase risks:
+  cross-domain ambiguity is resolved by pack scope + review). An over-eager anchor
+  mis-canonicalizes an entity and corrupts its derived level — the costlier failure.
+- **Canonical-by-label endpoints** (the `partwhole` precedent). The case side of an anchor is the
+  `reference.group_referents` canonical (label-grouped, min-id) entity, so an anchor is robust to
+  whether entity resolution (G2.3) has run and the slice-2 level/identity reads canonicalize
+  through the same grouping before following the anchor.
+- **Type is a faint tie-breaker, never disconfirming.** Unlike `resolve` (both sides LLM-typed),
+  the case `type` is a free-text guess and the taxonomy `type` is the pack `EntityType` name —
+  they rarely string-match, so a mismatch must not block an otherwise-exact anchor (it would
+  collapse coverage to ~0). Exact label alone confirms.
+- **Coverage over canonical case entities.** `AnchorCoverage` = confirmed-anchored / total
+  canonical entities — the §14 fraction that drives the pack-adequacy decision (high → anchoring
+  is the level mechanism; low → induce + review + provisional levels).
+
+### Deferred (slice 2 / later — documented seams)
+
+- **Anchor-canonicalization fold** — `resolve.canonical_components` and the `partwhole` level
+  read prefer a confirmed anchor as the canonical identity / level source (anchor-first level off
+  the pack's `partOf` depth, stamping `AttachmentProvenance.ANCHORED`) → slice 2. Slice 1 writes
+  the edges + exposes `anchored_targets`; it does **not** mutate the shipped `resolve`/`partwhole`
+  behaviour, so nothing already-green regresses.
+- **Taxonomy-anchor stage in the reference binder** (§3.1 cascade tail) — a `Mention` that fails
+  the in-graph stage binds to a taxonomy node via the same linking → slice 2.
+- **Embedding-neighbourhood blocking** (§5.2) — needs an entity-embedding store; slice 1 blocks
+  lexically.
+- **Belief-revision / retraction** of a stale anchor (re-run Layer A/B; clean superseded
+  `ANCHORS_TO`) → Phase 3. Slice 1's edge set is monotonic per run.
+- **Investigation-scoped pack activation** (§9) — slice 1 anchors against all active packs; the
+  `pack_box_ids` parameter is the seam where the Phase-6 `ACTIVATES`-edge scope plugs in.
+
+### Tests
+
+- **Unit (`tests/unit/test_anchor.py`, DB-free):** blocking (shared-token, empty-label, no-overlap);
+  scoring (exact reaches confirm, containment is candidate band, no-overlap zero, type bonus
+  not-required / mismatch-not-disconfirming, partial-containment below candidate); decision
+  (single-exact confirm, containment tie → candidate set, partial → candidate, no-candidate →
+  unresolved, two-exact ambiguity → candidate); `anchors_to_props` shape (state/strength/two
+  annotations/open bitemporal/`target_box`); `AnchorCoverage.fraction`.
+- **Integration (`tests/integration/test_anchor.py`, live AGE):** load `pump_basic` → extract a
+  case box (mocked LLM) with `roller` (exact → confirmed `Roller`), `pump` (contained in
+  `Centrifugal pump` **and** `Pump housing` → tie → two candidates), and `gearbox` (out of
+  taxonomy → no edge); assert the edges + states + annotations, `anchored_targets` (confirmed
+  only), `coverage` (1 of 3) agreeing with the run-time coverage, the `entity-linker` Action
+  joinable, and an idempotent re-run (no duplicate edges, same coverage). (Runs in CI; locally
+  collected only when `DATABASE_URL` is set.)
+
+### Exit criteria (G2.8 slice 1)
+
+- [x] Case `Actor`/`Object` entities link to the active pack taxonomy via a scored, directed
+      `ANCHORS_TO` edge through a cheap lexical cascade, box-scoped.
+- [x] The default is conservative: `CONFIRMED` only on a single high-bar (exact) match, else
+      bridgeable `CANDIDATE` edges (kept open on a cross-pack tie); an out-of-taxonomy entity
+      writes no edge.
+- [x] Anchoring is deterministic (no LLM/embeddings) and structurally idempotent; every run
+      emits an `Action`.
+- [x] The §14 coverage metric (confirmed-anchored / total) and the confirmed-anchor read
+      (`anchored_targets`) ship as the slice-2 canonicalization/level consumers' inputs.
