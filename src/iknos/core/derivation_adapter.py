@@ -233,6 +233,52 @@ def support_and_confidence(
     return supported, confidence
 
 
+async def load_active_box_ids(session: object) -> frozenset[str]:
+    """The ids of active (non-deprecated), current boxes (§9) — the active-box filter.
+
+    Shared AGE read, reused by both the Phase-3 derivation adapter and the Phase-4 QBAF
+    adapter (``core/qbaf_adapter.py``), so the "active box" definition cannot diverge between
+    the propagation and adjudication loads.
+    """
+    from iknos.db.age import execute_cypher, unquote_agtype
+
+    rows = await execute_cypher(
+        session,  # type: ignore[arg-type]
+        "MATCH (b:Box) WHERE b.status = 'active' AND b.valid_to IS NULL RETURN b.id",
+        returns="bid agtype",
+    )
+    return frozenset(unquote_agtype(bid) for (bid,) in rows)
+
+
+async def load_reasoning_nodes(session: object) -> list[NodeRow]:
+    """All bitemporally-current reasoning nodes, with box + confidence seed (§10, §12).
+
+    One query per reasoning label (AGE matches a single label per pattern, like the per-kind
+    loop in ``core/resolve.py``). A missing/null ``confidence`` defaults to the semiring ``one``
+    (a certain leaf — "no calibrated discount yet", §12), the same seed
+    ``extract.seed_confidence`` uses when no verifier ran. Shared with the QBAF adapter, which
+    consumes the same node confidence as the QBAF intrinsic/base score (§12 seam).
+    """
+    from iknos.db.age import execute_cypher, unquote_agtype
+
+    rows: list[NodeRow] = []
+    for label in REASONING_LABELS:
+        raw = await execute_cypher(
+            session,  # type: ignore[arg-type]
+            f"MATCH (n:{label}) WHERE n.valid_to IS NULL RETURN n.id, n.box, n.confidence",
+            returns="nid agtype, box agtype, conf agtype",
+        )
+        for nid, box, conf in raw:
+            rows.append(
+                NodeRow(
+                    id=unquote_agtype(nid),
+                    box=_opt_str(box),
+                    confidence=_opt_float(conf, default=1.0),
+                )
+            )
+    return rows
+
+
 class DerivationGraphAdapter:
     """Loads the active reasoning subgraph from AGE into an :class:`ActiveSubgraph`.
 
@@ -243,42 +289,10 @@ class DerivationGraphAdapter:
     """
 
     async def _active_box_ids(self, session: object) -> frozenset[str]:
-        """The ids of active (non-deprecated), current boxes (§9). The active-box filter."""
-        from iknos.db.age import execute_cypher, unquote_agtype
-
-        rows = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            "MATCH (b:Box) WHERE b.status = 'active' AND b.valid_to IS NULL RETURN b.id",
-            returns="bid agtype",
-        )
-        return frozenset(unquote_agtype(bid) for (bid,) in rows)
+        return await load_active_box_ids(session)
 
     async def _load_nodes(self, session: object) -> list[NodeRow]:
-        """All bitemporally-current reasoning nodes, with box + confidence seed.
-
-        One query per reasoning label (AGE matches a single label per pattern, like the
-        per-kind loop in ``core/resolve.py``). A missing/null ``confidence`` defaults to the
-        semiring ``one`` (a certain leaf — "no calibrated discount yet", §12), the same seed
-        ``extract.seed_confidence`` uses when no verifier ran.
-        """
-        from iknos.db.age import execute_cypher, unquote_agtype
-
-        rows: list[NodeRow] = []
-        for label in REASONING_LABELS:
-            raw = await execute_cypher(
-                session,  # type: ignore[arg-type]
-                f"MATCH (n:{label}) WHERE n.valid_to IS NULL RETURN n.id, n.box, n.confidence",
-                returns="nid agtype, box agtype, conf agtype",
-            )
-            for nid, box, conf in raw:
-                rows.append(
-                    NodeRow(
-                        id=unquote_agtype(nid),
-                        box=_opt_str(box),
-                        confidence=_opt_float(conf, default=1.0),
-                    )
-                )
-        return rows
+        return await load_reasoning_nodes(session)
 
     async def _load_base_fact_ids(self, session: object) -> set[NodeId]:
         """The ids of current nodes grounded by ``EVIDENCED_BY`` — the Layer A base anchor.
