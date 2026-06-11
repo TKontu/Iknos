@@ -20,6 +20,8 @@ from iknos.core.parse import (
     ParseKind,
     ParseResult,
     SourceQuality,
+    Table,
+    TableCell,
     layouts_for_spans,
     parse_content_hash,
 )
@@ -379,3 +381,231 @@ def test_from_offsets_allows_whitespace_gaps() -> None:
     r = _from_offsets(blob, [_spec(2, 7), _spec(10, 14)])
     assert [e.text for e in r.elements] == ["Alpha", "Beta"]
     assert r.text == "Alpha\n\nBeta"
+
+
+# --- G1.18: structured table payload (cell offsets are element-relative) ---
+
+# A 2x2 grid laid out in one element's text; offsets are relative to this text.
+_TABLE_TEXT = "R1C1 R1C2 R2C1 R2C2"
+_GRID_2x2 = (
+    TableCell(row=0, col=0, start=0, end=4),
+    TableCell(row=0, col=1, start=5, end=9),
+    TableCell(row=1, col=0, start=10, end=14),
+    TableCell(row=1, col=1, start=15, end=19),
+)
+
+
+def _table_element(text: str, table: Table, *, located: bool = True) -> ParseElement:
+    kw: dict[str, object] = (
+        {
+            "page": 1,
+            "bbox": (0.0, 0.0, 100.0, 100.0),
+            "origin": "top-left",
+            "page_size": (612.0, 792.0),
+            "unit": "pt",
+        }
+        if located
+        else {}
+    )
+    return ParseElement(kind=ParseKind.TABLE, text=text, table=table, **kw)  # type: ignore[arg-type]
+
+
+# TableCell: text-independent invariants
+
+
+def test_table_cell_rejects_bad_offsets() -> None:
+    with pytest.raises(ValueError, match="0 <= start < end"):
+        TableCell(row=0, col=0, start=5, end=5)
+
+
+def test_table_cell_rejects_negative_grid_coords() -> None:
+    with pytest.raises(ValueError, match="row/col must be >= 0"):
+        TableCell(row=-1, col=0, start=0, end=1)
+
+
+def test_table_cell_rejects_non_positive_span() -> None:
+    with pytest.raises(ValueError, match="row_span/col_span must be >= 1"):
+        TableCell(row=0, col=0, start=0, end=1, row_span=0)
+
+
+# Table: grid consistency (text-independent)
+
+
+def test_table_requires_positive_dimensions() -> None:
+    with pytest.raises(ValueError, match="n_rows >= 1 and n_cols >= 1"):
+        Table(n_rows=0, n_cols=1, cells=())
+
+
+def test_table_rejects_cell_outside_grid() -> None:
+    # A 1x1 grid cannot hold a cell that spans two rows.
+    with pytest.raises(ValueError, match="extends past the 1x1 grid"):
+        Table(n_rows=1, n_cols=1, cells=(TableCell(row=0, col=0, start=0, end=1, row_span=2),))
+
+
+def test_table_rejects_overlapping_cells() -> None:
+    with pytest.raises(ValueError, match="already occupied"):
+        Table(
+            n_rows=2,
+            n_cols=1,
+            cells=(
+                TableCell(row=0, col=0, start=0, end=1),
+                TableCell(row=0, col=0, start=2, end=3),  # same grid position
+            ),
+        )
+
+
+def test_table_allows_sparse_cells() -> None:
+    # Cells need NOT tile the grid (unlike element tiling) — a single cell in a 2x2 is fine.
+    t = Table(n_rows=2, n_cols=2, cells=(TableCell(row=0, col=0, start=0, end=4),))
+    assert len(t.cells) == 1
+
+
+def test_table_allows_merged_cell_spanning_grid() -> None:
+    # A col-spanning header filling a 1x2 grid occupies both positions without overlap.
+    t = Table(
+        n_rows=1,
+        n_cols=2,
+        cells=(TableCell(row=0, col=0, start=0, end=4, col_span=2, is_header=True),),
+    )
+    assert t.cells[0].col_span == 2
+
+
+# ParseElement: table coupling + element-relative offset bounds
+
+
+def test_table_only_valid_on_table_kind() -> None:
+    with pytest.raises(ValueError, match="only valid on a TABLE element"):
+        ParseElement(
+            kind=ParseKind.PARAGRAPH,
+            text="x",
+            table=Table(n_rows=1, n_cols=1, cells=(TableCell(row=0, col=0, start=0, end=1),)),
+        )
+
+
+def test_table_element_accepts_consistent_grid() -> None:
+    el = _table_element(_TABLE_TEXT, Table(n_rows=2, n_cols=2, cells=_GRID_2x2))
+    assert el.table is not None and el.table.n_rows == 2
+    assert el.kind is ParseKind.TABLE
+
+
+def test_table_cell_offset_past_element_text_rejected() -> None:
+    with pytest.raises(ValueError, match="exceeds the element text length"):
+        _table_element(
+            "abc", Table(n_rows=1, n_cols=1, cells=(TableCell(row=0, col=0, start=0, end=99),))
+        )
+
+
+def test_cell_bbox_without_element_region_rejected() -> None:
+    # A cell bbox inherits the element's frame; a frameless (regionless) element has none.
+    with pytest.raises(ValueError, match="bbox but its element has no region"):
+        _table_element(
+            "abc",
+            Table(
+                n_rows=1,
+                n_cols=1,
+                cells=(TableCell(row=0, col=0, start=0, end=3, bbox=(0, 0, 1, 1)),),
+            ),
+            located=False,
+        )
+
+
+# from_offsets: the table survives the real-parser entry, re-validated against the slice
+
+
+def test_from_offsets_carries_table_payload() -> None:
+    blob = "Heading\n\nR1C1 R1C2"  # heading [0,7), join [7,9), table element [9,18)
+    table = Table(
+        n_rows=1,
+        n_cols=2,
+        cells=(TableCell(row=0, col=0, start=0, end=4), TableCell(row=0, col=1, start=5, end=9)),
+    )
+    specs = [
+        _spec(0, 7),  # heading
+        OffsetSpec(
+            kind=ParseKind.TABLE,
+            start=9,
+            end=18,
+            page=1,
+            bbox=(0, 0, 100, 100),
+            origin="top-left",
+            page_size=(612.0, 792.0),
+            unit="pt",
+            table=table,
+        ),
+    ]
+    r = _from_offsets(blob, specs)
+    el = r.elements[1]
+    assert el.text == "R1C1 R1C2"
+    assert el.table == table  # offsets are element-relative, attached without rebasing
+    # The element-relative cell offsets resolve against the element's own text.
+    assert el.text[el.table.cells[0].start : el.table.cells[0].end] == "R1C1"
+
+
+def test_from_offsets_revalidates_table_cells_against_slice() -> None:
+    # A cell whose offset runs past the (sliced) element text fails loud at the boundary.
+    blob = "R1C1 R1C2"
+    table = Table(n_rows=1, n_cols=1, cells=(TableCell(row=0, col=0, start=0, end=99),))
+    spec = OffsetSpec(
+        kind=ParseKind.TABLE,
+        start=0,
+        end=9,
+        page=1,
+        bbox=(0, 0, 100, 100),
+        origin="top-left",
+        page_size=(612.0, 792.0),
+        unit="pt",
+        table=table,
+    )
+    with pytest.raises(ValueError, match="exceeds the element text length"):
+        _from_offsets(blob, [spec])
+
+
+# layouts_for_spans: cell offsets are rebased element-relative -> document-absolute
+
+
+def test_layout_table_cells_rebased_to_document_offsets() -> None:
+    # Same blob as above: the table element lives at absolute [9, 18) in the reading-order text.
+    blob = "Heading\n\nR1C1 R1C2"
+    table = Table(
+        n_rows=1,
+        n_cols=2,
+        cells=(TableCell(row=0, col=0, start=0, end=4), TableCell(row=0, col=1, start=5, end=9)),
+    )
+    specs = [
+        _spec(0, 7),
+        OffsetSpec(
+            kind=ParseKind.TABLE,
+            start=9,
+            end=18,
+            page=1,
+            bbox=(0, 0, 100, 100),
+            origin="top-left",
+            page_size=(612.0, 792.0),
+            unit="pt",
+            table=table,
+        ),
+    ]
+    r = _from_offsets(blob, specs)
+    [layout] = layouts_for_spans([(9, 18)], r)  # a span over the table element
+    assert layout is not None
+    assert layout["layout_schema_version"] == LAYOUT_SCHEMA_VERSION == 2
+    [region] = layout["regions"]
+    cells = region["table"]["cells"]
+    # Cell offsets now index into the document reading-order text (blob), not the element.
+    assert (cells[0]["start"], cells[0]["end"]) == (9, 13)
+    assert blob[cells[0]["start"] : cells[0]["end"]] == "R1C1"
+    assert (cells[1]["start"], cells[1]["end"]) == (14, 18)
+    assert blob[cells[1]["start"] : cells[1]["end"]] == "R1C2"
+    assert region["table"]["n_rows"] == 1 and region["table"]["n_cols"] == 2
+
+
+def test_layout_table_without_geometry_still_persisted() -> None:
+    # A table-bearing element with no page geometry must not silently drop its structure:
+    # it contributes a region entry with null geometry (layout schema v2).
+    el = _table_element(_TABLE_TEXT, Table(n_rows=2, n_cols=2, cells=_GRID_2x2), located=False)
+    r = ParseResult(elements=(el,), parser_name="x", parser_version="1")
+    [layout] = layouts_for_spans([(0, len(_TABLE_TEXT))], r)
+    assert layout is not None
+    [region] = layout["regions"]
+    assert region["page"] is None and region["bbox"] is None  # no geometry...
+    assert region["table"]["n_rows"] == 2  # ...but the structure survives

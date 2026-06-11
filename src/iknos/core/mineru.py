@@ -43,6 +43,8 @@ from iknos.core.parse import (
     Parser,
     ParseResult,
     SourceQuality,
+    Table,
+    TableCell,
 )
 
 
@@ -58,6 +60,37 @@ def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code >= 500
     return False
+
+
+class _WireCell(BaseModel):
+    """One table cell of the parse-service response (G1.18).
+
+    ``start``/``end`` are **element-relative** offsets into the parent element's text (the
+    service adapter subtracts the element start once) — matching :class:`TableCell`, so no
+    rebasing is needed client-side. Validation (offset ordering, grid fit/overlap, bounds vs
+    the element text) is done by the dataclasses ``from_offsets`` constructs.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    row: int
+    col: int
+    start: int
+    end: int
+    row_span: int = 1
+    col_span: int = 1
+    is_header: bool = False
+    bbox: tuple[float, float, float, float] | None = None
+
+
+class _WireTable(BaseModel):
+    """The structured grid of a ``TABLE`` element (G1.18)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    n_rows: int
+    n_cols: int
+    cells: list[_WireCell]
 
 
 class _WireElement(BaseModel):
@@ -78,6 +111,7 @@ class _WireElement(BaseModel):
     page_size: tuple[float, float] | None = None
     unit: str | None = None
     source_quality: SourceQuality | None = None
+    table: _WireTable | None = None
 
 
 class _WireResponse(BaseModel):
@@ -89,6 +123,31 @@ class _WireResponse(BaseModel):
     parser_version: str
     text: str
     elements: list[_WireElement]
+
+
+def _to_table(wire: _WireTable | None) -> Table | None:
+    """Map the validated wire table to the pure :class:`Table` (grid + cell-offset validation
+    happens in the dataclasses' ``__post_init__`` / the owning :class:`ParseElement` — the
+    second fail-loud gate, mirroring how ``from_offsets`` re-validates element tiling)."""
+    if wire is None:
+        return None
+    return Table(
+        n_rows=wire.n_rows,
+        n_cols=wire.n_cols,
+        cells=tuple(
+            TableCell(
+                row=c.row,
+                col=c.col,
+                start=c.start,
+                end=c.end,
+                row_span=c.row_span,
+                col_span=c.col_span,
+                is_header=c.is_header,
+                bbox=c.bbox,
+            )
+            for c in wire.cells
+        ),
+    )
 
 
 class MinerUParser:
@@ -136,6 +195,7 @@ class MinerUParser:
                 page_size=el.page_size,
                 unit=el.unit,
                 source_quality=el.source_quality,
+                table=_to_table(el.table),
             )
             for el in wire.elements
         ]

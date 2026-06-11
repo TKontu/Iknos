@@ -181,3 +181,73 @@ def test_make_parser_unknown_kind_raises() -> None:
 def test_mineru_requires_base_url() -> None:
     with pytest.raises(ValueError, match="non-empty base_url"):
         MinerUParser(base_url="", timeout_s=5.0)
+
+
+# --- G1.18: the structured table payload survives the wire ---
+
+
+def _table_body() -> str:
+    # One TABLE element holding a 1x2 grid; cell offsets are element-relative (into the
+    # element's own text "R1C1 R1C2"), per the wire contract.
+    element = {
+        "kind": "table",
+        "start": 0,
+        "end": 9,
+        "page": 1,
+        "bbox": [10, 20, 100, 40],
+        "origin": "top-left",
+        "page_size": [612, 792],
+        "unit": "pt",
+        "table": {
+            "n_rows": 1,
+            "n_cols": 2,
+            "cells": [
+                {"row": 0, "col": 0, "start": 0, "end": 4, "is_header": True},
+                {"row": 0, "col": 1, "start": 5, "end": 9},
+            ],
+        },
+    }
+    return _ok_body(text="R1C1 R1C2", elements=[element])
+
+
+@pytest.mark.asyncio
+async def test_parse_builds_table_element_from_wire() -> None:
+    parser = _parser_with(lambda request: httpx.Response(200, text=_table_body()))
+    result = await parser.parse(b"%PDF-1.7 ...", media_type="application/pdf")
+
+    [el] = result.elements
+    assert el.kind.value == "table"
+    assert el.table is not None
+    assert (el.table.n_rows, el.table.n_cols) == (1, 2)
+    # Element-relative offsets resolve against the element's own text.
+    c0, c1 = el.table.cells
+    assert c0.is_header is True
+    assert el.text[c0.start : c0.end] == "R1C1"
+    assert el.text[c1.start : c1.end] == "R1C2"
+
+
+@pytest.mark.asyncio
+async def test_malformed_table_grid_surfaces_value_error_without_retry() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        bad = {
+            "kind": "table",
+            "start": 0,
+            "end": 9,
+            "table": {
+                "n_rows": 1,
+                "n_cols": 1,
+                # Two cells claim the same grid position — Table.__post_init__ rejects it.
+                "cells": [
+                    {"row": 0, "col": 0, "start": 0, "end": 4},
+                    {"row": 0, "col": 0, "start": 5, "end": 9},
+                ],
+            },
+        }
+        return httpx.Response(200, text=_ok_body(text="R1C1 R1C2", elements=[bad]))
+
+    with pytest.raises(ValueError, match="already occupied"):
+        await _parser_with(handler).parse(b"x", media_type="application/pdf")
+    assert calls["n"] == 1  # a malformed table is our/the service's bug, not transient
