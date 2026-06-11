@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 from iknos.core.derivation_adapter import (
     NodeRow,
     load_active_box_ids,
+    load_hypothesis_ids,
     load_reasoning_nodes,
 )
 from iknos.core.qbaf import (
@@ -248,15 +249,13 @@ class QbafAdapter:
     """
 
     async def _load_hypothesis_ids(self, session: object) -> set[ArgId]:
-        """The ids of current ``Hypothesis`` nodes — the args that get a ``state``/verdict."""
-        from iknos.db.age import execute_cypher, unquote_agtype
+        """The ids of current ``Hypothesis`` nodes — the args that get a ``state``/verdict.
 
-        rows = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            "MATCH (h:Hypothesis) WHERE h.valid_to IS NULL RETURN h.id",
-            returns="hid agtype",
-        )
-        return {unquote_agtype(hid) for (hid,) in rows}
+        Delegates to the shared :func:`~iknos.core.derivation_adapter.load_hypothesis_ids` so the
+        "current Hypothesis" definition stays single-sourced across adjudication (here) and
+        candidate generation (``core/candidates.py``).
+        """
+        return await load_hypothesis_ids(session)
 
     async def _load_evidential_edges(self, session: object) -> list[EvidenceRow]:
         """All current ``SUPPORTS``/``REFUTES`` edges between current nodes, with sign+strength.

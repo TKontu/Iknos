@@ -10,8 +10,9 @@ Phase 3 as a thin slice.
 disciplines, confidence pipeline, experiment), §7.2 (ensemble gate, hypothesis state),
 §10 (`sign`/`strength`/`significance`).
 
-**Status — 🟡 adjudication core + persistence landed (G4.1, G4.4); candidate generation /
-edge-judgment / gate open.** G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
+**Status — 🟡 adjudication core + persistence landed (G4.1, G4.4); candidate-generation +
+edge-judgment cores started (G4.2/G4.3 slice 1); LLM judge / operators / gate open.**
+G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
 the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
 conservative default, both retained at the seam), the `solve` bounded fixpoint (acyclic-exact,
 cyclic non-convergence **surfaced as a finding** not smoothed, §13), and the read-off
@@ -26,25 +27,44 @@ core (§8(c), steps 3–4): the binomial `Opinion`, the multi-sample-consistency
 source-reliability discounting, and **cumulative/averaging fusion** — with the fusion **decided
 by a fixture** (`DEFAULT_FUSION = AVERAGING`, idempotent under correlated evidence so it cannot
 inflate certainty; cumulative retained at the seam). The fused/discounted opinion's projected
-probability *is* the calibrated edge `strength` the QBAF consumes. Candidate generation (§5.1,
-G4.2), the rest of the edge-judgment pipeline (§8, G4.3 — the blind/randomized LLM judge,
-per-model recalibration, the AGE producer), the `corroborate` / `find-contradiction` operators +
-ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6) are open. See
-`gap_phase_4_linking_adjudication.md` for the build plan.
+probability *is* the calibrated edge `strength` the QBAF consumes. **G4.2 slice 1**
+(`core/candidates.py`) lands the candidate-generation funnel (§5.1): the recall-first **funnel
+core** (`funnel` + `CandidatePool`, with the union-over-intersect combination **decided by a
+fixture** — `DEFAULT_STRATEGY = UNION`, so the dissimilar refuter the embedding stage misses
+survives; intersect retained at the seam) + the **structural-entity prior** (stage 1: shared
+`INVOLVES` `Actor`/`Object`, active-box-scoped, evidence → hypothesis), separate from the §8
+judgment that consumes the survivors. The embedding k-NN (stage 2) + coarse-to-fine (stage 3) +
+keyword co-occurrence are documented seams. The rest of the edge-judgment pipeline (§8, G4.3 — the
+blind/randomized LLM judge, per-model recalibration, the AGE producer), the `corroborate` /
+`find-contradiction` operators + ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6)
+are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
 
 ## Candidate generation (§5.1) — which pairs to assess
 
-- [ ] Funnel, cheap → expensive; **two stages separate from adjudication**.
-- [ ] Structural priors: shared `Actor`/`Object` (`INVOLVES`), sparse/keyword
-      co-occurrence; box/tier-scoped. Near-free, filters the bulk.
-- [ ] Embedding **k-NN** over pgvector (approximate NN, sublinear) — the workhorse.
+- [x] Funnel, cheap → expensive; **two stages separate from adjudication**. *(G4.2 slice 1 —
+      `core/candidates.py`: `funnel(*generators, strategy)` combines the cheap stages into a
+      deduped `CandidatePool`, separate from the §8 judgment which consumes the survivors.)*
+- [~] Structural priors: shared `Actor`/`Object` (`INVOLVES`), sparse/keyword
+      co-occurrence; box/tier-scoped. Near-free, filters the bulk. *(G4.2 slice 1 —
+      `structural_entity_candidates` ships the shared-`INVOLVES`-entity prior (stage 1),
+      active-box-scoped via the shared reads. **Open:** sparse/keyword co-occurrence — a further
+      `STRUCTURAL_KEYWORD` `CandidateSource` (`PropositionLexicalIndex`) that unions at the seam.)*
+- [ ] Embedding **k-NN** over pgvector (approximate NN, sublinear) — the workhorse. *(G4.2 slice-2
+      seam: needs the cross-store pgvector read + span/proposition → reasoning-node tracing; unions
+      in as an `EMBEDDING_KNN` source.)*
 - [ ] **Coarse-to-fine** over the §2 abstraction levels: match coarse, descend to
-      proposition pairs only within survivors.
-- [ ] **Tune for recall early, precision late** — a missed candidate is a silent
-      false negative.
-- [ ] **Dissimilar-refuter handling:** hypotheses pull candidates by constituent
+      proposition pairs only within survivors. *(G4.2 slice-2 seam: needs the `partOf` level
+      derivation, §14.)*
+- [x] **Tune for recall early, precision late** — a missed candidate is a silent
+      false negative. *(G4.2 slice 1 — candidates are **unscored** at this layer and the funnel
+      **unions** generators (`DEFAULT_STRATEGY = UNION`, decided by a fixture); precision is the
+      §8 LLM stage's job.)*
+- [~] **Dissimilar-refuter handling:** hypotheses pull candidates by constituent
       entities + topic, not similarity alone; `find-contradiction` is a first-class
-      generator, not a similarity by-product.
+      generator, not a similarity by-product. *(G4.2 slice 1 — the structural prior pulls by
+      constituent entity (not embedding) and the union default keeps the dissimilar refuter the
+      embedding stage misses — the decision fixture. **Open:** `find-contradiction` as a
+      dedicated refuter generator is G4.5.)*
 
 ## Edge adjudication (§8 disciplines) — the bias-hardened judgment
 
