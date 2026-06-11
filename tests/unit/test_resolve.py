@@ -15,7 +15,9 @@ from iknos.core.resolve import (
     RESOLVE_CANDIDATE_BAR,
     RESOLVE_CONFIRM_BAR,
     RESOLVE_SCHEMA_VERSION,
+    Component,
     EntityRecord,
+    anchored_components,
     block_candidates,
     canonical_id,
     components,
@@ -181,3 +183,68 @@ def test_canonical_id_is_lexicographically_min():
 
 def test_schema_version_is_recorded_constant():
     assert RESOLVE_SCHEMA_VERSION == 1
+
+
+# --- anchor-canonicalization fold (G2.8 slice 2) ---
+
+# Stable ids: case mentions A..D, taxonomy nodes X/Y.
+A, B, C, D = (uuid.UUID(int=i) for i in (1, 2, 3, 4))
+X, Y = (uuid.UUID(int=i) for i in (100, 101))
+
+
+def test_fold_without_anchors_matches_plain_components():
+    # No anchors -> identical to components(): singletons omitted, canonical = min member.
+    comps = anchored_components([(A, B)], {})
+    assert comps == [Component(canonical=A, members=frozenset((A, B)), anchors=frozenset())]
+    assert comps[0].canonical == min((A, B), key=str)
+    assert not comps[0].anchored
+
+
+def test_fold_omits_unanchored_singletons():
+    # An entity that neither merges nor anchors is its own entity -> no component record.
+    assert anchored_components([], {C: X}) == [
+        Component(canonical=X, members=frozenset((C,)), anchors=frozenset((X,)))
+    ]
+
+
+def test_fold_anchored_singleton_canonicalizes_to_taxonomy_node():
+    # A lone confirm-anchored mention: canonical is the taxonomy node (not its own id).
+    [comp] = anchored_components([], {A: X})
+    assert comp.canonical == X
+    assert comp.members == frozenset((A,))
+    assert comp.anchored and comp.anchor == X and not comp.anchor_conflict
+
+
+def test_fold_merges_mentions_sharing_an_anchor_without_same_as():
+    # Two mentions confirm-anchoring to the same taxonomy node are one entity (anchor
+    # canonicalizes), even with no SAME_AS edge between them.
+    [comp] = anchored_components([], {A: X, B: X})
+    assert comp.canonical == X
+    assert comp.members == frozenset((A, B))
+    assert comp.anchored
+
+
+def test_fold_anchor_overrides_min_id_canonical_of_a_same_as_component():
+    # A SAME_AS component whose members anchor to one taxonomy node takes that node as
+    # canonical, overriding the min-id representative.
+    [comp] = anchored_components([(A, B)], {A: X})
+    assert comp.canonical == X
+    assert comp.members == frozenset((A, B))
+    assert comp.anchored
+
+
+def test_fold_surfaces_a_same_as_bridged_anchor_conflict():
+    # SAME_AS says A==B, but A anchors to X and B to Y: a conflict. Keep the min-id
+    # representative (anchor cannot canonicalize) and surface both targets.
+    [comp] = anchored_components([(A, B)], {A: X, B: Y})
+    assert comp.anchor_conflict and not comp.anchored
+    assert comp.anchor is None
+    assert comp.canonical == min((A, B), key=str)
+    assert comp.anchors == frozenset((X, Y))
+
+
+def test_fold_is_deterministic_and_sorted_by_canonical():
+    # Independent entities, returned sorted by canonical id; a re-run is identical.
+    comps = anchored_components([(C, D)], {A: X})
+    assert [c.canonical for c in comps] == sorted([X, canonical_id(frozenset((C, D)))], key=str)
+    assert anchored_components([(C, D)], {A: X}) == comps

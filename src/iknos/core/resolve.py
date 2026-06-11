@@ -23,8 +23,12 @@ Scope deliberately left to later slices (documented seams):
 - **Blocking signals beyond lexical/type** — embedding-neighbourhood and taxonomy-anchor
   blocking (§5.2) need an entity-embedding store / G2.4–G2.5 entity-linking. This slice
   blocks on shared normalized tokens within a kind.
-- **Anchor canonicalization** — a mention that entity-links to the domain-pack taxonomy
-  takes that node as its canonical identity (§5.2/§14) → G2.4/G2.5.
+- **Anchor canonicalization (G2.8 slice 2, shipped here).** A case entity that
+  **confirm**-anchors to the domain-pack taxonomy takes that taxonomy node as its canonical
+  identity (anchor-first, §5.2/§14): :func:`anchored_components` folds the confirmed
+  ``ANCHORS_TO`` map (``core/anchor``) into the ``SAME_AS`` components, and
+  :meth:`Resolver.canonical_components` reads it. The remaining seam is **belief revision**
+  on a re-anchor (re-run Layer A/B when the anchor changes) → Phase 3.
 - **Merge/split as belief revision** — asserting/retracting a ``SAME_AS`` should re-run
   Layer A/B over the affected component (§12) → Phase 3. This slice writes the edges; it
   does not re-run reasoning.
@@ -41,6 +45,7 @@ shared facts/roles/attributes — *not* similarity; similarity is a blocking sig
 
 import re
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -263,6 +268,73 @@ def canonical_id(component: frozenset[uuid.UUID]) -> uuid.UUID:
     return min(component, key=str)
 
 
+def anchored_components(
+    pairs: list[tuple[uuid.UUID, uuid.UUID]],
+    anchors: Mapping[uuid.UUID, uuid.UUID],
+) -> list["Component"]:
+    """Fold ``CONFIRMED`` ``SAME_AS`` components with ``CONFIRMED`` anchors → canonical entities.
+
+    The G2.8-slice-2 anchor-canonicalization read (§5.2/§14 *anchor first*). Two kinds of
+    identity evidence are unioned into one equivalence:
+
+    1. **``SAME_AS``** confirmed ``pairs`` — within-box relational identity (G2.3);
+    2. **shared anchor** — case entities that confirm-anchor to the **same** taxonomy node are
+       the same real-world thing (the taxonomy node *is* their identity), so they merge even
+       with no ``SAME_AS`` between them. This is a read-time canonicalization over the already
+       written ``ANCHORS_TO`` edges, **not** a new cross-box ``SAME_AS`` edge (that, in the
+       working box, is Phase 6) — anchoring is the separate, authoritative cross-box identity
+       mechanism (§9).
+
+    ``anchors`` maps a case entity id (the ``ANCHORS_TO`` source — a label-canonical node) to
+    its confirmed taxonomy node. A returned :class:`Component` is one canonical entity; its
+    ``canonical`` is the taxonomy node when the component anchors to exactly one (an anchored
+    *singleton* is still returned — its identity differs from its own id), else the min-id
+    member. An un-anchored singleton is omitted (an un-merged node is its own entity, as in
+    :func:`components`). A ``SAME_AS``-bridged multi-anchor conflict keeps the min-id
+    representative and is surfaced via :attr:`Component.anchor_conflict`. Deterministic — the
+    result is sorted by canonical id and a pure function of the inputs.
+    """
+    parent: dict[uuid.UUID, uuid.UUID] = {}
+
+    def find(x: uuid.UUID) -> uuid.UUID:
+        parent.setdefault(x, x)
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:  # path compression
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(x: uuid.UUID, y: uuid.UUID) -> None:
+        parent[find(x)] = find(y)
+
+    for x, y in pairs:
+        union(x, y)
+
+    # Merge case entities sharing a confirmed taxonomy target (anchor canonicalizes).
+    by_target: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for entity, target in anchors.items():
+        find(entity)  # ensure an anchored singleton is a known node
+        by_target.setdefault(target, []).append(entity)
+    for entities in by_target.values():
+        for other in entities[1:]:
+            union(entities[0], other)
+
+    groups: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for node in parent:
+        groups.setdefault(find(node), set()).add(node)
+
+    out: list[Component] = []
+    for group in groups.values():
+        members = frozenset(group)
+        targets = frozenset(anchors[m] for m in members if m in anchors)
+        if len(members) <= 1 and not targets:
+            continue  # an un-anchored singleton is its own entity, no component record
+        canonical = next(iter(targets)) if len(targets) == 1 else canonical_id(members)
+        out.append(Component(canonical=canonical, members=members, anchors=targets))
+    return sorted(out, key=lambda c: str(c.canonical))
+
+
 @dataclass(frozen=True)
 class SameAsEdge:
     """One resolved identity edge (canonical direction), as written/returned by the resolver."""
@@ -284,10 +356,44 @@ class ResolveResult:
 
 @dataclass(frozen=True)
 class Component:
-    """A canonical entity: the ``CONFIRMED``-connected members + their representative."""
+    """A canonical entity: its case-box members + the representative reasoning aggregates over.
+
+    ``members`` are the ``CONFIRMED``-``SAME_AS``-connected case ``Actor``/``Object`` ids (a
+    lone member when the entity links only by anchor). ``canonical`` is the representative:
+
+    - **un-anchored** — the lexicographically-min member (``resolve.canonical_id``), the
+      within-box component identity;
+    - **anchored** — the **taxonomy node** the component ``CONFIRMED``-anchors to (§5.2/§14
+      *anchor canonicalizes*): the authoritative cross-box identity, which is *not* itself a
+      member (it lives in the pack box). Two case mentions that confirm-anchor to the same
+      taxonomy node are therefore one canonical entity even without a ``SAME_AS`` between them.
+
+    ``anchors`` is the set of distinct confirmed taxonomy targets the component carries: empty
+    (un-anchored), a single node (anchored — that node is ``canonical``), or — only when a
+    ``SAME_AS`` bridges two differently-anchored mentions — more than one, a surfaced
+    ``anchor_conflict`` that keeps the min-id representative rather than silently picking a side.
+    """
 
     canonical: uuid.UUID
     members: frozenset[uuid.UUID]
+    anchors: frozenset[uuid.UUID] = frozenset()
+
+    @property
+    def anchored(self) -> bool:
+        """The component has a single, unambiguous confirmed taxonomy anchor (its canonical)."""
+        return len(self.anchors) == 1
+
+    @property
+    def anchor(self) -> uuid.UUID | None:
+        """The taxonomy node this component canonicalizes to, or ``None`` if un-anchored or in
+        anchor conflict."""
+        return next(iter(self.anchors)) if len(self.anchors) == 1 else None
+
+    @property
+    def anchor_conflict(self) -> bool:
+        """A ``SAME_AS`` merged mentions with *different* confirmed anchors — an open
+        inconsistency to surface (the anchor cannot canonicalize), not auto-resolve."""
+        return len(self.anchors) > 1
 
 
 class Resolver:
@@ -412,11 +518,15 @@ class Resolver:
         return ResolveResult(action_id=action_id, confirmed=confirmed, candidate=candidate)
 
     async def canonical_components(self, session: AsyncSession, box: uuid.UUID) -> list[Component]:
-        """Read the box's canonical entities: the ``CONFIRMED``-``SAME_AS`` components (§5.2).
+        """Read the box's canonical entities: ``CONFIRMED`` ``SAME_AS`` folded with anchors (§5.2).
 
-        The read reasoning uses to aggregate evidence at the component level. Candidate edges
-        are excluded — they keep entities separate by definition.
+        The read reasoning uses to aggregate evidence at the component level. ``CANDIDATE``
+        ``SAME_AS``/``ANCHORS_TO`` edges are excluded — both keep entities separate by
+        definition (the conservative default). A confirmed anchor canonicalizes (§14): the
+        component takes its taxonomy node as the canonical identity, and two mentions anchored
+        to the same taxonomy node fold into one entity (:func:`anchored_components`).
         """
+        from iknos.core.anchor import EntityLinker
         from iknos.db.age import execute_cypher, unquote_agtype
 
         bx = str(box)
@@ -429,7 +539,5 @@ class Resolver:
         pairs = [
             (uuid.UUID(unquote_agtype(aid)), uuid.UUID(unquote_agtype(bid))) for aid, bid in rows
         ]
-        return [
-            Component(canonical=canonical_id(members), members=members)
-            for members in components(pairs)
-        ]
+        anchors = await EntityLinker().anchored_targets(session, box)
+        return anchored_components(pairs, anchors)

@@ -88,13 +88,16 @@ because Phase 2 is where its absence turns from latent to expensive.*
         attention**) → resolve into components. *(G2.3 — `block_candidates` (shared-token,
         same-kind) → deterministic relational `score_pair` → `components`. Embedding-neighbourhood
         and taxonomy-anchor blocking signals deferred — need an entity-embedding store / G2.4–G2.5.)*
-  - [~] **Anchor canonicalizes:** a mention that entity-links to the domain-pack taxonomy
+  - [x] **Anchor canonicalizes:** a mention that entity-links to the domain-pack taxonomy
         takes that node as its canonical identity (anchor-first, §9/§14). *(G2.8 slice 1 —
-        `core/anchor.py`: the **entity-linking** subsystem ships — a scored, conservative
+        `core/anchor.py`: the **entity-linking** subsystem — a scored, conservative
         `ANCHORS_TO` edge (case entity → taxonomy node; the direction **is** "anchor
         canonicalizes") via a deterministic lexical cascade, plus the `anchored_targets` read.
-        The **fold** that makes `resolve.canonical_components` prefer a confirmed anchor as the
-        canonical identity is the slice-2 consumer.)*
+        G2.8 slice 2 — `resolve.anchored_components` **folds** the confirmed `ANCHORS_TO` map
+        into the `SAME_AS` components and `resolve.canonical_components` reads it: a confirm-
+        anchored component takes its taxonomy node as `canonical`, and two mentions sharing an
+        anchor target fold into one entity (a `SAME_AS`-bridged multi-anchor conflict is
+        surfaced, not auto-resolved). Belief revision on a re-anchor is the Phase-3 seam.)*
   - [x] **Conservative default:** auto-merge only above a high confidence bar; below it
         keep entities separate but record a `candidate` `SAME_AS` link (bridgeable, not
         committed). Route candidate merges to expert triage; confirm via override (§10.3).

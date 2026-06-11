@@ -13,9 +13,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.boxes.serde import case_box
+from iknos.core.anchor import EntityLinker
 from iknos.core.extract import ExtractInput, Extractor
 from iknos.core.resolve import Resolver
 from iknos.db.age import bootstrap_session, cypher_map, execute_cypher
+from iknos.domain.loader import load_pack
+from iknos.domain.packs import bundled_pack
 from iknos.types.edges import SameAsState
 from iknos.types.nodes import Proposition, Span
 
@@ -183,3 +186,45 @@ async def test_resolver_records_candidate_below_the_bar(session: AsyncSession) -
 
     # A candidate keeps entities separate: no canonical component is formed.
     assert await resolver.canonical_components(session, box.id) == []
+
+
+async def test_canonical_components_folds_confirmed_anchor_as_identity(
+    session: AsyncSession,
+) -> None:
+    """G2.8 slice 2: a confirm-anchored entity's canonical identity is its taxonomy node."""
+    await bootstrap_session(session)
+
+    # The pack supplies the taxonomy "Roller" the case "roller" exact-matches (anchor target).
+    pack = bundled_pack("pump_basic")
+    await load_pack(session, pack)
+    await session.commit()
+
+    box = case_box("resolve-anchor-fold", "1", "test", 0.8)
+    llm = _DispatchLLM(
+        {
+            "roller": [
+                {"label": "roller", "type": "component", "kind": "object", "role": "subject"}
+            ],
+            "gearbox": [
+                {"label": "gearbox", "type": "assembly", "kind": "object", "role": "subject"}
+            ],
+        }
+    )
+    p1 = await _seed_proposition(session, text_="The roller spalled.")
+    p2 = await _seed_proposition(session, text_="The gearbox vibrated.")
+    await _extract(session, box, llm, [p1, p2])
+
+    # Anchor (no resolve run): only "roller" confirm-anchors; "gearbox" is out of taxonomy.
+    linker = EntityLinker()
+    await linker.anchor_box(session, box.id, pack_box_ids=[pack.box_id])
+    [(roller_node, roller_taxo)] = (await linker.anchored_targets(session, box.id)).items()
+
+    comps = await Resolver().canonical_components(session, box.id)
+    # The confirm-anchored "roller" is one canonical entity whose identity IS the taxonomy node
+    # (anchor canonicalizes, §5.2/§14) — even with no SAME_AS edge. The out-of-taxonomy
+    # "gearbox" is an un-anchored singleton, so it forms no component.
+    assert len(comps) == 1
+    comp = comps[0]
+    assert comp.canonical == roller_taxo
+    assert comp.anchored and comp.anchor == roller_taxo and not comp.anchor_conflict
+    assert roller_node in comp.members
