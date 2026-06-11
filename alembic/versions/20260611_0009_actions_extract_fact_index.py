@@ -1,7 +1,7 @@
 """actions extract-fact index: back the §10.2 audit reach-back (G2.7)
 
-Revision ID: 0008_actions_extract_fact_index
-Revises: 0007_age_label_indexes
+Revision ID: 0009_actions_extract_fact_index
+Revises: 0008_embedding_model_identity
 Create Date: 2026-06-11
 
 Touches AGE graph: no (relational only)
@@ -20,8 +20,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0008_actions_extract_fact_index"
-down_revision = "0007_age_label_indexes"
+revision = "0009_actions_extract_fact_index"
+down_revision = "0008_embedding_model_identity"
 branch_labels = None
 depends_on = None
 
