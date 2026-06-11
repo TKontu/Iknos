@@ -94,10 +94,20 @@ decision. See `archive/gap_phase_1_ingest.md` for the gap-plan IDs.
       original page). *(`parse.layouts_for_spans` → `persist_spans(layouts=...)`; versioned
       multi-region layout dict; parse identity folded into the segmentation hash so a
       re-parse correctly invalidates downstream spans.)*
-- [ ] **Parse quality = faithfulness input:** mark scanned / handwritten / complex-table
+- [~] **Parse quality = faithfulness input:** mark scanned / handwritten / complex-table
       parses lower-faithfulness → provisional → triage; surface MinerU's span/layout
-      visualization for expert QA against the original. *(`SourceQuality` carried now;
-      consumed in G1.5/G1.6.)*
+      visualization for expert QA against the original. *(G1.0r — **shipped**: a source span's
+      worst `SourceQuality` now folds into faithfulness as a **third independent multiplicative
+      factor** beside verify + agreement. `core/parse.py::parse_quality_factor` (policy:
+      DIGITAL/None → 1.0, OCR → 0.85, HANDWRITTEN → 0.60 — placeholder Trial-A5 calibration
+      constants, the one place the policy lives) + `worst_source_quality` (reads the worst region
+      off `Span.layout`, null/version-tolerant); `combine_faithfulness(verify, agreement,
+      parse_quality=1.0)` extended (digital/unknown is the identity, so the clean-text path is
+      unchanged); threaded per-span through the `Propositionizer` verify fan-out. A badly-parsed
+      atom is pulled toward provisional even when the verifier passes it, and cannot be rescued by
+      the other signals. **Open:** the parse-quality penalty only applies when a verifier runs
+      (faithfulness is null without one — the documented degraded mode); the expert-QA span/layout
+      visualization is Phase-7 UI.)*
 
 ## Embedding substrate (§1) — built (increment 1); long-document coverage shipped (G1.13)
 
@@ -392,9 +402,13 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
       structure already survives Stage 0 (G1.18). Figures: located now
       (`ParseKind.FIGURE`/`CAPTION` reserved), interpreted by a Phase-2 vision
       `extract` operator, provisional.
-- [ ] **G1.0 remainder — parse quality → faithfulness input**: `SourceQuality` is
-      carried per element/region; consume it in the faithfulness derivation
-      (lower-quality parse → lower faithfulness → provisional → triage).
+- [x] **G1.0 remainder — parse quality → faithfulness input** *(G1.0r — shipped)*:
+      `SourceQuality` (per element/region) is now consumed in the faithfulness derivation —
+      `parse_quality_factor` × the verify and agreement signals in `combine_faithfulness`,
+      threaded per source span through the propositionizer (`core/parse.py`,
+      `types/epistemic.py`, `core/proposition.py`). Lower-quality parse → lower faithfulness →
+      provisional → triage. (Penalty constants are a Trial-A5 calibration seam; applies on the
+      verifier path; expert-QA layout visualization is Phase-7 UI.)
 - [ ] **G1.5 remainder — Trial A5 faithfulness-gate metric**: the decomposed verify
       verdicts are persisted in `actions.outputs` ready for the metric; computing it
       on the labeled gate corpus is harness work (V3 in `todo_trials.md`).

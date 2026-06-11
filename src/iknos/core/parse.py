@@ -71,15 +71,84 @@ class ParseKind(StrEnum):
 
 
 class SourceQuality(StrEnum):
-    """Parse-provenance quality of an element — a future faithfulness input (§3.1, G1.5).
+    """Parse-provenance quality of an element — a faithfulness input (§1, §3.1, G1.0/G1.5).
 
-    Carried into ``Span.layout`` now; *consumed* (scanned/handwritten → lower
-    faithfulness → provisional → triage) in G1.5/G1.6. ``None`` means "not asserted".
+    Carried into ``Span.layout`` at parse time and **consumed** at propositionization:
+    :func:`parse_quality_factor` maps it to a multiplicative faithfulness penalty
+    (scanned/handwritten → lower faithfulness → provisional → triage, §3.1). ``None`` means
+    "not asserted" — treated as ``DIGITAL`` (clean), an unknown parse is not penalised.
     """
 
     DIGITAL = "digital"
     OCR = "ocr"
     HANDWRITTEN = "handwritten"
+
+
+# Per-quality faithfulness penalty (§1 "parse quality = faithfulness input", §3.1). A proposition
+# read off a degraded region is less trustworthy *at the source*, independent of whether the NLI
+# verifier (G1.4) can re-confirm it from that same degraded text — so the penalty is a third
+# factor in :func:`~iknos.types.epistemic.combine_faithfulness`, beside the verify and agreement
+# signals. **Placeholder calibration constants** (a Trial-A5 target, like
+# ``_POLARITY_DROP_FACTOR`` / the verdict bands): DIGITAL/unknown is the identity (no penalty),
+# clean printed-text OCR is a mild discount, handwritten OCR a severe one (genuinely unreliable).
+# Ordered by severity so :func:`worst_source_quality` can pick the worst region. The single place
+# the policy lives, so calibration re-points it without touching the propositionizer.
+_SOURCE_QUALITY_FACTOR: dict[SourceQuality, float] = {
+    SourceQuality.DIGITAL: 1.0,
+    SourceQuality.OCR: 0.85,
+    SourceQuality.HANDWRITTEN: 0.60,
+}
+
+# Severity order (best → worst) for reducing a multi-region span to one quality.
+_SOURCE_QUALITY_SEVERITY: tuple[SourceQuality, ...] = (
+    SourceQuality.DIGITAL,
+    SourceQuality.OCR,
+    SourceQuality.HANDWRITTEN,
+)
+
+
+def parse_quality_factor(quality: SourceQuality | None) -> float:
+    """The faithfulness penalty ∈ [0, 1] for a source region's parse quality (§1, §3.1).
+
+    ``None`` (quality not asserted) is the identity ``1.0`` — an unknown parse is assumed clean,
+    never penalised (the same "undefined, not zero" discipline as ``effective_credibility``).
+    The value folds into :func:`~iknos.types.epistemic.combine_faithfulness` as the third
+    independent defect factor. Pure; the per-quality constants are the calibration seam
+    (:data:`_SOURCE_QUALITY_FACTOR`).
+    """
+    if quality is None:
+        return 1.0
+    return _SOURCE_QUALITY_FACTOR[quality]  # fail-loud on a quality with no factor
+
+
+def worst_source_quality(layout: dict[str, Any] | None) -> SourceQuality | None:
+    """The **worst** (most-degraded) ``source_quality`` across a span's ``Span.layout`` regions.
+
+    A span may overlap several parse regions (e.g. a clean paragraph adjacent to a scanned
+    table), so its faithfulness penalty is governed by the *worst* region it draws on — the
+    conservative reading (a span is only as trustworthy as its weakest source). Reads the opaque,
+    versioned layout dict this module owns (:func:`layouts_for_spans` is the writer); null- and
+    version-tolerant — a ``None`` layout (text-only / null parser), a missing/empty ``regions``
+    list, or a region with no ``source_quality`` all yield ``None`` (unknown → unpenalised). An
+    unrecognised quality string (a layout written under a newer vocabulary) is skipped rather
+    than raising, so a metadata surprise never aborts ingest.
+    """
+    if not layout:
+        return None
+    worst: SourceQuality | None = None
+    worst_rank = -1
+    for region in layout.get("regions", ()):
+        raw = region.get("source_quality")
+        if raw is None:
+            continue
+        try:
+            quality = SourceQuality(raw)
+        except ValueError:
+            continue
+        rank = _SOURCE_QUALITY_SEVERITY.index(quality)
+        if rank > worst_rank:
+            worst, worst_rank = quality, rank
+    return worst
 
 
 @dataclass(frozen=True)
