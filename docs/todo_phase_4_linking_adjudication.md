@@ -263,9 +263,20 @@ The lockdown specs are in *Open task specs* below.
 Work-stream order: **R8 → R9 → V7 → V8** (the safety lockdown — before the remaining
 G4.5 slices), and **R4 → V9** (gate ANN infrastructure — with the gate trials).
 Migrations: set `down_revision` to the actual head (`alembic heads`) — numbering in
-older specs is stale.
+older specs is stale. **R8 shipped (next: R9).**
 
-### R8 — `provisional` boolean → `provisional_reasons` set
+### R8 — `provisional` boolean → `provisional_reasons` set — ✅ **shipped**
+
+*Shipped as `fix/r8-provisional-reasons`. One change vs. this spec: a fourth reason
+`polarity_unstable` was added beyond the three below — the G1.14 polarity-twin
+quarantine is a pre-existing extract-time cause (set independently of faithfulness so it
+survives verifier-off mode, per `test_verify_all_failure_preserves_twin_provisional`) that
+the spec's "known reasons" list omitted. `provisional_reasons_for(faithfulness)` still owns
+only the `LOW_FAITHFULNESS` leg; the propositionizer contributes `POLARITY_UNSTABLE` and the
+reference binder `UNRESOLVED_REFERENCE`, OR-folded via `merge_provisional_reasons`. The
+legacy boolean is derived by `legacy_provisional(faithfulness, reasons)` (reproduces the
+exact None/False/True tri-state); `reuse._reasons_from_props` reconstructs reasons for pre-R8
+nodes so a replay never silently clears a quarantine.*
 
 One flag currently carries three meanings; triage (§11.1) needs the reason, the
 quarantine gate (R9) needs non-emptiness. Known reasons now: `low_faithfulness`

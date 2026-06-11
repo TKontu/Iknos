@@ -15,12 +15,18 @@ from iknos.types.epistemic import (
     EpistemicClass,
     Modality,
     Polarity,
+    ProvisionalReason,
     Routing,
     combine_faithfulness,
+    decode_provisional_reasons,
     faithfulness_from_verdict,
-    is_provisional,
+    legacy_provisional,
+    merge_provisional_reasons,
+    provisional_reasons_for,
     route_for,
 )
+
+_LOW = ProvisionalReason.LOW_FAITHFULNESS
 
 # --- routing (G1.2) ---
 
@@ -37,24 +43,72 @@ def test_observation_routes_to_fact_others_to_judgement() -> None:
     assert route_for(EpistemicClass.JUDGEMENT) is Routing.JUDGEMENT
 
 
-# --- provisional gate (landed for G1.4/G1.5/G1.6; not called in G1.1) ---
+# --- provisional reasons: the faithfulness leg (R8; replaces the is_provisional bool gate) ---
 
 
-def test_is_provisional_half_open_boundary() -> None:
-    assert is_provisional(0.49) is True
-    assert is_provisional(0.5) is False  # at-threshold is NOT provisional (band() convention)
-    assert is_provisional(0.9) is False
+def test_provisional_reasons_half_open_boundary() -> None:
+    assert provisional_reasons_for(0.49) == {_LOW}
+    assert provisional_reasons_for(0.5) == set()  # at-threshold NOT provisional (band() convention)
+    assert provisional_reasons_for(0.9) == set()
 
 
-def test_is_provisional_custom_threshold() -> None:
-    assert is_provisional(0.7, threshold=0.8) is True
-    assert is_provisional(0.8, threshold=0.8) is False
+def test_provisional_reasons_custom_threshold() -> None:
+    assert provisional_reasons_for(0.7, threshold=0.8) == {_LOW}
+    assert provisional_reasons_for(0.8, threshold=0.8) == set()
+
+
+def test_provisional_reasons_none_is_empty() -> None:
+    # The documented verifier-off mode: no faithfulness computed → nothing to gate on here.
+    assert provisional_reasons_for(None) == set()
 
 
 @pytest.mark.parametrize("bad", [-0.01, 1.01, 2.0])
-def test_is_provisional_rejects_out_of_range(bad: float) -> None:
+def test_provisional_reasons_rejects_out_of_range(bad: float) -> None:
     with pytest.raises(ValueError, match=r"\[0, 1\]"):
-        is_provisional(bad)
+        provisional_reasons_for(bad)
+
+
+# --- the reason vocabulary, OR-fold, decode, and the legacy-boolean transition helper (R8) ---
+
+
+def test_provisional_reason_values_match_spec() -> None:
+    assert [r.value for r in ProvisionalReason] == [
+        "low_faithfulness",
+        "polarity_unstable",
+        "unresolved_reference",
+        "uninferred_budget",
+    ]
+
+
+def test_merge_provisional_reasons_unions_dedupes_and_sorts() -> None:
+    merged = merge_provisional_reasons(
+        ["low_faithfulness"],
+        [ProvisionalReason.UNRESOLVED_REFERENCE, ProvisionalReason.LOW_FAITHFULNESS],
+    )
+    assert merged == ["low_faithfulness", "unresolved_reference"]  # deduped, sorted, list[str]
+
+
+def test_merge_provisional_reasons_empty_is_empty() -> None:
+    assert merge_provisional_reasons([], []) == []
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (None, []),
+        ('["low_faithfulness"]', ["low_faithfulness"]),  # JSON string (AGE read-back)
+        (["polarity_unstable"], ["polarity_unstable"]),  # real list (pure round-trip)
+    ],
+)
+def test_decode_provisional_reasons_accepts_all_shapes(stored: object, expected: list[str]) -> None:
+    assert decode_provisional_reasons(stored) == expected
+
+
+def test_legacy_provisional_reproduces_the_tristate() -> None:
+    assert legacy_provisional(None, []) is None  # nothing determined (verifier off, no reason)
+    assert legacy_provisional(0.6, []) is False  # verified clean
+    assert legacy_provisional(0.4, ["low_faithfulness"]) is True  # verified provisional
+    assert legacy_provisional(None, ["polarity_unstable"]) is True  # twin in verifier-off mode
 
 
 # --- faithfulness from the verify verdict (G1.4/G1.5) ---
@@ -70,33 +124,33 @@ def test_faithfulness_neutral_is_low_and_provisional() -> None:
     # Unsupported / hallucinated content sits below the provisional threshold by design.
     score = faithfulness_from_verdict(Entailment.NEUTRAL, True, True)
     assert score == pytest.approx(0.30)
-    assert is_provisional(score) is True
+    assert provisional_reasons_for(score) == {_LOW}
 
 
 def test_faithfulness_entailed_fully_preserved_is_one() -> None:
     score = faithfulness_from_verdict(Entailment.ENTAILED, True, True)
     assert score == pytest.approx(1.0)
-    assert is_provisional(score) is False
+    assert provisional_reasons_for(score) == set()
 
 
 def test_faithfulness_polarity_drop_is_low_and_provisional() -> None:
     # A dropped negation is a sign flip — severe; quarantined below threshold.
     score = faithfulness_from_verdict(Entailment.ENTAILED, False, True)
     assert score == pytest.approx(0.40)
-    assert is_provisional(score) is True
+    assert provisional_reasons_for(score) == {_LOW}
 
 
 def test_faithfulness_modality_flatten_is_medium_not_provisional() -> None:
     # A flattened hedge over-states certainty — moderate; stays above threshold.
     score = faithfulness_from_verdict(Entailment.ENTAILED, True, False)
     assert score == pytest.approx(0.70)
-    assert is_provisional(score) is False
+    assert provisional_reasons_for(score) == set()
 
 
 def test_faithfulness_polarity_and_modality_drop_compounds() -> None:
     score = faithfulness_from_verdict(Entailment.ENTAILED, False, False)
     assert score == pytest.approx(0.40 * 0.70)
-    assert is_provisional(score) is True
+    assert provisional_reasons_for(score) == {_LOW}
 
 
 @pytest.mark.parametrize(
@@ -104,10 +158,10 @@ def test_faithfulness_polarity_and_modality_drop_compounds() -> None:
     list(itertools.product(Entailment, [True, False], [True, False])),
 )
 def test_faithfulness_always_in_range(entailment: Entailment, pol: bool, mod: bool) -> None:
-    # Every verdict yields a value in [0, 1] that is_provisional() accepts without raising.
+    # Every verdict yields a value in [0, 1] that provisional_reasons_for() accepts.
     score = faithfulness_from_verdict(entailment, pol, mod)
     assert 0.0 <= score <= 1.0
-    assert isinstance(is_provisional(score), bool)
+    assert isinstance(provisional_reasons_for(score), set)
 
 
 def test_faithfulness_fail_loud_on_unknown_entailment() -> None:
@@ -136,12 +190,12 @@ def test_combine_unstable_but_verified_becomes_provisional() -> None:
     # Verifier passes it (1.0) but it appeared in only 1 of 3 samples → quarantined.
     score = combine_faithfulness(1.0, 1 / 3)
     assert score == pytest.approx(1 / 3)
-    assert is_provisional(score) is True
+    assert provisional_reasons_for(score) == {_LOW}
 
 
 def test_combine_stable_and_verified_stays_above_threshold() -> None:
     score = combine_faithfulness(1.0, 2 / 3)
-    assert is_provisional(score) is False
+    assert provisional_reasons_for(score) == set()
 
 
 @pytest.mark.parametrize("bad", [-0.01, 1.01, 2.0])
@@ -169,7 +223,7 @@ def test_combine_bad_parse_quality_cannot_be_rescued() -> None:
     # A verified-but-badly-parsed atom is pulled below the provisional threshold despite the
     # verifier passing it — parse quality is an independent defect (cf. agreement instability).
     score = combine_faithfulness(1.0, 1.0, 0.4)
-    assert is_provisional(score) is True
+    assert provisional_reasons_for(score) == {_LOW}
 
 
 # --- enum value strings are exactly the spec strings (guards silent drift) ---

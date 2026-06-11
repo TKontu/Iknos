@@ -155,7 +155,7 @@ into the owning phase/gap doc as an active task.
 
 | Deferred item | Recorded in | Trigger — re-open when… | Status |
 |---|---|---|---|
-| Quarantine enforcement (G1.6/R9) | `todo_phase_4_*.md` *Open task specs* | a `REFUTES` creation site exists | **FIRED** (G4.3 slice 3) → active as R8→R9→V7 |
+| Quarantine enforcement (G1.6/R9) | `todo_phase_4_*.md` *Open task specs* | a `REFUTES` creation site exists | **FIRED** (G4.3 slice 3) → active as R8→R9→V7 (**R8 shipped; R9 next**) |
 | Ensemble-gate-only `refuted` flip (§7.2) | `todo_phase_4_*.md` *Open task specs* (V8) | any consumer writes `Hypothesis.state` | **FIRED** (G4.4 `persist_verdicts`) → active as V8 |
 | pgvector ANN index + k-NN push-down | `todo_phase_4_*.md` *Open task specs* (R4/V9), `core/candidates.py` docstring | k-NN runs beyond working-set scale, or the gate measures recall | **FIRED** (gate is next) → active as R4→V9 |
 | Out-of-process embeddings + job queue (R10/R11) | `todo_trials.md` *Gate prerequisites* | first real multi-document corpus ingest | **FIRED** (V1 corpus is that ingest) → land before gate trials |

@@ -84,11 +84,13 @@ class Proposition(BaseModel):
 
     Structured epistemic fields (§3.1, G1.1) are kept distinct, never flattened into
     ``text`` (see `types/epistemic.py`). Like ``Tier``, they are AGE property strings,
-    so adding them needs no data migration. Two are **schema-contract placeholders**
-    here: ``faithfulness`` (calibrated — owned by the multi-sample/verify increments
-    G1.4/G1.5) and ``provisional`` (the system gate, G1.6) are ``None`` until those
-    land — never a self-reported value (§3.1: confidence is not verbalized self-report).
-    ``routing`` is a cached derivation of ``epistemic_class`` (invariant
+    so adding them needs no data migration. ``faithfulness`` (calibrated — owned by the
+    multi-sample/verify increments G1.4/G1.5) is a schema-contract placeholder, ``None``
+    until those land — never a self-reported value (§3.1: confidence is not verbalized
+    self-report). ``provisional_reasons`` is the system quarantine gate (§3.1, R8): a set
+    of :class:`~iknos.types.epistemic.ProvisionalReason` values carried as a stable
+    ``list[str]`` (empty = not provisional), so triage knows *why* (§11.1) and the R9 gate
+    reads non-emptiness. ``routing`` is a cached derivation of ``epistemic_class`` (invariant
     ``routing == route_for(epistemic_class)``), never set independently.
     """
 
@@ -103,7 +105,7 @@ class Proposition(BaseModel):
     epistemic_class: EpistemicClass = EpistemicClass.OBSERVATION
     routing: Routing = Routing.FACT
     faithfulness: float | None = None
-    provisional: bool | None = None
+    provisional_reasons: list[str] = Field(default_factory=list)
 
 
 class Box(BaseModel):

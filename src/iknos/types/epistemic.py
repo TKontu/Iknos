@@ -16,9 +16,12 @@ Two things deliberately live here and **not** as model-emitted fields:
   (G1.3) + the extract-then-verify NLI pass (G1.4), so it is owned by those
   increments — null until then.
 - ``provisional`` is a **system** gate, not a model judgement: §10 sets it "when
-  faithfulness or a binding is below the stakes-dependent threshold". Both inputs
-  are absent in this increment, so :func:`is_provisional` is landed here (single
-  tunable threshold) but **not yet called** — G1.4/G1.5/G1.6 plug into it.
+  faithfulness or a binding is below the stakes-dependent threshold". It is carried as a
+  **set of reasons** (:class:`ProvisionalReason`), not one boolean (R8) — triage (§11.1)
+  needs *why*, the quarantine gate (R9) needs only non-emptiness. :func:`provisional_reasons_for`
+  derives the faithfulness leg; other producers (the propositionizer's polarity twins, the
+  reference binder) OR-fold their own reasons in. A legacy boolean is written alongside for
+  one transition release (:func:`legacy_provisional`).
 
 All enums are ``StrEnum`` so they serialize to plain strings for the AGE layer
 (``db/age.py:cypher_map``), exactly like ``Tier`` / ``SensitivityLevel``. (For
@@ -26,7 +29,10 @@ All enums are ``StrEnum`` so they serialize to plain strings for the AGE layer
 to ``json.dumps`` and persist as ``'Routing.FACT'``.)
 """
 
+import json
+from collections.abc import Collection, Iterable
 from enum import StrEnum
+from typing import Any
 
 
 class Polarity(StrEnum):
@@ -124,24 +130,93 @@ def route_for(epistemic_class: EpistemicClass) -> Routing:
 _FAITHFULNESS_PROVISIONAL_THRESHOLD: float = 0.5
 
 
-def is_provisional(
-    faithfulness: float, *, threshold: float = _FAITHFULNESS_PROVISIONAL_THRESHOLD
-) -> bool:
-    """Whether a proposition is provisional given its faithfulness (§3.1, §10).
+class ProvisionalReason(StrEnum):
+    """Why a proposition is quarantined from high-stakes moves (§3.1, §11.1).
 
-    A proposition below the threshold is quarantined from high-stakes moves (a
-    ``REFUTES`` that overturns a hypothesis) until confirmed. Boundary is half-open
-    (``< threshold`` → provisional), mirroring :func:`intentional.band`. Raises for an
-    out-of-range value — faithfulness is defined only on ``[0, 1]``, so an out-of-range
-    value is a caller bug, surfaced rather than silently clamped.
+    A proposition carries a **set** of these, not one boolean (R8): §11.1 triage needs to
+    know *why* an atom is provisional (the stakes-dependent threshold differs by reason), and
+    the R9 quarantine gate needs only whether the set is non-empty. Producers across phases
+    each contribute their own reason and OR-fold into the set, never clearing another's:
 
-    **Not called in this increment (G1.1):** faithfulness (G1.4/G1.5) and binding
-    confidence (G1.7) do not exist yet, so there is nothing to gate on — the threshold
-    is landed here for those increments to call; until then ``provisional`` is null.
+    - ``LOW_FAITHFULNESS`` — faithfulness below the gate threshold (Phase 1, G1.5); derived
+      by :func:`provisional_reasons_for`.
+    - ``POLARITY_UNSTABLE`` — multi-sample extraction wavered on the claim's sign, so both
+      polarity twins are quarantined (Phase 1, G1.14); set by the propositionizer
+      independently of faithfulness, so it survives the verifier-off / degraded mode.
+    - ``UNRESOLVED_REFERENCE`` — a mention the proposition rests on stayed unresolved or only
+      candidate-bound (Phase 2, G2.4); set by the reference binder.
+    - ``UNINFERRED_BUDGET`` — re-inference was deferred by the VoI budget (Phase 5); no
+      producer yet, reserved here so the vocabulary is complete.
     """
+
+    LOW_FAITHFULNESS = "low_faithfulness"
+    POLARITY_UNSTABLE = "polarity_unstable"
+    UNRESOLVED_REFERENCE = "unresolved_reference"
+    UNINFERRED_BUDGET = "uninferred_budget"
+
+
+def provisional_reasons_for(
+    faithfulness: float | None, *, threshold: float = _FAITHFULNESS_PROVISIONAL_THRESHOLD
+) -> set[ProvisionalReason]:
+    """The **faithfulness-derived** provisional reasons for a proposition (§3.1, §10).
+
+    ``{LOW_FAITHFULNESS}`` when faithfulness is below the threshold, else the empty set.
+    ``None`` → empty: the documented verifier-off mode computes no faithfulness, so there is
+    nothing to gate on *from this axis* (other producers may still add their own reasons —
+    see :class:`ProvisionalReason`). Boundary is half-open (``< threshold`` → provisional),
+    mirroring :func:`intentional.band`. Raises for an out-of-range faithfulness — defined
+    only on ``[0, 1]``, so an out-of-range value is a caller bug, surfaced not clamped.
+
+    Replaces the former ``is_provisional`` boolean gate (R8): one flag carried three meanings;
+    the reason set lets triage (§11.1) act on *why* and the quarantine gate (R9) on whether
+    any reason is present.
+    """
+    if faithfulness is None:
+        return set()
     if not 0.0 <= faithfulness <= 1.0:
         raise ValueError(f"faithfulness must be in [0, 1], got {faithfulness!r}")
-    return faithfulness < threshold
+    return {ProvisionalReason.LOW_FAITHFULNESS} if faithfulness < threshold else set()
+
+
+def merge_provisional_reasons(*groups: Iterable[str | ProvisionalReason]) -> list[str]:
+    """OR-fold reason groups into a stable, deduped, sorted ``list[str]`` (§3.1).
+
+    Provisional reasons only ever accumulate — a binding that stays open cannot clear a
+    low-faithfulness flag (the "never cleared" discipline). Sorted + deduped so the persisted
+    list is order-stable regardless of which producer ran first.
+    """
+    merged: set[str] = set()
+    for group in groups:
+        merged.update(str(r) for r in group)
+    return sorted(merged)
+
+
+def decode_provisional_reasons(value: Any) -> list[str]:
+    """Decode a persisted ``provisional_reasons`` property into a ``list[str]``.
+
+    Stored via ``cypher_map`` as a JSON-string property, so on read it comes back as a JSON
+    string; a pure round-trip may hand back a real list, and a missing property is ``None``.
+    Accept all three (mirrors ``boxes/serde._as_str_list``).
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x) for x in value]
+    return [str(x) for x in json.loads(str(value))]
+
+
+def legacy_provisional(faithfulness: float | None, reasons: Collection[str]) -> bool | None:
+    """The legacy ``provisional`` boolean for the one-release transition window (R8).
+
+    Reproduces the pre-R8 tri-state exactly so readers of the boolean stay correct until they
+    migrate to ``provisional_reasons``: ``None`` when nothing has been determined (no
+    faithfulness computed *and* no other reason — e.g. single-pass with no verifier), else
+    ``True`` iff any reason is present. **Remove together with every read of the boolean** once
+    the transition release ships (see the R8 removal TODOs at the call sites).
+    """
+    if faithfulness is None and not reasons:
+        return None
+    return bool(reasons)
 
 
 # Single source of truth for the verify-derived faithfulness score (§3.1, G1.4/G1.5).

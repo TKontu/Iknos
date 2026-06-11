@@ -22,6 +22,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # ``cypher_map`` rely on this).
 
 
+def cypher_string_literal(value: str) -> str:
+    """A single-quoted Cypher string literal with the Cypher-level escaping.
+
+    The one place the Cypher string escaping lives — backslash first, then single-quote
+    (order matters) — so the map serializer (:func:`cypher_map`) and any per-property ``SET``
+    that inlines a value cannot diverge on it. Values only, never identifiers/labels (see the
+    module docstring); the SQL-level dollar-quoting in :func:`cypher` is the second layer.
+    """
+    esc = value.replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{esc}'"
+
+
 def cypher_map(props: dict[str, Any]) -> str:
     """Serialize a dict into a Cypher map literal, e.g. ``{id: 'abc', n: 3}``.
 
@@ -32,8 +44,7 @@ def cypher_map(props: dict[str, Any]) -> str:
     parts: list[str] = []
     for k, v in props.items():
         if isinstance(v, str):
-            esc = v.replace("\\", "\\\\").replace("'", "\\'")
-            parts.append(f"{k}: '{esc}'")
+            parts.append(f"{k}: {cypher_string_literal(v)}")
         elif isinstance(v, bool):
             parts.append(f"{k}: {'true' if v else 'false'}")
         elif isinstance(v, (int, float)):
@@ -41,8 +52,7 @@ def cypher_map(props: dict[str, Any]) -> str:
         elif v is None:
             parts.append(f"{k}: null")
         else:
-            esc = json.dumps(v).replace("\\", "\\\\").replace("'", "\\'")
-            parts.append(f"{k}: '{esc}'")
+            parts.append(f"{k}: {cypher_string_literal(json.dumps(v))}")
     return "{" + ", ".join(parts) + "}"
 
 
