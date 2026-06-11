@@ -8,16 +8,23 @@ off-the-shelf system packages this — it is the substance of the project.
 **Architecture refs:** §12 (two-layer model), §8 (decisions, staged build 1–2), §7.1
 (edge confidence), §6 (`deduce`, `induce`).
 
-**Status — 🟡 G3.1 shipped (Layer A definitional core).** Well-founded support is
-implemented as the **definitional least-fixpoint** (`well_founded_support`) over an
-abstract derivation graph — a pure, in-memory recompute that is correct on acyclic
-*and* cyclic graphs for the membership question — in `core/truth_maintenance.py`, with
-the §12 must-pass correctness tests passing deterministically. It deliberately does
-**not** yet build the *incremental* mechanisms: integer support-count Counting over
-acyclic regions (**G3.2**) and DRed/clingo over cyclic SCCs (**G3.3**) are the next
-slices and are diff-tested against this recompute oracle. Also open: Layer B confidence
-(Viterbi), the `deduce`/`induce` operators, `SAME_AS`-component aggregation, and the
-Phase 2 adapter that maps the active AGE subgraph into a `DerivationGraph`.
+**Status — 🟡 G3.1 + G3.2 shipped (Layer A, in-memory).** Well-founded support is
+implemented as the **definitional least-fixpoint** (`well_founded_support`, exposed as
+`RecomputeOracle`) over an abstract derivation graph — pure, in-memory, correct on
+acyclic *and* cyclic graphs — in `core/truth_maintenance.py`, with the §12 must-pass
+correctness tests passing deterministically (**G3.1**). On top of it, **G3.2** ships the
+*incremental* engine `IncrementalOracle`: the §12 **Counting discipline** (per-node
+integer support-count) with semi-naive forward propagation for insertions and **DRed
+(Delete–Rederive) for retractions**. DRed is the cycle-safe deletion §12 mandates, so the
+incremental engine is correct on acyclic **and** cyclic *positive-Horn* graphs — verified
+by a deterministic randomized **diff-test against `RecomputeOracle`** over long mutation
+sequences (1000 snapshots), exactly as planned. What remains of Layer A (**G3.3**): the
+**clingo/ASP** path for **non-monotonic / stratified-negation** rules, SCC-scoped DRed as
+a performance refinement, and the *persisted* (`WITH RECURSIVE` / DBSP) path — all of
+which need the **Phase 2 adapter** (active-subgraph selection + AGE/UUID→`DerivationGraph`
+mapping), still open. Also open: Layer B confidence (semiring decision + Viterbi/Gödel
+fixpoint), the `deduce`/`induce` operators, and `SAME_AS`-component aggregation. See
+`gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
 
 ## Layer A — truth maintenance over a commutative group (owns retraction)
 
@@ -28,18 +35,22 @@ Phase 2 adapter that maps the active AGE subgraph into a `DerivationGraph`.
       definition. *(G3.1 — `core/truth_maintenance.py`: `DerivationGraph.base_facts` is
       the explicit grounding anchor, empty-body `Derivation`s model axiomatic rules; the
       integer support-count itself is deferred to the G3.2 incremental impl.)*
-- [ ] **Acyclic regions:** Counting over `DERIVED_FROM` (cheap, correct here);
-      retraction via `WITH RECURSIVE` closure; a conclusion survives if support remains.
-      *(G3.2 — open. G3.1's recompute already gives **correct** acyclic retraction
-      (rebuild-without-fact → recompute); this item is the **incremental** Counting +
-      `WITH RECURSIVE` mechanism over the persisted graph, validated against recompute.)*
-- [ ] **Cyclic regions (nontrivial `DERIVED_FROM` SCCs):** detect SCCs and route them to
-      a cycle-safe algorithm — **DRed (over-delete reachable, then re-derive only what
-      re-grounds in base facts)** — or hand foundedness to **clingo** (ASP unfounded-set
-      elimination). Plain Counting is **not** correct here. *(G3.3 — open. G3.1's
-      recompute is already **correct** on cyclic membership (a monotone least fixpoint
-      never reaches an unfounded cycle); this item is the SCC detection + **incremental**
-      DRed/clingo path that the cycle-safety requirement applies to.)*
+- [x] **Acyclic regions:** Counting over `DERIVED_FROM` (cheap, correct here);
+      retraction propagates and a conclusion survives if support remains.
+      *(G3.2 — `IncrementalOracle`: per-node integer support-count, semi-naive forward
+      insertion, work proportional to the change. The **in-memory** incremental engine is
+      done and diff-tested against recompute; the equivalent over the **persisted** graph
+      (`WITH RECURSIVE` / IVM in Postgres) follows the Phase 2 adapter.)*
+- [x] **Cyclic regions (positive Horn):** retraction is cycle-safe via **DRed
+      (over-delete everything reachable from the removed grounding, then re-derive only
+      what re-grounds in base facts)** — plain count-decrement is *not* correct here, and
+      DRed is. *(G3.2 — `IncrementalOracle._delete`; the grounded/ungrounded cycle
+      retraction and revival cases pass incrementally, and the randomized diff-test covers
+      cyclic graphs.)* **Open (G3.3):** route **non-monotonic / stratified-negation**
+      regions to **clingo** (ASP unfounded-set elimination — DRed's correctness assumes
+      monotone positive Horn), plus **SCC detection** to scope DRed's over-deletion as a
+      performance refinement, and the persisted/DBSP path. *(G3.1's recompute is the oracle
+      for all of it; G3.2's DRed already settles the positive-Horn cyclic correctness.)*
 - [x] **Correctness tests (must-pass, deterministic):** an *ungrounded* derivation cycle
       retracts fully when its external base support is removed; a *grounded* mutual-
       support pair (also reaching base) is correctly kept. *(G3.1 —
@@ -78,7 +89,9 @@ Phase 2 adapter that maps the active AGE subgraph into a `DerivationGraph`.
 
 - [ ] Clean interface: Layer A decides membership → Layer B scores it. Two annotations,
       never merged (§12). *(Layer A side in place — G3.1 defines the `SupportOracle`
-      contract returning the certified well-founded set; Layer B is the open consumer.)*
+      contract returning the certified well-founded set; G3.2's `IncrementalOracle`
+      satisfies the same contract (and exposes `support_count` for the "by how many
+      derivations" question). Layer B is the open consumer.)*
 - [ ] Confirm idempotent confidence is *not* subtracted; retraction lives only in the
       group/count layer.
 - [ ] **Aggregate evidence over `SAME_AS` components (§5.2):** support counts and

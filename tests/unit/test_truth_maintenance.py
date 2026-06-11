@@ -14,13 +14,16 @@ retraction:
   G3.2/G3.3 diff-test against this recompute oracle).
 """
 
+import random
 from collections.abc import Iterable
 
 from iknos.core.truth_maintenance import (
     Derivation,
     DerivationGraph,
+    IncrementalOracle,
     NodeId,
     RecomputeOracle,
+    SupportOracle,
     well_founded_support,
 )
 
@@ -197,3 +200,200 @@ def test_semi_naive_matches_naive_oracle_on_assorted_graphs() -> None:
 def test_recompute_oracle_matches_free_function() -> None:
     g = _graph(base=["A"], rules=[("C", ["A"]), ("D", ["C"])])
     assert RecomputeOracle().well_founded_support(g) == well_founded_support(g)
+
+
+# ===========================================================================
+# G3.2 — the incremental Counting + DRed oracle. The headline guarantee is that
+# IncrementalOracle agrees with RecomputeOracle after *any* sequence of snapshots
+# (the diff-test, below). The named cases document the specific behaviours.
+# ===========================================================================
+
+
+def test_incremental_oracle_satisfies_the_support_oracle_protocol() -> None:
+    # Structural (runtime_checkable) — the contract Layer B will depend on.
+    assert isinstance(IncrementalOracle(), SupportOracle)
+
+
+def test_incremental_matches_recompute_on_single_snapshot() -> None:
+    # One call on a fresh instance must equal a from-scratch recompute.
+    g = _graph(base=["A", "B"], rules=[("C", ["A"]), ("C", ["B"]), ("E", ["C", "D"])])
+    assert IncrementalOracle().well_founded_support(g) == well_founded_support(g)
+
+
+def test_incremental_agrees_with_recompute_across_the_static_fixtures() -> None:
+    graphs = [
+        _graph(base=["A"], rules=[("C", ["A"]), ("D", ["C", "A"])]),
+        _graph(base=["A", "B"], rules=[("C", ["A"]), ("C", ["B"]), ("E", ["C", "D"])]),
+        _graph(base=["F"], rules=[("A", ["B"]), ("B", ["A"]), ("A", ["F"])]),
+        _graph(rules=[("A", ["B"]), ("B", ["A"])]),
+        _graph(rules=[("AX", []), ("C", ["AX"]), ("D", ["C", "missing"])]),
+    ]
+    for g in graphs:
+        # A fresh oracle per graph — each is a single-snapshot equality check.
+        assert IncrementalOracle().well_founded_support(g) == well_founded_support(g)
+
+
+# --- incremental insertion ---
+
+
+def test_incremental_insertion_propagates_a_chain() -> None:
+    oracle = IncrementalOracle()
+    assert oracle.apply(_graph(base=["A"])) == {"A"}
+    # Adding the rules in a later snapshot must light up the whole chain.
+    assert oracle.apply(_graph(base=["A"], rules=[("C", ["A"]), ("D", ["C"])])) == {"A", "C", "D"}
+
+
+def test_incremental_insertion_of_base_fact_unblocks_a_waiting_rule() -> None:
+    oracle = IncrementalOracle()
+    g0 = _graph(base=["A"], rules=[("C", ["A", "B"])])  # B missing → C unsupported
+    assert oracle.apply(g0) == {"A"}
+    g1 = _graph(base=["A", "B"], rules=[("C", ["A", "B"])])  # B arrives → C fires
+    assert oracle.apply(g1) == {"A", "B", "C"}
+
+
+def test_incremental_insertion_handles_intra_batch_rule_chain() -> None:
+    # Both rules added in one snapshot; E depends on C which is derived in the same batch.
+    # Regression guard for the frozen-baseline unmet computation (no double-decrement).
+    oracle = IncrementalOracle()
+    g = _graph(base=["A"], rules=[("C", ["A"]), ("E", ["C"])])
+    assert oracle.apply(g) == {"A", "C", "E"}
+
+
+# --- incremental retraction (DRed) ---
+
+
+def test_incremental_retracting_sole_support_drops_conclusion() -> None:
+    oracle = IncrementalOracle()
+    assert oracle.apply(_graph(base=["A"], rules=[("C", ["A"])])) == {"A", "C"}
+    assert oracle.apply(_graph(base=[], rules=[("C", ["A"])])) == frozenset()
+
+
+def test_incremental_retracting_one_of_several_supports_keeps_conclusion() -> None:
+    oracle = IncrementalOracle()
+    assert oracle.apply(_graph(base=["A", "B"], rules=[("C", ["A"]), ("C", ["B"])])) == {
+        "A",
+        "B",
+        "C",
+    }
+    # Drop A; C still grounded through B.
+    after = oracle.apply(_graph(base=["B"], rules=[("C", ["A"]), ("C", ["B"])]))
+    assert "C" in after and "A" not in after
+
+
+def test_incremental_diamond_retraction_drops_everything_downstream() -> None:
+    oracle = IncrementalOracle()
+    g = _graph(base=["A"], rules=[("B", ["A"]), ("C", ["A"]), ("D", ["B", "C"])])
+    assert oracle.apply(g) == {"A", "B", "C", "D"}
+    retracted = _graph(base=[], rules=[("B", ["A"]), ("C", ["A"]), ("D", ["B", "C"])])
+    assert oracle.apply(retracted) == frozenset()
+
+
+def test_incremental_retracting_a_derivation_not_just_a_base_fact() -> None:
+    # DRed must also handle a removed *rule* (not only a removed base fact).
+    oracle = IncrementalOracle()
+    assert oracle.apply(_graph(base=["A"], rules=[("C", ["A"])])) == {"A", "C"}
+    assert oracle.apply(_graph(base=["A"], rules=[])) == {"A"}  # rule gone → C drops
+
+
+# --- the cycle correctness requirement, now incremental (§12) ---
+
+
+def test_incremental_grounded_cycle_is_kept_then_retracts_fully() -> None:
+    oracle = IncrementalOracle()
+    grounded = _graph(base=["F"], rules=[("A", ["B"]), ("B", ["A"]), ("A", ["F"])])
+    assert oracle.apply(grounded) == {"F", "A", "B"}
+    # Remove the cycle's only external grounding: DRed must tear the whole cycle down,
+    # not let its members hold each other up (the unfounded-set bug §12).
+    retracted = _graph(base=[], rules=[("A", ["B"]), ("B", ["A"]), ("A", ["F"])])
+    assert oracle.apply(retracted) == frozenset()
+
+
+def test_incremental_cycle_survives_losing_one_of_two_groundings() -> None:
+    oracle = IncrementalOracle()
+    # Cycle A<->B grounded by both F (via A) and G (via B); drop F, G still holds it up.
+    two = _graph(
+        base=["F", "G"],
+        rules=[("A", ["B"]), ("B", ["A"]), ("A", ["F"]), ("B", ["G"])],
+    )
+    assert oracle.apply(two) == {"F", "G", "A", "B"}
+    one = _graph(base=["G"], rules=[("A", ["B"]), ("B", ["A"]), ("A", ["F"]), ("B", ["G"])])
+    assert oracle.apply(one) == {"G", "A", "B"}
+
+
+def test_incremental_re_grounding_revives_a_dropped_cycle() -> None:
+    oracle = IncrementalOracle()
+    rules = [("A", ["B"]), ("B", ["A"]), ("A", ["F"])]
+    assert oracle.apply(_graph(base=[], rules=rules)) == frozenset()  # ungrounded → empty
+    assert oracle.apply(_graph(base=["F"], rules=rules)) == {"F", "A", "B"}  # F arrives → revives
+
+
+# --- support-count multiplicity (the "by how many derivations" question, §12) ---
+
+
+def test_support_count_reflects_number_of_groundings() -> None:
+    oracle = IncrementalOracle()
+    oracle.apply(_graph(base=["A", "B"], rules=[("C", ["A"]), ("C", ["B"])]))
+    assert oracle.support_count("C") == 2  # two independent derivations
+    assert oracle.support_count("A") == 1  # base fact
+    # Drop one derivation's support; C keeps one grounding.
+    oracle.apply(_graph(base=["B"], rules=[("C", ["A"]), ("C", ["B"])]))
+    assert oracle.support_count("C") == 1
+    assert oracle.support_count("A") == 0  # unsupported
+
+
+def test_support_count_zero_for_unsupported_node() -> None:
+    oracle = IncrementalOracle()
+    oracle.apply(_graph(rules=[("C", ["A"])]))  # A never grounded
+    assert oracle.support_count("C") == 0
+    assert oracle.support_count("never-seen") == 0
+
+
+# --- the diff-test: random mutation sequences must track recompute exactly ---
+
+
+def _random_graph(rng: random.Random, universe: list[NodeId]) -> DerivationGraph:
+    """A random graph over a small node universe — bodies of size 0–3 drawn from the same
+    universe, so cycles, self-loops, multi-grounded nodes and dangling antecedents all
+    arise naturally. Small universe ⇒ dense overlap between successive snapshots ⇒ the
+    diffs actually exercise incremental insertion *and* DRed retraction."""
+    base = frozenset(n for n in universe if rng.random() < 0.35)
+    rules: list[Derivation] = []
+    for _ in range(rng.randint(0, len(universe) * 2)):
+        conclusion = rng.choice(universe)
+        body_size = rng.randint(0, 3)
+        body = frozenset(rng.choice(universe) for _ in range(body_size))
+        rules.append(Derivation(conclusion=conclusion, body=body))
+    return DerivationGraph(base_facts=base, derivations=tuple(rules))
+
+
+def test_incremental_matches_recompute_over_random_mutation_sequences() -> None:
+    """The G3.2 correctness gate: one stateful :class:`IncrementalOracle` fed a long random
+    sequence of snapshots must, after *every* step, report exactly what a fresh recompute
+    of that snapshot reports — on acyclic and cyclic graphs alike. A single disagreement
+    (a stuck unfounded cycle, a double-counted grounding, a missed re-derivation) fails the
+    run, with the snapshot index for triage. Deterministic: fixed seeds, no wall-clock."""
+    universe = ["A", "B", "C", "D", "E", "F"]
+    for seed in range(40):
+        rng = random.Random(seed)
+        incremental = IncrementalOracle()
+        for step in range(25):
+            graph = _random_graph(rng, universe)
+            got = incremental.apply(graph)
+            expected = well_founded_support(graph)
+            assert got == expected, f"seed={seed} step={step}: {got} != {expected}"
+
+
+def test_two_incremental_instances_converge_regardless_of_path() -> None:
+    """Path-independence: the support set depends only on the current graph, never on the
+    sequence of edits that produced it. One oracle reaches the graph after a detour; a
+    fresh oracle jumps straight to it; they must agree (and agree with recompute)."""
+    final = _graph(
+        base=["F", "G"],
+        rules=[("A", ["B"]), ("B", ["A"]), ("A", ["F"]), ("C", ["A", "G"]), ("D", ["C"])],
+    )
+    detoured = IncrementalOracle()
+    detoured.apply(_graph(base=["F"], rules=[("A", ["F"]), ("B", ["A"])]))
+    detoured.apply(_graph(base=[], rules=[("A", ["B"]), ("B", ["A"])]))  # transient empty
+    detoured.apply(_graph(base=["G"], rules=[("C", ["G"])]))
+    assert detoured.apply(final) == IncrementalOracle().well_founded_support(final)
+    assert detoured.apply(final) == well_founded_support(final)
