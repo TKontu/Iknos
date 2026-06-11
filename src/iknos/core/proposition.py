@@ -31,7 +31,7 @@ from iknos.core.consistency import (
     Candidate,
     consolidate_samples,
 )
-from iknos.core.embeddings import EmbeddingSubstrate
+from iknos.core.embeddings import EmbeddingModelMismatchError, EmbeddingSubstrate
 from iknos.core.llm import LLMClient
 from iknos.core.prompts import vocab
 from iknos.db.orm import PropositionEmbedding
@@ -431,6 +431,28 @@ class Propositionizer:
         )
         return row.scalar_one_or_none()
 
+    async def _guard_embedding_model(self, session: AsyncSession, document_id: uuid.UUID) -> None:
+        """Refuse proposition vectors in a different embedding space than existing rows (G1.16).
+
+        Unlike the span path, the extraction cache key (``extraction_content_hash``) keys on the
+        *LLM extractor* model, not the embedding model — so swapping only the embedding substrate
+        would slip past ``StaleExtractionError`` and silently mix two spaces in
+        ``proposition_embeddings``. This is the load-bearing check that closes that hole. Checked
+        once up front (fail fast, before any LLM inference); proposition vectors for a document are
+        single-space by construction within a run.
+        """
+        row = await session.execute(
+            text("SELECT model FROM proposition_embeddings WHERE document_id = :did LIMIT 1"),
+            {"did": document_id},
+        )
+        existing = row.scalar_one_or_none()
+        if existing is not None and existing != self.substrate.model_name:
+            raise EmbeddingModelMismatchError(
+                f"document {document_id} already has proposition vectors under embedding model "
+                f"{existing!r}, cannot mix in {self.substrate.model_name!r}. Re-embed with "
+                f"scripts/reembed.py to migrate the index first."
+            )
+
     async def _persist(
         self,
         session: AsyncSession,
@@ -485,7 +507,12 @@ class Propositionizer:
             )
             session.add(
                 PropositionEmbedding(
-                    proposition_id=r.id, document_id=document_id, embedding=r.embedding
+                    proposition_id=r.id,
+                    document_id=document_id,
+                    embedding=r.embedding,
+                    # Vector-space identity (G1.16): proposition vectors come from
+                    # substrate.embed_passages, so the embedding model is the substrate's.
+                    model=self.substrate.model_name,
                 )
             )
             await session.execute(
@@ -595,6 +622,10 @@ class Propositionizer:
         raw_text: str,
     ) -> list[uuid.UUID]:
         """Run the full pipeline for one document. Returns the Action ids produced."""
+        # G1.16: fail fast before any LLM inference if this document already has proposition
+        # vectors from a different embedding model — never mix two ANN spaces.
+        await self._guard_embedding_model(session, document_id)
+
         # Phase 1: version-aware idempotency (G1.7), serial reads on the shared session. Each
         # span's pipeline content hash is compared against the one stored on its prior extract
         # Action: absent → extract; identical → skip (true no-op); different → the extractor

@@ -96,6 +96,10 @@ class DocumentEmbedding(Base):
     span_end: Mapped[int] = mapped_column(Integer, nullable=False)
     level: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+    # The embedding model that produced this vector — the ANN **vector-space identity** (G1.16).
+    # Cosine across two models is meaningless, so a same-dimension model swap must be refused
+    # (EmbeddingModelMismatchError) and migrated via scripts/reembed.py, never silently mixed.
+    model: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class PropositionEmbedding(Base):
@@ -122,6 +126,9 @@ class PropositionEmbedding(Base):
         index=True,
     )
     embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+    # The embedding model that produced this vector — the ANN vector-space identity (G1.16).
+    # See DocumentEmbedding.model: a model swap is refused, not mixed into one ANN space.
+    model: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class PropositionLexicalIndex(Base):

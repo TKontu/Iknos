@@ -32,6 +32,7 @@ def _propositionizer(model: str = "test-model") -> Propositionizer:
         return_value={"propositions": [{"text": "The bearing failed under load."}]}
     )
     substrate = MagicMock()
+    substrate.model_name = "BAAI/bge-m3"  # vector-space identity (G1.16)
     substrate.embed_passages = MagicMock(return_value=[[0.1] * 1024])
     return Propositionizer(llm, substrate, context_window=8, concurrency=4)
 

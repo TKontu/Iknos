@@ -44,7 +44,10 @@ time-sensitive while the wire schema is on a branch), and the RRF fusion decisio
 (G1.19). **G1.13 slice 1 + G1.14 are now shipped** — the two cheap critical fixes that
 stop silent data corruption (over-long-document refusal; polarity-aware agreement with
 twin quarantine), landed before any further perception-layer tuning and before Trial A5
-fits thresholds. G1.15 (prompt-hash cache key) + G1.16 (embedding-model column) are next.
+fits thresholds. **G1.15 (prompt/schema-hash cache key) + G1.16 (embedding-model identity
+column + ingest guards + `reembed` reindex path) are now shipped** — the two silent-staleness
+closures; G1.15 triggers one loud full re-extraction on first deploy. Next: G1.18 (table
+payload in the wire contract) / G1.13 slice 2 (windowed embedding).
 
 ## Current implementation (baseline)
 
@@ -328,7 +331,7 @@ are just unused for identity.
 - [x] **Ordering note for Trial A5:** landed **before** A5 fits `PROP_AGREEMENT_THRESHOLD`,
       so the threshold is calibrated against the polarity-aware clusterer.
 
-### G1.15 — Cache key: hash the actual prompt + schema, not a hand-bumped constant (§6.1) *(review A4)*
+### G1.15 — Cache key: hash the actual prompt + schema, not a hand-bumped constant (§6.1) *(review A4)* — ✅ shipped
 
 **Why.** `extraction_content_hash` (`core/cache.py`) discriminates on
 `EXTRACT_SCHEMA_VERSION`, a constant whose docstring says "bumped on any prompt /
@@ -336,40 +339,54 @@ schema / enum change" — a human-discipline guard on exactly the staleness clas
 G1.7 was built to close. Edit the prompt, forget the bump, and every cached span
 silently replays the old extraction.
 
-- [ ] Add to the hash payload: `prompt_sha` = SHA-256 of the rendered system-prompt
-      template (the string `build_messages` interpolates, before per-span
-      substitution) and `schema_sha` = SHA-256 of the canonical JSON
-      (`sort_keys=True`, compact separators) of the guided-decoding schema. Do the
-      same inside the verifier signature (verifier prompt + `VerifyVerdict`
-      schema).
-- [ ] Keep `schema_version` in the key as a *semantic* version of the output shape;
+- [x] Add to the hash payload: `prompt_sha` = SHA-256 of the rendered prompt
+      scaffold and `schema_sha` = SHA-256 of the canonical JSON (`sort_keys=True`,
+      compact separators) of the guided-decoding schema. *(Shipped: two pure leaf
+      helpers `cache.sha256_hex`/`canonical_json_sha256`; `proposition.extractor_prompt_sha`
+      renders `build_messages` with sentinels — covering `SYSTEM_PROMPT` **and** the
+      CONTEXT/TARGET wrapper, per-span text excluded — and `extractor_schema_sha` over
+      `EXTRACTION_SCHEMA`; the verifier signature carries `Verifier.prompt_sha`/`schema_sha`
+      (verifier `SYSTEM_PROMPT` + `VERIFY_SCHEMA`).)*
+- [x] Keep `schema_version` in the key as a *semantic* version of the output shape;
       it no longer carries invalidation alone.
-- [ ] **Tests:** changing one character of the prompt template changes the hash;
-      re-ordering schema keys does not; toggling the verifier still does.
-- [ ] **Expected effect:** one-time full re-extraction on the next run after this
-      lands (the key changes). That is correct and loud, not a regression.
+- [x] **Tests:** `prompt_sha`/`schema_sha` each independently move the cache key; a
+      one-char prompt edit moves `extractor_prompt_sha`; re-ordering schema keys does
+      not (`canonical_json_sha256`); toggling/rewording the verifier still does.
+- [ ] **Expected effect (operational, on first deploy):** one-time full re-extraction
+      on the next run after this lands (the key changes). That is correct and loud, not
+      a regression.
 
-### G1.16 — Embedding-model identity on dense rows + reindex path (§4) *(review A5)*
+### G1.16 — Embedding-model identity on dense rows + reindex path (§4) *(review A5)* — ✅ shipped
 
 **Why.** `document_embeddings` / `proposition_embeddings` rows carry no record of
 which model produced them. Swap or upgrade the embedding model and the ANN index
 becomes a mixed-space soup — cosine across spaces is meaningless — and *nothing can
 even detect* the condition.
 
-- [ ] **Migration:** add `model TEXT NOT NULL` to both tables; backfill existing
-      rows with `'BAAI/bge-m3'`; include `model` in the table comment as the vector
-      space identifier. (Dimension is implicit in the pgvector column; a model
-      change that alters dimension fails loudly already — same-dimension swaps are
-      the silent case this closes.)
-- [ ] **Ingest guard** (mirror `DocumentResegmentationError`): before upserting,
+- [x] **Migration:** add `model TEXT NOT NULL` to both tables; backfill existing
+      rows with `'BAAI/bge-m3'`; record `model` as the vector-space identifier in a
+      column comment. *(Migration `0008`: add NOT NULL with a `server_default` to
+      backfill atomically, then drop the default so future inserts must name their
+      model. Mirrored in `db/orm.py` for the autogenerate-drift gate.)* (Dimension is
+      implicit in the pgvector column; a model change that alters dimension fails loudly
+      already — same-dimension swaps are the silent case this closes.)
+- [x] **Ingest guard** (mirror `DocumentResegmentationError`): before upserting,
       if rows exist for this document (or proposition set) under a *different*
       `model`, raise `EmbeddingModelMismatchError` — never mix spaces in place.
-- [ ] **Reindex path:** `scripts/reembed.py` — for a target model: re-run
-      `embed_document`+`pool_span` over each document's raw text to refresh span
-      vectors, and `embed_passages` over proposition texts; batched, idempotent
-      (skip rows already on the target model), caller owns transaction per batch.
-- [ ] **Tests:** mismatch guard raises (integration, ephemeral DB); reembed script
-      converges to all-rows-on-target-model and is re-runnable.
+      *(`core/embeddings.py::EmbeddingModelMismatchError`; checked in
+      `ingest.persist_spans` (span rows) and `proposition._guard_embedding_model`
+      (proposition rows — the load-bearing case, since the extraction cache key keys on
+      the *LLM* model, not the embedding model, so a substrate swap slips past
+      `StaleExtractionError`).)*
+- [x] **Reindex path:** `scripts/reembed.py` (CLI) over `core/reembed.py` (logic) —
+      for a target model: re-run `embed_document`+`pool_span` over each document's raw
+      text to refresh span vectors, and `embed_passages` over proposition texts (read
+      back from AGE); batched, idempotent (skip rows already on the target model),
+      commits per batch (durable/resumable). Substrate injected so it is testable
+      without a model download.
+- [x] **Tests:** both mismatch guards raise (span + proposition, integration); reembed
+      converges to all-rows-on-target-model and a second pass is a 0/0 no-op
+      (`test_embedding_model_identity.py`).
 
 ### G1.17 — Ingest robustness hardening *(review R1–R8 — one batch PR)*
 
@@ -465,9 +482,12 @@ more work than adding the slot now.
    temperature guard)**~~ — ✅ the two critical correctness fixes: `embed_document`
    refuses over-long documents (`DocumentTooLongError`); multi-sample clustering is
    polarity-partitioned with twin quarantine. Landed before Trial A5 threshold fitting.
-5. **G1.15 (prompt-hash cache key) + G1.16 (embedding-model column)** — ← **next**: two
-   small silent-staleness closures; G1.15 triggers one loud full re-extraction.
-6. **G1.18 (table payload in wire contract)** — while the MinerU wire schema is
+5. ~~**G1.15 (prompt/schema-hash cache key) + G1.16 (embedding-model identity)**~~ — ✅
+   two silent-staleness closures: the extraction cache key now hashes the actual prompt +
+   schema (no hand-bumped constant); dense rows carry their `model` with ingest guards
+   refusing a swap and `scripts/reembed.py` migrating the index. G1.15 triggers one loud
+   full re-extraction on first deploy.
+6. **G1.18 (table payload in wire contract)** — ← **next**: while the MinerU wire schema is
    still on a branch / before the service adapter hardens.
 7. **G1.13 slice 2 (windowed embedding)** — before the MinerU service starts
    feeding real multi-page PDFs.
@@ -503,5 +523,5 @@ more work than adding the slot now.
       auditable from the segment Action (G1.13).
 - [x] Mixed-polarity extractions can never report full agreement; a
       polarity-unstable span yields `provisional` propositions (G1.14).
-- [ ] A prompt-template edit alone invalidates the extraction cache (G1.15); an
+- [x] A prompt-template edit alone invalidates the extraction cache (G1.15); an
       embedding-model swap is refused, not silently mixed (G1.16).
