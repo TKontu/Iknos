@@ -22,8 +22,8 @@ bounding pieces (§5.2, §14, §13) — come *after* the node-creation substrate
 
 | ID | Increment | Depends on | State |
 |----|-----------|------------|-------|
-| **G2.1** | **Box operationalization** — the box registry + case box; the shared Box↔AGE serialization the loader and indexes write through | Phase 0 | **shipped (this increment)** |
-| G2.2 | `extract` operator core — proposition → `Fact` + `Actor`/`Object` nodes, `INVOLVES`(role) + `EVIDENCED_BY` edges, two annotations initialized, into a box, with an `Action`. **No dedup yet** (fresh nodes) | G2.1 | next |
+| **G2.1** | **Box operationalization** — the box registry + case box; the shared Box↔AGE serialization the loader and indexes write through | Phase 0 | shipped |
+| **G2.2** | **`extract` operator core** — proposition → `Fact` + `Actor`/`Object` nodes, `INVOLVES`(role) + `EVIDENCED_BY` edges, two annotations initialized, into a box, with an `Action`. **No dedup yet** (fresh nodes) | G2.1 | **shipped (this increment)** |
 | G2.3 | Entity resolution subsystem (§5.2) — scored `SAME_AS` components, cheap→expensive cascade, conservative under-merge default + `candidate` links, anchor-canonicalizes to taxonomy | G2.2 | planned |
 | G2.4 | Reference binding (§3.1) — detect `Mention`s separately from binding; scored `REFERS_TO` via the scoped cascade; low-confidence stays open → provisional → triage | G2.2 | planned |
 | G2.5 | `PART_OF` abstraction levels (§14) — anchor-first to the pack taxonomy, induce fallback, coverage policy; level *derived* from the subject-role referent | G2.2 (+ G2.3 anchoring) | planned |
@@ -136,3 +136,90 @@ override-allowed.
 - [x] Tier resolves from `Box` with an override hook (`resolve_tier`) for the `extract`
       operator (G2.2).
 - [x] Re-creating a box is a no-op that preserves the bitemporal `valid_from`.
+
+---
+
+## G2.2 — `extract` operator core *(shipped)*
+
+**Goal.** The `extract` operator (§6): turn a Phase-1 **Proposition** into a reasoning-graph
+**Fact** carrying its **Actor**/**Object** entities as *nodes* (§5/§10), wired with
+role-tagged `INVOLVES` and `EVIDENCED_BY` provenance, the **two annotations** initialized
+(§12), into a case box, with an `Action` (§10.1). The node-creation substrate every later
+Phase-2 slice builds on. **No entity dedup** (fresh nodes) — resolution is G2.3.
+
+### What shipped
+
+- **`iknos/core/extract.py`.** Pure/DB split on the `core/proposition.py` discipline:
+  - *Pure (DB- and LLM-free, unit-testable):* the `NodeKind`/`Role` enums (the entity
+    label and the `INVOLVES.role`, kept orthogonal); the guided-decode schema
+    (`_EntityOut`/`FactEntities`, defaults keep a bare `{"label": …}` valid); the prompt
+    (`SYSTEM_PROMPT`/`build_messages`, vocab generated from the same enums the schema is —
+    no drift); `seed_confidence`/`base_annotations` (the §12 seed); and **`fact_to_props`**,
+    the single canonical Fact→AGE write contract (cf. `box_to_props` for boxes).
+  - *`Extractor`:* the operator. Three-phase like `propositionize_document` (the shared
+    session is unsafe for concurrent use) — (1) serial idempotency filter against the
+    `Action` log, (2) concurrent entity inference holding no DB session (semaphore-bounded),
+    (3) serial per-fact persist, each its own short transaction. `extract_propositions`
+    (batch) + `extract_proposition` (the §6 per-node shape). Writes go through the shared
+    `merge_vertex`/`merge_edge` primitives, so the upsert discipline can't diverge.
+
+### Decisions
+
+- **Annotation seed (§12), not computation.** `support_count = 1` — a base fact is grounded
+  by exactly one piece of evidence (its `EVIDENCED_BY` proposition); when that support is
+  retracted the count drops to 0 (Layer A). `confidence` is seeded from the proposition's
+  **faithfulness** (the only calibrated [0,1] available at extraction), or `1.0` — the
+  Viterbi semiring identity, "no calibrated discount yet" — when no verifier ran. The real
+  Layer-B confidence is the Phase-3 fixpoint; extraction only fills the slot so "both
+  annotations from day one" holds. A `0.0` faithfulness is **not** swallowed by the `or`
+  fallback (`None`-check, unit-tested).
+- **Fresh nodes, no dedup.** Every mention becomes a new `Actor`/`Object` (no MERGE against
+  an existing entity, no `SAME_AS`). Entity resolution into components is G2.3; building it
+  here would couple the node substrate to the hardest, downstream-bounding piece (§5.2).
+- **One Fact per proposition, routing preserved by provenance.** This slice materializes a
+  Fact for every proposition; the §5 observation/judgement split ("a source's judgements are
+  re-derived, not ingested as facts") is **not** applied here. `epistemic_class`/`routing`
+  stay reachable via the `EVIDENCED_BY` Proposition (not duplicated onto the Fact), and
+  treating judgement-claims as defeasible/credibility-weighted is the reasoning layer's job
+  (Phase 3/4 + G2.6) — recorded as a seam, not silently dropped.
+- **Idempotency keyed on the proposition id.** A proposition with an existing `extractor`
+  `extract` Action is a true no-op (Action-table backed, mirroring `proposition._extracted_hash`).
+  Re-extraction under a *changed* entity pipeline (cascade) is deferred; this slice only
+  skips an already-extracted proposition.
+- **Distinct actor in the Action log.** `actor="extractor"` (vs the propositionizer's
+  `actor="propositionizer"`, both `action_type="extract"`) so the two extract passes never
+  collide on the idempotency query.
+
+### Deferred (kept out of the thin slice — documented seams)
+
+- **Entity resolution / dedup** (scored `SAME_AS` components, anchor canonicalization) → G2.3.
+- **Reference binding** (`Mention` → `REFERS_TO`) → G2.4.
+- **Source credibility & sensitivity seeding** onto the Fact (§9.1): the Fact's confidence is
+  seeded only from faithfulness (not box reliability) and its `sensitivity` is left at the
+  lattice origin (public). Both → G2.6.
+- **The §5 observation/judgement routing** of judgement propositions → Phase 3/4 + G2.6.
+- **AGE property indexes** (G0.R2): `INVOLVES.role`/`box` and the entity-label `id`/`box`
+  expression indexes the continuous resolution lookups need are the Phase-2 entry criterion,
+  not this slice.
+
+### Tests
+
+- **Unit (`tests/unit/test_extract.py`, DB-free):** schema defaults / full record; prompt
+  shape; the annotation seed (faithfulness passthrough, the `0.0`-not-swallowed guard, the
+  `None`→`1.0` identity, `support_count==1`, pair uncollapsed); `fact_to_props` flattening
+  (annotations, bitemporal null/open, sensitivity flat names, `override` omitted); and the
+  mocked-LLM inference path (kind/role mapping, **two mentions → two fresh nodes**, empty list).
+- **Integration (`tests/integration/test_extract.py`, live AGE):** end-to-end — Fact boxed +
+  tiered-from-box + annotations + statement; `Actor`/`Object` with role-tagged `INVOLVES`;
+  `EVIDENCED_BY` → Proposition *and* → Span resolving to source text (§10.2); the `extractor`
+  Action joinable by output id (§10.1); **idempotent re-run** (no new Fact, no LLM call); the
+  empty-entities Fact; and the batch driver skipping already-extracted propositions. (Runs in
+  CI; locally collected only when `DATABASE_URL` is set, per the integration conftest.)
+
+### Exit criteria (G2.2)
+
+- [x] A Proposition becomes a `Fact` with its `Actor`/`Object` nodes, `INVOLVES`(role) and
+      `EVIDENCED_BY` edges, both annotations, in the correct box and tier.
+- [x] Every created node/edge has a non-empty provenance path to `Span`(s) and a producing
+      `Action` (§10.1/§10.2).
+- [x] Re-extracting a proposition is a no-op (no duplicate Fact).
