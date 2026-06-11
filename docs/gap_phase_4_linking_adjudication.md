@@ -24,7 +24,7 @@ until the gate passes").
 | ID | Increment | Depends on | State |
 |----|-----------|------------|-------|
 | **G4.1** | **QBAF gradual-semantics adjudication core** — the semantics decision (DF-QuAD vs Quadratic Energy) + the pure `solve` engine (bounded fixpoint, non-convergence surfaced) + verdict banding / computed hypothesis state | Phase 3 Layer B (contract only) | **shipped (this increment)** |
-| G4.2 | **Candidate generation** (§5.1) — the cheap→expensive funnel: structural priors (shared `INVOLVES`, co-occurrence), embedding k-NN over pgvector, coarse-to-fine over §2 levels; tuned for recall early | Phase 1 embeddings, Phase 2 graph | planned |
+| G4.2 | **Candidate generation** (§5.1) — the cheap→expensive funnel: structural priors (shared `INVOLVES`, co-occurrence), embedding k-NN over pgvector, coarse-to-fine over §2 levels; tuned for recall early | Phase 1 embeddings, Phase 2 graph | **slice 1 shipped** (the recall-first funnel core + the structural-entity prior, `core/candidates.py`); embedding k-NN + coarse-to-fine + keyword co-occurrence planned |
 | G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | **slice 1 shipped** (the subjective-logic confidence-scoring core, `core/subjective_logic.py`); LLM judge + recalibration + AGE producer planned |
 | **G4.4** | **QBAF persistence adapter** — load the active `SUPPORTS`/`REFUTES` subgraph + hypothesis base scores (Layer B) from AGE → `BAF`; write the computed `acceptability` / `state` back to the `Hypothesis` node. The Phase-4 analogue of G3.4 | G4.1, Phase 2/3 adapters | **shipped (this increment)** |
 | G4.5 | **`corroborate` / `find-contradiction` operators + ensemble gate** (§7.2) — gather supporting/refuting evidence; `find-contradiction` as a first-class refuter generator; the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement) that authorises a persisted `refuted` flip; wires the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize` driver | G4.3, G4.4, G3.9 | planned |
@@ -124,6 +124,78 @@ bar). ruff + `ruff format` clean; mypy(`src/iknos`) clean (only the pre-existing
   algorithm for incrementally updating final strengths under graph change). Incrementality
   stops at Layer A's delta; the affected QBAF sub-region is recomputed in full (acceptable at
   investigation scale, §13). `solve` is that full recompute.
+
+## G4.2 — Candidate generation, slice 1: the recall-first funnel + the structural-entity prior
+
+**What shipped.** `core/candidates.py` — the cheap→expensive **blocking funnel** (§5.1) that
+decides *which `(evidence → hypothesis)` pairs to assess*, so the expensive §8 LLM judgment (G4.3)
+runs only on survivors instead of all-pairs `O(n²)`. This slice lands the **funnel core** + the
+**first cheap generator (stage 1, the structural-entity prior)**; the other cheap stages union in
+behind the same contract (seams below). Same pure/DB split as `core/qbaf_adapter.py` (pure value
+types + funnel/stage logic, DB only in the adapter's `async` methods, lazy `iknos.db.age` import).
+
+**1. The funnel-combination decision (G4.2's G4.1/G4.3-style fixture).** §5.1 mandates *recall
+early, precision late* — a missed candidate is a silent false negative (an edge never considered),
+a spurious one is just cheaply rejected at adjudication. The choice of how to **combine** the cheap
+generators is therefore made with a fixture *before* the funnel is trusted:
+
+- **`FunnelStrategy`** is the combine-operator-as-a-value (mirroring `GradualSemantics` / `Fusion`):
+  `UNION` (a pair *any* generator proposes survives, sources merged) vs `INTERSECT` (only pairs
+  *every* generator proposed). `funnel` is written **once, generic over it**; the default is swapped
+  at the seam, not branched on.
+- **Decision, recorded eyes-open: `DEFAULT_STRATEGY = UNION`.** The fixture
+  (`test_candidates.py::test_decision_fixture_…`) is the §5.1 **dissimilar-refuter problem**: a
+  refuting fact can be semantically *dissimilar* to the hypothesis it attacks, so embedding-NN
+  under-generates refutation candidates and biases the system toward finding support and missing
+  contradiction. The structural prior catches that refuter (it shares the hypothesis's entity);
+  **`INTERSECT` would drop it** (the embedding stage never proposed it), re-introducing exactly that
+  bias. So `UNION` is the conservative, recall-first default — *default to the operator that cannot
+  lose a true candidate; retain the other at the seam* (`INTERSECT`, a precision pre-filter for a
+  recall-saturated sub-domain), exactly parallel to the Layer-B (Gödel), QBAF (DF-QuAD) and fusion
+  (averaging) choices. Reversible — a value, not a branch.
+
+**2. The stage + the funnel.** `structural_entity_candidates` (the **near-free** stage 1, §5.1):
+two reasoning nodes sharing an `Actor`/`Object` via `INVOLVES` (role-agnostic co-occurrence) are a
+candidate, directed **evidence → hypothesis** (the schema direction a `SUPPORTS`/`REFUTES` edge
+would run, §5/§10). A `Candidate` is **unscored** (recall-first: no ranking, that is the §8 LLM
+stage's job) and carries provenance — which `CandidateSource`s proposed it + the `shared_entities`
+rationale the later *relative* judgment can rank within. `funnel(*generators, strategy=…)` merges
+all generators by `(evidence, hypothesis)` pair (unioning sources/entities), deterministically
+sorted (stable trace, §10).
+
+**3. The boundary.** `CandidateGenerationAdapter.generate` reads the active subgraph and runs the
+funnel — reusing the shared `load_active_box_ids` / `load_reasoning_nodes` / `load_hypothesis_ids`
+reads (the last **extracted** from `qbaf_adapter` this increment so the "current Hypothesis"
+definition is single-sourced across adjudication and candidate generation, mirroring the existing
+active-box / node-confidence de-dup). It partitions the active reasoning nodes into hypotheses (the
+targets) vs evidence (Fact/Conclusion), scopes the `INVOLVES` rows to that active universe (§9
+box-scoping carries through), and folds stage 1 through `funnel`.
+
+**Tests** (`tests/unit/test_candidates.py` DB-free, 12 new; `tests/integration/test_candidates.py`
+real AGE, 2 new). Unit: the decision fixture (union keeps the dissimilar refuter / intersect drops
+it), the structural prior (shared-entity pairing, no-shared→none, multi-entity→one candidate,
+evidence→hypothesis direction only, inactive-node ignore) and the funnel (source/entity merge,
+determinism, empty). Integration: `generate` proposes the entity-sharing pairs (the dissimilar
+refuter among them — the §5.1 recall guarantee), excludes the unrelated fact, and excludes a
+deprecated-box supporter (active-box scope). ruff + `ruff format` + mypy(`src/iknos`) clean (only
+the pre-existing `resolve.py` error remains); 607 unit tests pass.
+
+**Deferred (documented seams, not regressions) — the rest of G4.2:**
+
+- **Embedding nearest-neighbour (stage 2, the workhorse)** — each node's pgvector k-NN as
+  relatedness candidates; sublinear, reusing the dense index. Deferred because it needs the
+  cross-store read (the vectors live in relational `document_embeddings` / `proposition_embeddings`,
+  the nodes in AGE) + the span/proposition → reasoning-node tracing. Unions in as an
+  `EMBEDDING_KNN` `CandidateSource` without a contract change.
+- **Coarse-to-fine (stage 3)** — reuse the §2 multi-level chunk hierarchy as a pruning tree (match
+  coarse, descend within survivors). Needs the `partOf` level derivation (§14).
+- **Sparse/keyword co-occurrence** — the other half of stage 1 (the `PropositionLexicalIndex`);
+  a further `STRUCTURAL_KEYWORD` source that unions at the same seam.
+- **`find-contradiction` as a first-class refuter *generator*** — this slice is the structural
+  *half* of the dissimilar-refuter mitigation (pull by constituent entity); the dedicated
+  contradiction-search operator is G4.5.
+- **Conclusion-as-target** — slice 1 generates evidence → `Hypothesis`; pairing evidence against a
+  `Conclusion` target (also valid per §5) is an additive extension of the partition.
 
 ## G4.3 — Edge-judgment pipeline, slice 1: the subjective-logic confidence-scoring core
 

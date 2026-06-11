@@ -279,6 +279,24 @@ async def load_reasoning_nodes(session: object) -> list[NodeRow]:
     return rows
 
 
+async def load_hypothesis_ids(session: object) -> set[NodeId]:
+    """The ids of bitemporally-current ``Hypothesis`` nodes (§7.2, §10).
+
+    A shared AGE read like :func:`load_active_box_ids` / :func:`load_reasoning_nodes`: the QBAF
+    adapter uses it to pick the args that get a ``state``/verdict, and candidate generation
+    (``core/candidates.py``) uses it to pick the *targets* evidence is paired against — so the
+    "current Hypothesis" definition cannot diverge between adjudication and candidate generation.
+    """
+    from iknos.db.age import execute_cypher, unquote_agtype
+
+    rows = await execute_cypher(
+        session,  # type: ignore[arg-type]
+        "MATCH (h:Hypothesis) WHERE h.valid_to IS NULL RETURN h.id",
+        returns="hid agtype",
+    )
+    return {unquote_agtype(hid) for (hid,) in rows}
+
+
 class DerivationGraphAdapter:
     """Loads the active reasoning subgraph from AGE into an :class:`ActiveSubgraph`.
 
