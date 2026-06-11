@@ -2,7 +2,8 @@
 
 > **Status: COMPLETE.** All exit criteria met; the schema-widening gaps are tracked
 > and closed in `gap_phase_0_foundations.md` (G0.1–G0.8, merged PRs #11–#15), and the
-> post-merge review fix in `gap_phase_0_residual.md` (G0.R1, PR #16). The single
+> post-merge review fixes in `gap_phase_0_residual.md` (G0.R1, PR #16; G0.R2 — AGE
+> label indexes, migration 0007 — a Phase 2 entry criterion). The single
 > remaining unchecked item — `WITH RECURSIVE` + SCC detection — is **intentionally
 > deferred to Phase 3** (no consumer yet; the requirement is recorded on the Phase 3
 > reachability helper, see G0.8). Next work is Phase 1 (`gap_phase_1_ingest.md`,

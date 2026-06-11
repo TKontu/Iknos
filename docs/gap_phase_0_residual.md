@@ -13,7 +13,11 @@ the **confirmed issues** plus the candidates that were examined and dismissed
 
 ## Confirmed — open
 
-### G0.R2 — No property indexes on any AGE label table *(2026-06 review C3 — scale cliff before Phase 2)*
+*(none — G0.R2 closed; see below.)*
+
+## Confirmed — fixed
+
+### G0.R2 — No property indexes on any AGE label table *(2026-06 review C3 — scale cliff before Phase 2)* — **DONE**
 
 **Symptom.** Migrations 0001–0006 create relational indexes (actions, embeddings,
 lexical) but **zero indexes on AGE label tables**. AGE stores all vertex/edge
@@ -27,28 +31,44 @@ per corpus re-run as the table grows), and Phase 2 entity resolution runs
 *continuous* per-mention candidate lookups and `SAME_AS` component queries.
 §6 (storage) now states the requirement; this gap implements it.
 
-**Fix tasks (one migration + one verification test):**
+**Resolution (implemented — migration `0007_age_label_indexes` + verification test
+`tests/integration/test_age_label_indexes.py`).** The fix is shaped by what AGE's
+query planner *actually emits*, verified by `EXPLAIN` before writing any DDL — which
+overturned this gap's original index recipe:
 
-- [ ] Migration: for **each** vertex/edge label created in 0001/0004, add a btree
-      expression index on the `id` property access — e.g.
-      `CREATE INDEX ... ON iknos."Span" (agtype_access_operator(properties, '"id"'::agtype))`
-      — and on `"box"` for the labels queried box-scoped (Proposition, Fact, Span,
-      Actor, Object, …). Add GIN on `properties` for labels that get ad-hoc
-      filters (start with Proposition, Fact). Use the exact property-access
-      expression the `cypher()` query plans produce, or the index will exist and
-      never be used.
-- [ ] Bitemporal prep: expression indexes on `valid_from`/`valid_to` for the labels
-      that carry them today (Box, directPartOf/partOf edges).
-- [ ] **Verification test (integration, ephemeral DB):** `EXPLAIN (FORMAT JSON)`
-      through the *actual* `execute_cypher` call path for (a) MERGE-by-id, (b)
-      box-scoped MATCH — assert an Index Scan appears. Index existence is not index
-      use; the AGE SQL-wrapping has sharp edges, and this assertion is the point of
-      the task.
-- [ ] Gate: **merge before Phase 2 starts** (it is a Phase 2 entry criterion in
-      `todo_phase_2_graph_construction.md`); pair with the pulled-forward Trial C3
-      density benchmark (`todo_trials.md`).
+- **A property-map filter compiles to agtype containment, not property access.**
+  `MATCH (n {id: 'x'})` / `{box: 'b'}` plan as
+  `Filter: (n.properties @> '{"id": "x"}'::agtype)` — the `@>` operator, **not**
+  `agtype_access_operator(properties, '"id"')`. A btree on the access expression (this
+  gap's first guess) would exist and never be chosen. The operator that *is* used is
+  served by a **single GIN index on the whole `properties` column** per vertex label,
+  which therefore backs id-lookup, box-scoped MATCH, **and** ad-hoc property filters
+  at once — strictly better than one btree per property. Shipped for all 12 vertex
+  labels (`ix_<label>_props`).
+- **Edges join on the graphid endpoint columns.** An edge `MATCH`/`MERGE` resolves
+  endpoints via the vertex GIN, then joins the edge table on `r.start_id = a.id` /
+  `r.end_id = b.id` — plain graphid columns that take **btree** indexes. Shipped
+  `ix_<label>_start` / `ix_<label>_end` for all 13 edge labels; these are the indexes
+  the Phase 2 `SAME_AS` component walk and `partOf` roll-up traversal ride on. Edge
+  *property* GIN is deferred: `merge_edge` keys on endpoints+label (never a property
+  map), and box-scoped edge queries are Phase 4 — no realizing path today.
+- **Bitemporal as-of range indexes are deferred to their Phase 5 consumer.** There is
+  no reader of `valid_from`/`valid_to` until Phase 5 supersession and no defined as-of
+  query shape, so any range (`<`/`>`) index would be unverifiable now — and this
+  gap's own rule is "use the exact expression the plan emits, or the index is dead."
+  Containment/equality on those fields already rides the vertex GIN.
+- **Verification test asserts index *use*, not existence.** It runs
+  `EXPLAIN (FORMAT JSON)` through the real `cypher()` wrapper for (a) id-keyed MATCH,
+  (b) box-scoped MATCH, and (c) edge endpoint traversal, with `enable_seqscan = off`
+  to make usability deterministic regardless of row count, and asserts the expected
+  index name appears in the plan and no seq scan of the label heap remains. 8/8 pass;
+  up→down→up drift gate clean (38 indexes created/dropped); `alembic check` reports no
+  drift (the indexes live in schema `iknos`, excluded from autogenerate by
+  `env.py::_include_object`, so there is nothing to mirror in `db/orm.py`).
 
-## Confirmed — fixed
+**Gate.** Satisfies the Phase 2 entry criterion in
+`todo_phase_2_graph_construction.md`; pair with the pulled-forward Trial C3 density
+benchmark (`todo_trials.md`) when that runs.
 
 ### G0.R1 — `load_pack` rewrote `valid_from` on every reload *(idempotency / bitemporal integrity)* — **DONE**
 
