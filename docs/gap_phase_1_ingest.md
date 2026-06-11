@@ -275,10 +275,28 @@ integration test hand-creates them).
       *(Seam `persist_spans(layouts=...)` in place; populated once G1.0 lands.)*
 
 ### G1.10 — Multi-level spans + RAPTOR summaries (§2)
-- [ ] Length penalty as the **level knob** → multiple abstraction levels stored as
-      `Span` offset ranges with `level` (currently single-level).
-- [ ] Coarse levels as **summaries**, not just longer windows (RAPTOR-style upward
-      tree) — needed so §5.1 coarse-to-fine pruning has crisp parents.
+- [x] **Part A — multi-level offset spans (shipped).** Length penalty as the **level
+      knob** → multiple abstraction levels stored as `Span` offset ranges with `level`.
+      `core/segmentation.py`: `SegmentLevel` (frozen) + `default_level_policy()` (default
+      2 levels — fine + one coarse; the count is the list length, configured not coded)
+      + `SegmentationBackbone(levels=…)` + `segment_document_levels`, which pools/derives
+      the boundary signal **once** and runs the DP per level (embed once — §1/§2; only
+      penalty/`max_len` differ). `core/ingest.py`: `_ingest_parsed` persists every level
+      from the one embedding pass; `_segmented_hash` is per-`(document, level)` and each
+      level carries its own content hash + segment `Action`, so coarse levels are **purely
+      additive** (level 0 byte-identical; no forced resegmentation on deploy).
+      `SpanPersistResult.coarse` carries the coarse results; the finest level feeds the
+      proposition layer. Levels are independent granularities — strict containment/parent
+      links are Part B / Phase-2 `PART_OF` (G2.5). Tests: `test_segmentation.py`
+      (multi-level pure logic — policy, per-level params byte-identity, coarse-merges,
+      level-0 ↔ single-level agreement, degenerate/empty) + `test_ingest_layout.py`
+      (live-AGE multi-level persistence + per-level idempotency). *No production ingest
+      entrypoint constructs the segmenter yet (tests inject it); wire it to
+      `default_level_policy()` when that entrypoint lands.*
+- [ ] **Part B — RAPTOR summaries (deferred).** Coarse levels as **summaries**, not just
+      longer windows (RAPTOR-style upward tree) — needed so §5.1 coarse-to-fine pruning
+      has crisp parents. Adds ingest-time LLM cost; gated on the §2 "confirm it's worth
+      the pruning benefit before scaling" decision. Next increment after Part A.
 
 ### G1.11 — `box` on the indexes (cross-phase)
 - [ ] Add `box` to `proposition_embeddings` / `proposition_lexical_index` (today:

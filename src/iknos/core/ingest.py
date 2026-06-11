@@ -34,7 +34,7 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlalchemy import text
@@ -101,6 +101,12 @@ class SpanPersistResult:
     embedding_rows: int
     skipped: int  # whitespace / zero-vector spans, which carry no claims
     already_segmented: bool  # guard short-circuited; no writes were issued
+    # Coarse-level results (G1.10), set only on the finest result returned by an ``ingest_*``
+    # call when the segmenter has a multi-level policy. ``spans`` above is always the finest
+    # (level-0) set — the granularity the proposition layer extracts from; coarse spans persist
+    # for §5.1 coarse-to-fine pruning but are not propositionized. Empty for a single-level run
+    # and for the per-level results inside ``coarse`` themselves (no nesting).
+    coarse: tuple["SpanPersistResult", ...] = ()
 
 
 def split_sentences(text: str) -> list[dict[str, Any]]:
@@ -181,19 +187,25 @@ def _has_no_embedding(emb: list[float] | None) -> bool:
     return emb is None or all(c == 0.0 for c in emb)
 
 
-async def _segmented_hash(session: AsyncSession, document_id: uuid.UUID) -> str | None:
-    """The ``content_hash`` of this document's most recent segmentation, or ``None``.
+async def _segmented_hash(session: AsyncSession, document_id: uuid.UUID, level: int) -> str | None:
+    """The ``content_hash`` of this document's latest segmentation **at this level**, or ``None``.
 
     Action-table backed (single source of truth), mirroring
-    ``Propositionizer._extracted_hash`` (G1.7).
+    ``Propositionizer._extracted_hash`` (G1.7). The ``level`` filter (G1.10) makes the
+    resegmentation guard per-level, so persisting a coarse level does not collide with the
+    fine level's stored hash: each level has its own immutability identity. Existing
+    pre-G1.10 segment Actions already recorded ``inputs.level = 0``, so the level-0 lookup
+    is backward compatible. The partial index ``ix_actions_segment_document_id`` still serves
+    the ``document_id`` predicate; the ``level`` equality is a cheap residual filter.
     """
     row = await session.execute(
         text(
             "SELECT inputs->>'content_hash' FROM actions "
             f"WHERE actor = '{_ACTOR}' AND inputs->>'document_id' = :did "
+            "AND inputs->>'level' = :lvl "
             "ORDER BY timestamp DESC LIMIT 1"
         ),
-        {"did": str(document_id)},
+        {"did": str(document_id), "lvl": str(level)},
     )
     return row.scalar_one_or_none()
 
@@ -276,7 +288,7 @@ async def persist_spans(
             f"meaningless). Re-embed with scripts/reembed.py to migrate the index first."
         )
 
-    prior = await _segmented_hash(session, document_id)
+    prior = await _segmented_hash(session, document_id, level)
     if prior is not None and prior != content_hash:
         raise DocumentResegmentationError(
             f"document {document_id} was already segmented with different inputs "
@@ -458,34 +470,50 @@ async def _ingest_parsed(
 
     context = substrate.embed_document(raw_text)
     sentences = split_sentences(raw_text)
-    char_spans = segmenter.segment_document(sentences, context)
-    embeddings = [context.pool_span(start, end) for start, end in char_spans]
-    layouts = layouts_for_spans(char_spans, parse_result)
 
-    segmenter_params = {
-        "max_len": segmenter.max_len,
-        "penalty_weight": segmenter.penalty_weight,
-        "density_weight": segmenter.density_weight,
-    }
-    content_hash = span_content_hash(
-        raw_text,
-        segmenter_params=segmenter_params,
-        model=substrate.model_name,
-        parse_content_hash=parse_ch,
-        windowing=context.windowing_policy(),
-    )
+    # Multi-level segmentation (G1.10): one cached embedding pass → spans at every configured
+    # level. The level *count* is the segmenter's policy (default 2: fine + one coarse); a
+    # single-level segmenter yields exactly one level here, byte-identical to the pre-G1.10
+    # path. Each level persists independently (its own per-level content hash + segment Action),
+    # so coarse levels are purely additive — they never trip the finest level's resegmentation
+    # guard and never force a resegmentation of existing documents on deploy.
+    windowing = context.windowing_policy()
+    window_layout = context.window_layout()
+    level_segments = segmenter.segment_document_levels(sentences, context)
 
-    return await persist_spans(
-        session,
-        document_id,
-        char_spans,
-        embeddings,
-        content_hash=content_hash,
-        segmenter_params=segmenter_params,
-        model=substrate.model_name,
-        layouts=layouts,
-        window_layout=context.window_layout(),
-    )
+    results: list[tuple[int, SpanPersistResult]] = []
+    for lvl, char_spans in level_segments:
+        embeddings = [context.pool_span(start, end) for start, end in char_spans]
+        layouts = layouts_for_spans(char_spans, parse_result)
+        params = lvl.params()
+        content_hash = span_content_hash(
+            raw_text,
+            segmenter_params=params,
+            model=substrate.model_name,
+            parse_content_hash=parse_ch,
+            windowing=windowing,
+        )
+        result = await persist_spans(
+            session,
+            document_id,
+            char_spans,
+            embeddings,
+            content_hash=content_hash,
+            segmenter_params=params,
+            model=substrate.model_name,
+            level=lvl.level,
+            layouts=layouts,
+            window_layout=window_layout,
+        )
+        results.append((lvl.level, result))
+
+    # The finest level (lowest number) is what the proposition layer extracts from, so it is
+    # the returned result; coarser levels ride along under ``.coarse`` for observability. A
+    # degenerate document yields only the finest level (see segment_document_levels).
+    results.sort(key=lambda r: r[0])
+    finest_level, finest = results[0]
+    coarse = tuple(res for level, res in results if level != finest_level)
+    return replace(finest, coarse=coarse)
 
 
 async def ingest_document(

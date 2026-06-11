@@ -123,14 +123,26 @@ remaining Phase-1 cost/structure work. See `gap_phase_1_ingest.md` for the gap-p
       argmin.
 - [x] **DP segmentation** over sentence units: maximize intra-segment coherence minus a
       length penalty (no O(n²) position×size brute force).
-- [ ] Length penalty as the **level knob** → multiple abstraction levels (sub-paragraph
+- [x] Length penalty as the **level knob** → multiple abstraction levels (sub-paragraph
       … chapter) from one mechanism; store segments as `Span` offset ranges with
-      `level`. *(G1.10 — the `level` field exists, default 0; multi-level generation is
-      not yet wired.)*
+      `level`. *(G1.10 **Part A — shipped.** `SegmentationBackbone(levels=…)` takes a
+      configurable `list[SegmentLevel]` (the level **count is data**, not code);
+      `default_level_policy()` is the default 2-level policy — a fine level 0 + one
+      coarse level 1 (4× `max_len`, 1/5 penalty). `segment_document_levels` derives every
+      level from the **one** cached embedding pass (embed once — §1/§2); `_ingest_parsed`
+      persists each level under its own per-level content hash + segment `Action`, so
+      coarse levels are **purely additive** — level 0 stays byte-identical and no existing
+      document is force-resegmented on deploy. `_segmented_hash` is now per-`level`. The
+      finest level drives the proposition layer; coarse levels ride along under
+      `SpanPersistResult.coarse`. Levels are independent granularities — RAPTOR nesting
+      with parent links is Part B / Phase-2 `PART_OF`.)*
 - [x] Blend an information signal (entity/number density) into the objective so
       segments don't collapse onto redundant blobs.
 - [ ] Coarse levels as **summaries**, not just longer windows (RAPTOR-style upward
-      tree) — needed so §5.1 coarse-to-fine pruning has crisp parents. *(G1.10.)*
+      tree) — needed so §5.1 coarse-to-fine pruning has crisp parents. *(G1.10 **Part B**
+      — deferred; adds ingest-time LLM cost. Part A ships the multi-level offset spans;
+      summary generation + parent links is the next increment, gated on the §2 cost
+      decision "confirm it's worth the pruning benefit before scaling".)*
 
 ## Proposition layer (§3) — built (increment 3)
 
