@@ -10,7 +10,20 @@ Phases 0–2.
 **Architecture refs:** §10.1 (process action log), §10.2 (per-node auditability), §10.3
 (soft override + reconciliation), §6 (`app/`), principles 6, 8, 9.
 
-## Graph analysis view (`app/`, §6)
+## Entry criteria *(added by the 2026-06-11 review, M5)*
+
+- [ ] **`docs/design_app_stack.md` — the front-end stack decision.** Decide before
+      any `app/` code: framework (the flowsint pattern this phase borrows is
+      React-based — adopting it is the default to justify or refute), graph canvas
+      (Cytoscape.js / Sigma.js / React Flow — evaluated against the §6 "performant
+      on large graphs" requirement), state/streaming client for the §6 event stream,
+      and build tooling. License-check every candidate against principle 7
+      (permissive only). One recommendation, alternatives dismissed with reasons.
+- [ ] **Canvas performance spike.** Before committing to the chosen canvas: render a
+      synthetic graph at 10× expected investigation size (use the C3 benchmark
+      generator's shape) with expand/collapse + linked selection; record
+      frames/interaction latency in the design doc. This is the load-bearing
+      assumption of the whole view — measured, not hoped.
 
 - [ ] Interactive node-expansion canvas, performant on large graphs. **This is the
       node-edge *projection* — one of several coordinated views of the one graph (§14);

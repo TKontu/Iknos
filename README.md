@@ -4,7 +4,7 @@
 
 Iknos ingests arbitrary documents, extracts facts, derives conclusions and hypotheses, and links them with evidential edges (*supports* / *refutes*). Facts attach at their place in a domain's part-whole hierarchy, so the same network can be read at a management level or drilled to expert detail. The result is a knowledge network an expert can explore, audit back to source text, and correct — built for research, investigations, and root-cause analysis, across different domains.
 
-> **Status: pre-implementation.** This repository currently holds the architecture and design. The MVP is not yet built. See [`docs/architecture.md`](docs/architecture.md) for the full specification and [Roadmap](#roadmap) for the staged build. Install and usage instructions will follow the first working stage.
+> **Status: core pipeline built (Phases 0–4); validation gate next.** Ingest (parse front-end, windowed embedding, multi-level segmentation, faithfulness-hardened propositions), graph construction (boxes, extraction, entity resolution, reference binding, part-whole anchoring, conditional credibility), the two-layer reasoning core (truth maintenance + confidence), and evidence adjudication (candidate funnel, blind multi-sample edge judge, QBAF hypothesis state) run end-to-end on live Postgres + AGE. The next milestone is the **validation gate** — a planted-contradiction corpus plus a beat-the-baseline go/no-go (`docs/todo_trials.md`) — before any layer is hardened or Phases 5–7 start. See [`docs/architecture.md`](docs/architecture.md) for the full specification and [`docs/todo.md`](docs/todo.md) for plan status.
 
 ---
 
@@ -61,15 +61,16 @@ A result is never a bare answer: it is always the claim **plus its evidence subg
 
 The reasoning, confidence, and bias-handling layers above the database are bespoke — no off-the-shelf system packages this combination. That integration is the substance of the project.
 
-## Planned repository layout
+## Repository layout
 
-Mirrors the module split in the architecture (subject to change before first commit):
-
-- `types/` — the shared data model (the schema contract)
-- `core/` — orchestrator, truth-maintenance + confidence propagation, belief revision
-- `operators/` — the reasoning operators (extract, deduce, induce, corroborate, find-contradiction)
-- `api/` — service layer with real-time event streaming
-- `app/` — the graph analysis view (node expansion, audit, expert override)
+- `src/iknos/types/` — the shared data model (the schema contract: nodes, edges, epistemic fields, governance, intentional layer)
+- `src/iknos/core/` — the pipeline and reasoning code: embeddings, segmentation, propositionizer + verifier, extract/resolve/anchor/part-whole operators, Layer A/B propagation, QBAF + adapters, candidate funnel, edge judge/producer, ensemble gate
+- `src/iknos/db/` — AGE/Cypher helpers, ORM, sessions; `alembic/` — migrations (read `CI_MIGRATIONS.md` first)
+- `src/iknos/boxes/`, `src/iknos/domain/` — box registry/serde and domain packs
+- `src/iknos/provenance/` — action log + audit reach-back
+- `src/iknos/api/` — service layer (stub; grows in Phase 6 with real-time event streaming)
+- `app/` — the graph analysis view (Phase 7; stack decision pending)
+- `tests/` — unit (DB-free) + integration (live AGE+pgvector); `tests/fixtures/corpus/` — the anchored fixture corpus
 
 ## Roadmap
 
@@ -92,10 +93,10 @@ Tracked in [`docs/architecture.md`](docs/architecture.md) (Open items). The live
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — the authoritative design: principles, pipeline, schema contract, runtime loop, propagation model, auditability and expert-override mechanics, and the risk register. **Read this first** to contribute or extend; it is the source of truth and the README defers to it.
-- [`docs/todo.md`](docs/todo.md) — the staged development plan; each phase has a dedicated `docs/todo_phase_N_*.md` with tasks, dependencies, and exit criteria.
-- [`docs/todo_trials.md`](docs/todo_trials.md) — the trial & experiment plan (pre-implementation gates).
+- [`docs/todo.md`](docs/todo.md) — the staged development plan, the deferred-items trigger table, and the conventions for executing agents; each phase has a dedicated `docs/todo_phase_N_*.md` carrying its tasks, build record, and open work specs.
+- [`docs/todo_trials.md`](docs/todo_trials.md) — the trial & experiment plan: the validation-gate work breakdown (corpus, gold labels, harness, baselines) and gate infrastructure prerequisites.
 - [`docs/iknos-pipeline-reference.html`](docs/iknos-pipeline-reference.html) — a visual processing & data-flow reference.
-- **Gap plans** ([`docs/gap_phase_0_foundations.md`](docs/gap_phase_0_foundations.md), [`docs/gap_phase_1_ingest.md`](docs/gap_phase_1_ingest.md)) — code revisions to bring the already-implemented Phase 0/1 code in line with this revised plan.
+- [`docs/archive/`](docs/archive/) — superseded gap plans and review reports, preserved verbatim as the historical record (their open tasks and decisions were merged into the files above, 2026-06-11). Code docstrings citing a gap file by name resolve here.
 
 ## License
 

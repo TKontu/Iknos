@@ -133,6 +133,45 @@ before committing to the full build:
 **Do not harden any layer or start Phases 5–7 until the gate passes *and* E1 is go.** A
 failure here changes the design, not just the code.
 
+**Gate-asset status (2026-06-11 review, F1): the gate is now the critical path and
+none of its assets exist.** Phase 4's core shipped (G4.1–G4.5 slice 1); the next
+work is **not** further feature slices but the gate assets themselves: the planted
+corpus (V1), gold labels + second annotator (V2 — the longest-lead item in the
+project), the metrics harness (V3), and the E1 baseline rigs (V4–V6) — specs in
+`todo_trials.md`. The safety lockdown R8→R9→V7→V8 (quarantine + ensemble filter)
+must land before the remaining G4.5 slices — specs in
+`todo_phase_4_linking_adjudication.md` *Open task specs*. Gate infrastructure
+(R10/R11 out-of-process embeddings + job queue; R4/V9 ANN) lands before the trials
+run.
+
+## Deferred items — triggers (check on every slice PR)
+
+*(Added by the 2026-06-11 review, F3.)* A deferral recorded as prose with an
+implicit trigger gets missed when the triggering slice ships — it happened twice
+(quarantine enforcement and A0 scheduling). This table is the single place deferred
+items wait. **Rule: every slice PR checks this table and states in the PR body
+which triggers (if any) its change fires.** When a trigger fires, move the item
+into the owning phase/gap doc as an active task.
+
+| Deferred item | Recorded in | Trigger — re-open when… | Status |
+|---|---|---|---|
+| Quarantine enforcement (G1.6/R9) | `todo_phase_4_*.md` *Open task specs* | a `REFUTES` creation site exists | **FIRED** (G4.3 slice 3) → active as R8→R9→V7 |
+| Ensemble-gate-only `refuted` flip (§7.2) | `todo_phase_4_*.md` *Open task specs* (V8) | any consumer writes `Hypothesis.state` | **FIRED** (G4.4 `persist_verdicts`) → active as V8 |
+| pgvector ANN index + k-NN push-down | `todo_phase_4_*.md` *Open task specs* (R4/V9), `core/candidates.py` docstring | k-NN runs beyond working-set scale, or the gate measures recall | **FIRED** (gate is next) → active as R4→V9 |
+| Out-of-process embeddings + job queue (R10/R11) | `todo_trials.md` *Gate prerequisites* | first real multi-document corpus ingest | **FIRED** (V1 corpus is that ingest) → land before gate trials |
+| G1.10 Part B — RAPTOR summary levels | `todo_phase_1_ingest.md` *Open work* | coarse-to-fine candidate stage (§5.1 stage 3) or retrieval needs coarse levels | waiting |
+| G1.11 — box scoping on dense/sparse indexes | `todo_phase_1_ingest.md` *Open work* | first hybrid-retrieval consumer (Phase 6 `retrieve`) | waiting |
+| G1.19 — RRF rank fusion | `todo_phase_1_ingest.md` *Open work* | same trigger as G1.11 | waiting |
+| G1.12 — multi-span provenance | `todo_phase_1_ingest.md` *Open work* | a consumer needs >1 span per proposition | waiting (optional) |
+| G1.7 cascade re-extraction on stale spans | `todo_phase_1_ingest.md` *Open work* | a model/prompt change must purge-and-recreate in production | waiting |
+| G3.3 — clingo foundedness for recursion/negation | `todo_phase_3_reasoning_core.md` *Build record* | first negation/recursive rule producer (domain-pack rules) | waiting |
+| Bitemporal as-of range indexes | migration `0007` docstring | Phase 5 supersession reader defines the as-of query shape | waiting |
+| Per-model recalibration curve (identity until calibrated) | `todo_phase_4_*.md` status block | G4.6 produces calibration data | waiting (G4.6) |
+| `SignificancePolicy.tier_weight` (uniform 1.0) | `todo_phase_4_*.md` status block | G4.6 produces calibration data | waiting (G4.6) |
+| Pronoun/local-discourse binding stage (§3.1 cascade) | `todo_phase_2_*.md` *Deferred seams* (G2.4) | A5 measures binding accuracy and finds it binding | waiting |
+| Phase 2 deferred seams (per-increment list) | `todo_phase_2_*.md` *Deferred seams* | each names its owning phase — transplant when that phase starts | waiting |
+| Edge-property GIN indexes | migration `0007` docstring | a box-scoped *edge*-property query path exists | waiting |
+
 ## Cross-cutting tracks (run through every phase)
 
 - **Auditability & provenance** — every artifact traceable to source spans and the
@@ -161,10 +200,14 @@ failure here changes the design, not just the code.
 ## Open questions & risks
 
 Tracked in `architecture.md` Open items and §13. The live, build-time/empirical ones
-are surfaced in the phase that must resolve them. The **2026-06 review**
-(`review_2026-06_architecture_plan.md`) is folded into the plan as: G1.13–G1.19
-(`gap_phase_1_ingest.md`), G0.R2 (`gap_phase_0_residual.md`), Phase 2 entry criteria,
-the Phase 3 semiring decision, and the A0/C3/E1 scheduling deltas (`todo_trials.md`):
+are surfaced in the phase that must resolve them. All review findings (June 2026 and
+2026-06-11) are **fully folded into the plan**: shipped fixes are recorded in each
+phase file's *Build record*; open tasks live as specs in `todo_phase_4_*.md` (*Open
+task specs*), `todo_trials.md` (A0/E1 work breakdowns + *Gate prerequisites*), the
+Phase 6/7 entry criteria, the deferred-triggers table above, and the *Maintenance
+backlog* below. The original review/gap documents are preserved verbatim in
+`docs/archive/` (historical record only — not task trackers; code docstrings that
+cite a gap file by name resolve there):
 
 - Re-evaluation trigger policy (eager vs lazy) → Phase 5
 - LLM→QBAF weight mapping → Phase 4 + gate
@@ -177,3 +220,48 @@ the Phase 3 semiring decision, and the A0/C3/E1 scheduling deltas (`todo_trials.
 - LLM judging bias / correlated error → Phase 4 (disciplines) + Phase 7 (expert calibration loop)
 - Part-whole hierarchy acquisition quality (taxonomy anchor / meronymy / relative ordering) → Phase 2 + gate
 - Mixed-level frontier rendering (adaptive abstraction per audience/region) → Phase 6
+
+## Maintenance backlog *(opportunistic — no phase gate; merged from R12/V11)*
+
+- [ ] **R12 — Action metrics (observability floor).** Migration: `ALTER TABLE
+      actions ADD COLUMN metrics JSONB NOT NULL DEFAULT '{}'::jsonb`; `record_action`
+      accepts optional `metrics`. Populate from the instrumented paths:
+      `core/llm.py` returns usage (prompt/completion tokens) alongside the parsed
+      result; extract/verify Actions get `{duration_ms, prompt_tokens,
+      completion_tokens, n_samples, cache_hit}`; parse/segment Actions get
+      `{duration_ms, n_spans, n_skipped_whitespace}`. `time.monotonic()` deltas;
+      absent usage → keys omitted, never zeroed. Cost discipline (§6.1) and Trials
+      A/C consume these numbers.
+- [ ] **V11 — unit tests for untested infrastructure modules.** Check existing
+      coverage first (`test_age_cypher_map.py` covers `cypher_map` — don't
+      duplicate). Add: `test_age_cypher.py` (`_dollar_quote_tag` escalation incl. a
+      body containing the escalated tag; assembled statement has the tag exactly
+      twice, no bare `$$`; identifier validation — if graph-name validation is
+      missing, add the one-line guard with its test); `test_action_log.py` (record
+      construction: required fields, JSON-serializable payloads — extract a pure
+      `build_action` seam if the module is all-DB, behavior-identical);
+      `test_audit.py` (pure parts of reach-back assembly); `test_boxes_registry.py`
+      + `test_domain_loader.py` (serde round-trip; loader invariants on a minimal
+      in-memory pack; malformed-pack error); `test_config.py` (defaults without
+      env; env overrides; no DB on import). Pure where the module is pure;
+      integration tests keep owning round-trips; don't chase coverage into
+      ORM/type modules.
+
+## Conventions for executing agents *(applies to every task in every phase file)*
+
+- Run everything via the project venv: `.venv/bin/python` / `uv run` — never bare
+  `python3`.
+- Tests: `uv run pytest tests/unit -x` for unit; integration needs the ephemeral DB
+  (see `MIGRATIONS.md`); if you cannot run integration tests, say so — never claim
+  them green.
+- Do not start Docker containers without explicit approval.
+- One task per PR; reference the task id (G/R/V) in the PR body.
+- `architecture.md` is the source of truth; if a task seems to contradict it, stop
+  and report instead of improvising.
+- Migrations: set `down_revision` to the current head (`alembic heads`) — revision
+  numbers written inside older task specs are stale. Read `CI_MIGRATIONS.md` before
+  writing any migration (the AGE search_path hazard).
+- After ruff autofix, re-check that imports you added are still present (the
+  PostToolUse hook can strip an import whose use lands in a later edit).
+- Before starting any task, check the **deferred-items trigger table** above; state
+  in the PR body which triggers (if any) your change fires.

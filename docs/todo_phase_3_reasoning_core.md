@@ -50,7 +50,7 @@ re-aggregate. **G3.9** ships the composed-loop **termination driver**
 (`core/composed_loop.py::stabilize`): bounded iteration + oscillation detection that surfaces
 a non-converging region as a finding (the Phase-4 `REFUTES→A→B→QBAF` loop body wires into it).
 Still open: the clingo/SCC/persisted path (G3.3, needs a solver dep + the persisted layer).
-See `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
+See `archive/gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
 
 ## Layer A — truth maintenance over a commutative group (owns retraction)
 
@@ -210,3 +210,33 @@ See `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
   review A6): under `max-·`, "confidence" partly measures derivation depth. Decide
   the semiring with the fixture before Layer B exists; switching later re-scores
   every conclusion and invalidates any fitted band thresholds.
+
+## Build record & the G3.3 deferral *(merged from `archive/gap_phase_3_reasoning_core.md`, 2026-06-11; full decision records in `docs/archive/`)*
+
+G3.1–G3.2 and G3.4–G3.9 shipped: the Layer A definitional core (`RecomputeOracle`)
+and incremental engine (`IncrementalOracle` + DRed, diff-tested), the G3.5 semiring
+decision (**Gödel `max-min` default** — depth-neutral, matching the QBAF's ordinal
+use; Viterbi retained at the seam, decided with the depth-bias fixture *before*
+Layer B code existed), Layer B valuation (`core/confidence.py`), the Phase 2 adapter,
+`deduce`/`induce` operators, `SAME_AS`-component aggregation, and the composed-loop
+termination driver (`core/composed_loop.py::stabilize` — iteration bound +
+oscillation detection, unstable regions surfaced as findings).
+
+**G3.3 is deferred by design** *(trigger in `todo.md`)* — each part is gated on a
+prerequisite that does not exist:
+
+- **clingo/ASP for non-monotonic/stratified negation** — no producer of negation
+  rules exists (the `Derivation` model is positive Horn; `deduce`/`induce` emit only
+  positive derivations). Land it *with* its first producer (domain rules /
+  `find-contradiction`), extending the model with negative literals + a
+  stratification check then. The positive-Horn cyclic fragment is already correct
+  (G3.2 DRed + diff-test).
+- **SCC-scoped DRed** — a performance refinement, not correctness (current DRed
+  over-deletes a superset, correctly). Revisit only on a demonstrated gate-SLA miss.
+- **Persisted `WITH RECURSIVE` / DBSP** — the in-memory engine *is* the MVP
+  algorithm; persistence is a post-gate scale concern (Trial C2).
+
+Carried risks: well-founded support stays a must-pass deterministic test (grounded
+vs ungrounded cycle), discharged for positive Horn by DRed, by clingo under
+negation; the A→B seam (`SupportOracle` contract + `support_count`) is our
+synthesis — validate carefully (§13).

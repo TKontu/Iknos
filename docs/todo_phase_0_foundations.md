@@ -1,12 +1,12 @@
 # Phase 0 — Foundations & Data Model
 
 > **Status: COMPLETE.** All exit criteria met; the schema-widening gaps are tracked
-> and closed in `gap_phase_0_foundations.md` (G0.1–G0.8, merged PRs #11–#15), and the
-> post-merge review fixes in `gap_phase_0_residual.md` (G0.R1, PR #16; G0.R2 — AGE
+> and closed in `archive/gap_phase_0_foundations.md` (G0.1–G0.8, merged PRs #11–#15), and the
+> post-merge review fixes in `archive/gap_phase_0_residual.md` (G0.R1, PR #16; G0.R2 — AGE
 > label indexes, migration 0007 — a Phase 2 entry criterion). The single
 > remaining unchecked item — `WITH RECURSIVE` + SCC detection — is **intentionally
 > deferred to Phase 3** (no consumer yet; the requirement is recorded on the Phase 3
-> reachability helper, see G0.8). Next work is Phase 1 (`gap_phase_1_ingest.md`,
+> reachability helper, see G0.8). Next work is Phase 1 (`archive/gap_phase_1_ingest.md`,
 > starting G1.9 span persistence). Pydantic node projections for not-yet-needed labels
 > (Actor/Object/Hypothesis/Task/Mention) are deferred to their consuming phases by the
 > project's node-projection convention — the *label + property contract* is what Phase 0
@@ -39,7 +39,7 @@ provenance and audit plumbing in place from the start. Everything else builds on
 - [ ] Set up `WITH RECURSIVE` patterns for transitive reachability and **SCC detection**
       over `DERIVED_FROM` (well-founded-support retraction and cycle-safe handling later
       rely on this, §12). **→ Deferred to Phase 3** (no consumer in Phase 0; requirement
-      recorded on the Phase 3 reachability helper, see `gap_phase_0_foundations.md` G0.8).
+      recorded on the Phase 3 reachability helper, see `archive/gap_phase_0_foundations.md` G0.8).
 
 ## Schema contract (§10) — the authoritative data model
 
@@ -92,7 +92,7 @@ provenance and audit plumbing in place from the start. Everything else builds on
       **Schema addition (revised plan, §1/§10):** `Span` also carries an optional
       `layout {page, bbox}` for *visual* provenance (claim → region on the original
       page image). The field's only consumer is the Phase-1 parse front-end, so the
-      `types/nodes.py::Span` + ORM field-add is tracked with it — `gap_phase_1_ingest.md`
+      `types/nodes.py::Span` + ORM field-add is tracked with it — `archive/gap_phase_1_ingest.md`
       G1.0 / widened G1.9 — not retrofitted here.
 - [x] **Process action log** (`Action` table, append-only, §10.1): `id`, `timestamp`,
       `actor`, `action_type`, `inputs`, `outputs`, and the LLM fields (`model`,
@@ -125,3 +125,43 @@ provenance and audit plumbing in place from the start. Everything else builds on
 - AGE's openCypher is partial — validate the actual query patterns (neighbor fetch,
   box-scoped traversal, recursive closure) early; fall back to SQL where needed.
 - Lock naming/ID conventions now; downstream phases assume them.
+
+## Build record *(merged from `archive/gap_phase_0_foundations.md` / `archive/gap_phase_0_residual.md`, 2026-06-11; full rationale in `docs/archive/`)*
+
+All Phase 0 gaps closed (PRs #11–#16, #42). One-line record per item:
+
+- **G0.1** — `Tier` renamed to `schema/reference/case/working` (§9/§10), code-only.
+- **G0.2/G0.3** — `Mention` + `Task` vlabels and `REFERS_TO`, `SAME_AS`,
+  `directPartOf`/`partOf` (meronymy-typed, split per §14), `DECOMPOSES_INTO`,
+  `ADDRESSES`, `RELEVANT_TO` elabels (migration `0004`).
+- **G0.4** — `INVOLVES.role` (`Role` StrEnum); abstraction level is **derived, not
+  stored** (any depth/rank materialization is a cache, never authoritative).
+- **G0.5** — `AcceptabilityBand` + pure `band()` and `AnswerState`/`TaskType` in
+  `types/intentional.py`; Task is *answered*, Hypothesis is *adjudicated*.
+- **G0.6** — `sensitivity` (lattice + compartments, max-propagation rule documented)
+  and `Box.source_interest`; credibility is derived-not-stored (§9.1).
+- **G0.7** — domain-pack scaffold (`domain/{pack,loader}.py`, `packs/pump_basic.json`).
+- **G0.8** — `WITH RECURSIVE` + SCC detection deferred to Phase 3 with the
+  cycle-safety requirement recorded there (landed as G3.2 DRed).
+- **G0.R1** — packs immutable per version (`content_hash`, `PackImmutabilityError`);
+  `valid_from` is create-only on every box-write path (one shared serde,
+  `boxes/serde.py`, so the two box-write paths cannot diverge).
+- **G0.R2** — AGE label indexes (migration `0007`): **GIN on `properties`** per vertex
+  label + **btree on edge `start_id`/`end_id`**. The originally-proposed btree
+  expression indexes were overturned by `EXPLAIN`: AGE compiles property-map filters
+  to `@>` containment, which GIN serves and the expression index never would. The
+  verification test asserts index *use* through the real `cypher()` path, not
+  existence (`tests/integration/test_age_label_indexes.py`).
+
+**Reviewed and dismissed — do not re-raise** *(each was checked against code and
+confirmed not to realize; full analysis in `docs/archive/gap_phase_0_residual.md`)*:
+`SensitivityLevel` alphabetical `<` (ordering goes through `_SENSITIVITY_RANK`/`lub`,
+pinned by a characterization test); Cypher injection in `loader.py` (all free text
+flows through `cypher_map`; raw slots are UUID/ISO/constant only); `_merge_edge`
+endpoint no-op (caller MERGEs endpoints in the same transaction); `entity_types` as a
+JSON string property (round-trips; consumer parses); part-whole edges carrying only
+`valid_from` (contract requires the full quad only on `REFERS_TO`/`SAME_AS`);
+`HypothesisState` 3-way vs `AcceptabilityBand` 4-way (reconciled when Phase 4 wired
+the QBAF); `cypher_map` float formatting (revisit if a path persists floats outside
+`[0,1]` — Phase 4 persists `strength`/`significance`, both in `[0,1]`); pack-version
+loading not deprecating the old version (intended: per-investigation activation).
