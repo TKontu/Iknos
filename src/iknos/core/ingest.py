@@ -49,11 +49,18 @@ from iknos.core.parse import (
     layouts_for_spans,
     parse_content_hash,
 )
+from iknos.core.reference_corpus import (
+    ReferenceSealError,
+    document_input_sha256,
+    get_reference_seal,
+    seal_reference_document,
+    validate_sealable_tier,
+)
 from iknos.core.segmentation import SegmentationBackbone
 from iknos.db.orm import DocumentEmbedding
 from iknos.provenance.action_log import record_action
 from iknos.types.governance import Sensitivity
-from iknos.types.nodes import Span
+from iknos.types.nodes import Box, Span
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +114,23 @@ class SpanPersistResult:
     # for §5.1 coarse-to-fine pruning but are not propositionized. Empty for a single-level run
     # and for the per-level results inside ``coarse`` themselves (no nesting).
     coarse: tuple["SpanPersistResult", ...] = ()
+
+
+@dataclass(frozen=True)
+class ReferenceIngestResult:
+    """Outcome of a reference-corpus ingest (:func:`ingest_reference_document`, G1.8).
+
+    ``reused`` is the §6.1 amortization signal: ``True`` means the document was already
+    sealed into ``box_id`` with identical content, so the whole pipeline (embed → segment
+    → persist) was **skipped** and ``result`` is ``None`` (nothing was processed this
+    call — the persisted spans are already in the graph for every investigation to read).
+    ``False`` means this was the first ingest: ``result`` carries the fresh
+    :class:`SpanPersistResult` and the document is now sealed read-only.
+    """
+
+    box_id: uuid.UUID
+    reused: bool
+    result: SpanPersistResult | None
 
 
 def split_sentences(text: str) -> list[dict[str, Any]]:
@@ -602,3 +626,77 @@ async def ingest_document_bytes(
         title=title,
         source_uri=source_uri,
     )
+
+
+async def ingest_reference_document(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    raw_text: str,
+    substrate: EmbeddingSubstrate,
+    segmenter: SegmentationBackbone,
+    *,
+    box: Box,
+    title: str | None = None,
+    source_uri: str | None = None,
+) -> ReferenceIngestResult:
+    """Ingest a **reference-corpus** document **once**, read-only (§6.1 amortization, G1.8).
+
+    The reference counterpart to :func:`ingest_document`. A reference corpus (industry
+    knowledge, a domain pack's prose) is static, so §6.1 says process it **once** and reuse
+    it read-only across every investigation, rather than repaying the expensive embed/
+    segment/extract passes each time. This entry point makes that real:
+
+    - **First ingest** (no seal): create ``box`` (idempotent), run the full text pipeline
+      (:func:`ingest_document`'s path), then **seal** the document read-only into the box
+      (``core/reference_corpus.py``). ``box`` must be ``reference``/``schema`` tier — a
+      ``case``/``working`` box raises ``ValueError`` (those are the per-investigation
+      regime, ingested via :func:`ingest_document`).
+    - **Re-ingest, identical content** (seal matches): **skip the whole pipeline** — no
+      embedding, no segmentation, no writes — and return ``reused=True``. This is the
+      amortization: a later investigation pays *zero* to reuse the corpus. The short-circuit
+      happens **before** ``substrate.embed_document``, so the expensive pass is never repaid.
+    - **Re-ingest, changed content (or a different box)** under the same id: raise
+      ``ReferenceSealError``. A reference corpus is immutable per ``(id, content)`` — bump
+      the version / use a new id, exactly as a domain pack does — so entrenched reference
+      knowledge can never silently drift from what dependent conclusions cited.
+
+    Caller-owned transaction, like every ingest path: the spans **and** the seal commit
+    together, so a committed seal implies committed spans (the reuse short-circuit can trust
+    the seal without re-checking the graph).
+    """
+    from iknos.boxes.registry import create_box
+
+    # Up-front pure guard: refuse to amortize a per-investigation (case/working) box before
+    # touching the DB or the seal lookup.
+    validate_sealable_tier(box.tier)
+
+    input_sha256 = document_input_sha256(raw_text)
+    seal = await get_reference_seal(session, document_id)
+    if seal is not None:
+        if seal.box_id != box.id:
+            raise ReferenceSealError(
+                f"document {document_id} is already sealed into reference box {seal.box_id}, "
+                f"cannot re-seal into {box.id}. A reference document belongs to one corpus box."
+            )
+        if seal.input_sha256 != input_sha256:
+            raise ReferenceSealError(
+                f"reference document {document_id} was already sealed with different content "
+                f"(stored digest {seal.input_sha256[:12]}…, declared {input_sha256[:12]}…). A "
+                f"reference corpus is immutable — use a new document id or bump the corpus version."
+            )
+        # Identical content already sealed → §6.1 amortized reuse: skip the whole pipeline.
+        return ReferenceIngestResult(box_id=box.id, reused=True, result=None)
+
+    # First ingest: ensure the corpus box exists, run the pipeline, then seal read-only.
+    await create_box(session, box)
+    result = await ingest_document(
+        session,
+        document_id,
+        raw_text,
+        substrate,
+        segmenter,
+        title=title,
+        source_uri=source_uri,
+    )
+    await seal_reference_document(session, document_id, box, input_sha256=input_sha256)
+    return ReferenceIngestResult(box_id=box.id, reused=False, result=result)

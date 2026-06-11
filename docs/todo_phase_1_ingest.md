@@ -43,8 +43,12 @@ remains genuinely Phase-2-gated (no SUPPORTS/REFUTES creation site exists yet to
 matches a prior committed extraction anywhere (re-segmentation, shared boilerplate, an overlapping
 reference corpus) replays that extraction's propositions (re-embedded into new nodes, faithfulness
 copied, `reused_from` audit pointer) instead of re-running the LLM (`core/reuse.py` + the replay
-path in `Propositionizer`; index migration 0012). **G1.8 reference amortization** is the remaining
-Phase-1 cost work.
+path in `Propositionizer`; index migration 0012). **G1.8 reference amortization is now shipped** —
+a reference-corpus document ingests **once** into a reference/schema-tier box and is sealed
+read-only (`(:Document)-[:MEMBER_OF]->(:Box)`); a later investigation re-ingesting identical content
+skips the whole pipeline (no embed/segment) instead of repaying it, and a changed-content re-ingest
+fails loud (`core/reference_corpus.py` + `ingest_reference_document`). The remaining Phase-1 cost
+work is now the optional **G1.12** multi-span provenance.
 The **fixture corpus** (exit-criterion seed for the gate corpus / Trial A5) is now shipped —
 `tests/fixtures/corpus/` with a long multi-window anchor (G1.13), a polarity-waver anchor
 (G1.14), and observation/judgement routing anchors (G1.2), behind a typed model-free loader.
@@ -248,9 +252,26 @@ decision. See `gap_phase_1_ingest.md` for the gap-plan IDs.
       *semantic* output-shape marker. `schema_sha` is key-order-insensitive
       (`cache.canonical_json_sha256`). One-time loud full re-extraction on first deploy.
       *(Review A4.)*
-- [ ] **Amortize reference processing:** reference-corpus / domain-pack boxes are ingested
-      **once** and persisted read-only for reuse across investigations; only case
-      documents are processed per investigation (§9).
+- [x] **Amortize reference processing (G1.8) — shipped:** reference-corpus / domain-pack
+      boxes are ingested **once** and persisted read-only for reuse across investigations;
+      only case documents are processed per investigation (§9). *(`core/reference_corpus.py`
+      + `core/ingest.py::ingest_reference_document`.)* A reference document ingests into a
+      **reference/schema-tier** box (`reference_box` / registry create-or-noop) and is sealed
+      by a `(:Document)-[:MEMBER_OF]->(:Box)` edge carrying `{tier, sealed, input_sha256,
+      valid_from}` + a `seal-reference` Action; the seal keys on the document's own content
+      digest, not the parse/segment hash. **Amortization is real:** a re-ingest of identical
+      content short-circuits *before* `substrate.embed_document` (no embed, no segment, no
+      writes) and returns `reused=True` — content-addressed caching (G1.7) already no-op'd the
+      *writes* but still paid the embedding pass; the seal lets a later investigation pay zero
+      to reuse the corpus (§6.1 "amortized, not repaid"). **Read-only by construction:** a
+      changed-content re-ingest (or re-seal into a different box) raises `ReferenceSealError`
+      (mirrors `PackImmutabilityError` — bump the version / new id), and a `case`/`working`
+      box is refused up front (`validate_sealable_tier` → `ValueError`). Depends on G0.7
+      (shipped) + box tier (G2.1, shipped); no migration (new AGE edge label + node property
+      over the existing `actions` table). Tests: `tests/unit/test_reference_corpus.py` +
+      live-AGE `tests/integration/test_reference_corpus.py`. Seams (not this slice): a
+      bytes-in `ingest_reference_document_bytes` (trivial — keys on the same digest) and
+      box-scoped indexing of reference spans (G1.11, still gated on the ingest-box decision).
 
 ## Robustness hardening (G1.17, review R1–R8 — one batch PR) — ✅ shipped
 
@@ -301,10 +322,11 @@ decision. See `gap_phase_1_ingest.md` for the gap-plan IDs.
       propositions → dense + sparse indexes, all with retained span references.
 - [ ] Hybrid retrieval (dense + sparse), box-scoped, returns propositions with their
       source text resolvable.
-- [~] Re-ingesting an unchanged document hits the cache (no re-extraction); a static
+- [x] Re-ingesting an unchanged document hits the cache (no re-extraction); a static
       reference corpus is processed once and reused. *(Cache no-op + cross-document "extract once"
-      reuse are shipped (G1.7/G1.7b); the read-only reference-corpus amortization across
-      investigations is G1.8, still open.)*
+      reuse (G1.7/G1.7b) **and** the read-only reference-corpus amortization across
+      investigations (G1.8 — `ingest_reference_document` skips the whole pipeline on a sealed
+      re-ingest) are all shipped.)*
 - [x] A document longer than the embedding context ingests with **full** dense
       coverage — no silent truncation (G1.13 slice 2: windowed embedding). No zero
       vector reaches pgvector: `pool_span` now returns `None` for a no-token span and
