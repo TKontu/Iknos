@@ -172,8 +172,13 @@ See `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
       retracting the sole premise (stamp `valid_to`, reload via the adapter) drops the
       conclusion. The one-of-several exactness is the Layer A guarantee (G3.1
       `test_retracting_one_of_several_supports_keeps_conclusion`) the adapter now feeds.)*
-- [ ] **Well-founded support holds:** an ungrounded `DERIVED_FROM` cycle retracts fully
-      when its external base support is removed; a grounded cycle is kept.
+- [x] **Well-founded support holds:** an ungrounded `DERIVED_FROM` cycle retracts fully
+      when its external base support is removed; a grounded cycle is kept. *(G3.1/G3.2 — the
+      must-pass deterministic tests at the top of the Layer A section
+      (`test_ungrounded_cycle_is_unsupported`,
+      `test_cycle_retracts_fully_when_external_base_support_removed`,
+      `test_grounded_cycle_is_kept`); G3.4 now feeds the same graphs from real AGE so the
+      property holds on the persisted active subgraph too.)*
 - [~] Confidence is computed by Layer B and recomputed only on the affected sub-graph;
       an unfounded cycle never receives a confidence. *(G3.6 — computed by Layer B and the
       unfounded cycle gets no confidence; "only on the affected sub-graph" (incremental) is
