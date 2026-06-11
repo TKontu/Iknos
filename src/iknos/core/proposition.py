@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from iknos.core.cache import extraction_content_hash
+from iknos.core.cache import canonical_json_sha256, extraction_content_hash
 from iknos.core.consistency import (
     DEFAULT_AGREEMENT_THRESHOLD,
     Candidate,
@@ -121,10 +121,11 @@ class PropositionExtraction(BaseModel):
 
 EXTRACTION_SCHEMA = PropositionExtraction.model_json_schema()
 
-# Bump on any change that alters extractor output — the SYSTEM_PROMPT wording, the build_messages
-# template, the EXTRACTION_SCHEMA fields, or the epistemic enum sets interpolated into the prompt.
-# It is part of the G1.7 content-addressed cache key (core/cache.py): bumping it deliberately
-# invalidates every prior extraction so changed-prompt spans re-extract. Mirrors
+# A *semantic* version of the extractor's output shape. Since G1.15 it no longer carries cache
+# invalidation alone — `prompt_sha`/`schema_sha` (below) hash the *actual* prompt + schema, so a
+# reworded prompt or changed schema re-extracts even without a bump here. Keep bumping it for a
+# deliberate, human-legible "the output contract changed" marker (it stays in the cache key, and is
+# stored on the extract Action alongside the hash for debuggability). Mirrors
 # core/ingest.py::SEGMENT_SCHEMA_VERSION.
 EXTRACT_SCHEMA_VERSION = 1
 
@@ -193,6 +194,40 @@ def build_messages(context_text: str, target_text: str) -> list[dict[str, str]]:
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user},
     ]
+
+
+# Sentinels marking where the per-span CONTEXT/TARGET text goes when we render the prompt scaffold
+# for hashing (G1.15). They stand in for the variable content — already keyed separately as
+# context_text/target_text — so the digest covers only the *static* scaffold. NUL-wrapped so they
+# can never collide with real document text.
+_PROMPT_CONTEXT_SENTINEL = "\x00CONTEXT\x00"
+_PROMPT_TARGET_SENTINEL = "\x00TARGET\x00"
+
+
+def extractor_prompt_sha() -> str:
+    """SHA-256 of the *static* extractor prompt scaffold (G1.15, review A4).
+
+    Renders ``build_messages`` with fixed sentinels in the per-span slots and hashes the whole
+    message list, so the digest covers ``SYSTEM_PROMPT`` **and** the user-message template (the
+    ``CONTEXT:``/``TARGET:`` wrapper) while excluding the per-span text (which is keyed separately).
+    Any reword of the prompt or the scaffold moves this digest, invalidating the extraction cache
+    without anyone remembering to bump ``EXTRACT_SCHEMA_VERSION`` — the exact silent-staleness class
+    G1.7 set out to close. Computed from module constants, so it is pure and cheap.
+    """
+    scaffold = build_messages(_PROMPT_CONTEXT_SENTINEL, _PROMPT_TARGET_SENTINEL)
+    return canonical_json_sha256(scaffold)
+
+
+def extractor_schema_sha() -> str:
+    """SHA-256 of the canonical guided-decode schema (G1.15) — key-order-insensitive."""
+    return canonical_json_sha256(EXTRACTION_SCHEMA)
+
+
+# Computed once from the module-level prompt/schema constants. They are the G1.15 additions to the
+# content-addressed cache key (core/cache.py::extraction_content_hash): a prompt/schema edit changes
+# these even if EXTRACT_SCHEMA_VERSION is left untouched.
+EXTRACTOR_PROMPT_SHA = extractor_prompt_sha()
+EXTRACTOR_SCHEMA_SHA = extractor_schema_sha()
 
 
 class Propositionizer:
@@ -544,6 +579,10 @@ class Propositionizer:
             context_text=context_text,
             model=self.llm.model,
             schema_version=EXTRACT_SCHEMA_VERSION,
+            # G1.15: the rendered prompt + schema themselves, so a reworded prompt re-extracts
+            # without a manual EXTRACT_SCHEMA_VERSION bump.
+            prompt_sha=EXTRACTOR_PROMPT_SHA,
+            schema_sha=EXTRACTOR_SCHEMA_SHA,
             sampling=regime,
             verifier=verifier_sig,
         )
@@ -563,7 +602,14 @@ class Propositionizer:
         # orphan the old propositions (cascade re-extract is G1.7b). The hash is computed once here
         # and reused at persist time so the stored key can never drift from the decision it drove.
         verifier_sig = (
-            {"model": self.verifier.llm.model, "schema_version": self.verifier.SCHEMA_VERSION}
+            {
+                "model": self.verifier.llm.model,
+                "schema_version": self.verifier.SCHEMA_VERSION,
+                # G1.15: hash the verifier's actual prompt + schema too, so a reworded verifier
+                # re-derives faithfulness instead of replaying a stale verdict.
+                "prompt_sha": self.verifier.prompt_sha(),
+                "schema_sha": self.verifier.schema_sha(),
+            }
             if self.verifier is not None
             else None
         )

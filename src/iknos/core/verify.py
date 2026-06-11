@@ -18,6 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from iknos.core.cache import canonical_json_sha256, sha256_hex
 from iknos.core.llm import LLMClient
 from iknos.core.prompts import vocab
 from iknos.core.proposition import PropositionResult
@@ -51,10 +52,12 @@ class VerifyVerdict(BaseModel):
 
 VERIFY_SCHEMA = VerifyVerdict.model_json_schema()
 
-# Bump on any change that alters verifier output — the SYSTEM_PROMPT wording, the message
-# template, or the VERIFY_SCHEMA fields. Folded into the extraction cache key (G1.7) via the
-# verifier signature, so toggling/upgrading the verifier re-derives faithfulness instead of
-# silently serving the old verdict. Mirrors core/ingest.py::SEGMENT_SCHEMA_VERSION.
+# A *semantic* version of the verifier's output shape. Since G1.15 the verifier signature also
+# carries prompt_sha/schema_sha (Verifier.prompt_sha/schema_sha), so a reworded SYSTEM_PROMPT or
+# changed VERIFY_SCHEMA re-derives faithfulness without a bump here; keep bumping it for a
+# deliberate "verifier contract changed" marker (e.g. a user-template reword the prompt_sha does
+# not cover). Folded into the extraction cache key (G1.7) via the verifier signature. Mirrors
+# core/ingest.py::SEGMENT_SCHEMA_VERSION.
 VERIFY_SCHEMA_VERSION = 1
 
 
@@ -115,6 +118,23 @@ class Verifier:
             {"role": "system", "content": self.SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ]
+
+    def prompt_sha(self) -> str:
+        """SHA-256 of the verifier's instruction prompt (G1.15) — folded into the extractor's
+        cache key via the verifier signature.
+
+        Hashes ``SYSTEM_PROMPT``, where every grading instruction (and the interpolated enum
+        vocabulary) lives. The user message (:meth:`build_messages`) is pure field interpolation of
+        the proposition under test — it carries no wording that shifts the verdict independently of
+        the system prompt — so it is excluded; a reword of the instructions, the realistic
+        staleness case, moves this digest. ``VERIFY_SCHEMA_VERSION`` remains the manual lever for a
+        deliberate user-template change. Symmetric with the extractor's ``prompt_sha`` (G1.15).
+        """
+        return sha256_hex(self.SYSTEM_PROMPT)
+
+    def schema_sha(self) -> str:
+        """SHA-256 of the canonical verifier output schema (G1.15) — key-order-insensitive."""
+        return canonical_json_sha256(VERIFY_SCHEMA)
 
     async def verify_proposition(self, span_text: str, prop: PropositionResult) -> _VerifyOut:
         """One verify LLM call for one proposition. No DB access (concurrent-phase safe)."""

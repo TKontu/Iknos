@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from iknos.core.cache import canonical_json_sha256, sha256_hex
 from iknos.core.proposition import PropositionResult
 from iknos.core.verify import VERIFY_SCHEMA, Verifier, VerifyVerdict, _VerifyOut
 from iknos.types.epistemic import (
@@ -118,3 +119,20 @@ def test_system_prompt_lists_the_entailment_vocab() -> None:
     # Generated from the enum, never hand-typed (drift guard — guided decoding would hide it).
     for member in Entailment:
         assert member.value in Verifier.SYSTEM_PROMPT
+
+
+# --- G1.15: verifier prompt/schema hashes feed the extractor's cache key ---
+
+
+def test_verifier_prompt_sha_tracks_system_prompt() -> None:
+    v = Verifier(MagicMock())
+    h = v.prompt_sha()
+    assert len(h) == 64 and all(c in "0123456789abcdef" for c in h)
+    # Hashes the instruction prompt: the realistic staleness case (a reword of the grading
+    # instructions) moves the digest, re-deriving faithfulness instead of replaying a stale verdict.
+    assert h == sha256_hex(Verifier.SYSTEM_PROMPT)
+
+
+def test_verifier_schema_sha_is_canonical() -> None:
+    v = Verifier(MagicMock())
+    assert v.schema_sha() == canonical_json_sha256(VERIFY_SCHEMA)
