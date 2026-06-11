@@ -33,9 +33,15 @@ a document longer than the embedding context is embedded in overlapping macro-wi
 span pooled from the window where it sits furthest from an edge), so long documents ingest
 with full dense coverage instead of the slice-1 fail-loud refusal; the windowing policy folds
 into the segmentation content hash and the window layout is recorded on the segment Action.
-**G1.6 quarantine enforcement** (a Phase 2 *entry* item) is the new front of the queue. See
-`gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state below; not every box maps
-1:1 to a gap ID.)*
+**G1.17 robustness hardening** (R1–R7 — per-span error isolation + a `PropositionizeReport`,
+verifier-failure degradation, `pool_span`→`None` killing the zero-vector sentinel, parser/
+segmenter `actions` indexes, a per-LLM-call deadline, `EmbeddingSubstrate` lifecycle, and
+`cypher_map` property fuzzing) **is now shipped** — one batch hardening the ingest path against
+partial failure, hangs, and the hand-rolled escaping boundary. **G1.6 quarantine enforcement**
+remains genuinely Phase-2-gated (no SUPPORTS/REFUTES creation site exists yet to gate);
+**G1.7b cross-doc reuse / G1.8 reference amortization** and **G1.10 multi-level/RAPTOR** are the
+remaining Phase-1 cost/structure work. See `gap_phase_1_ingest.md` for the gap-plan IDs.
+*(Granular state below; not every box maps 1:1 to a gap ID.)*
 
 ## Document parsing — front-end (§1, Stage 0) — 🟡 contract + MinerU client shipped (G1.0/G1.0b)
 
@@ -218,22 +224,48 @@ into the segmentation content hash and the window layout is recorded on the segm
       **once** and persisted read-only for reuse across investigations; only case
       documents are processed per investigation (§9).
 
-## Robustness hardening (G1.17, review R1–R8 — one batch PR)
+## Robustness hardening (G1.17, review R1–R8 — one batch PR) — ✅ shipped
 
-- [ ] Per-span error isolation in the propositionizer (`gather` must not let one
-      flaky span/sample abort the document; failed spans recorded + resumable via
-      idempotency).
-- [ ] Verifier failure degrades to "verdict unavailable" (faithfulness/provisional
-      null, logged) instead of crashing the batch.
-- [ ] `pool_span` returns `None` for no-token spans — no zero-vector sentinel; no
-      zero vector can ever reach pgvector.
-- [ ] Partial functional `actions` indexes for parser/segmenter idempotency lookups
-      (migration 0006 covered only the propositionizer).
-- [ ] Per-LLM-call `asyncio.timeout` above the tenacity ceiling (a hung endpoint
-      must not hold a semaphore permit through full backoff).
-- [ ] `EmbeddingSubstrate` close()/context-manager lifecycle.
-- [ ] Property-based fuzz tests for `cypher_map` escaping (document text and LLM
-      output cross this hand-rolled boundary).
+- [x] **Per-span error isolation (R1)** in the propositionizer: Phase 2 inference and
+      Phase 3 persistence each isolate per span — one flaky span/sample no longer aborts
+      the document. `propositionize_document` returns a `PropositionizeReport`
+      (`action_ids` + `failed_spans{span_id, phase, error}`); a failed span records **no**
+      Action, so the next run re-extracts exactly it via the content-addressed idempotency
+      check (resume is free). Whole-document contract violations (`StaleExtractionError`,
+      `EmbeddingModelMismatchError`) stay fail-loud.
+- [x] **Verifier failure degrades, not crashes (R2):** a verify call that raises (endpoint
+      down past retries, unparseable/uncastable response) leaves `faithfulness`/`provisional`
+      null (the documented G1.1 degraded mode) and records `verifier_unavailable` on the
+      verify `Action` — never an exception mid-batch. A G1.14 twin's `provisional=True`
+      survives the degraded path.
+- [x] **`pool_span` returns `None` for no-token spans (R3)** — the zero-vector sentinel is
+      gone. `persist_spans` skips `None` (and, defense-in-depth, any all-zero vector via
+      `_has_no_embedding`); `segmentation` substitutes a zero vector for its *internal*
+      adjacency math only (never persisted) and emits one covering span if every sentence is
+      token-less; `reembed` leaves an anomalous `None`-pooling row off-target with a warning.
+      Invariant: no zero/None vector reaches pgvector.
+- [x] **Partial functional `actions` indexes (R4):** migration `0010` adds
+      `ix_actions_parse_document_id` / `ix_actions_segment_document_id`
+      (`(inputs->>'document_id')`, `timestamp DESC`, partial on actor) mirroring `0006`'s
+      propositionizer index — the parse/segment idempotency lookups are O(log n) again.
+      Mirrored in `db/orm.py`. Note in the migration: `actions` is append-only on the hot
+      path; table partitioning deferred until volume warrants.
+- [x] **Per-LLM-call deadline (R5):** `guided_complete` wraps the whole retrying call in an
+      `asyncio.timeout(call_timeout_s)` (config `LLM_CALL_TIMEOUT_S`, default 180 s, above
+      the tenacity backoff ceiling) — a hung endpoint is cancelled and its semaphore permit
+      released instead of starving the batch through full backoff.
+- [x] **`EmbeddingSubstrate` lifecycle (R6):** `close()` (idempotent; frees CUDA cache on
+      GPU) + context-manager support; docstring states a long-running worker holds **one**
+      instance, not one per document.
+- [x] **`cypher_map` fuzzing (R7):** property-based (`hypothesis`) tests of the escaping
+      logic — a string round-trips losslessly through the single-quoted Cypher literal and no
+      value can break out of it — plus a live-AGE round-trip over an adversarial corpus
+      (quotes, backslashes, agtype/JSON fragments, injection attempts, unicode). `cypher_map`
+      is now import-DB-free (`settings` lazy-imported in `cypher()` only) so the pure tests
+      need no `DATABASE_URL`. **The fuzz round-trip found a real injection:** a value
+      containing `$$` broke out of the SQL `cypher('graph', $$ … $$)` dollar-quote; `cypher()`
+      now uses a collision-proof `$iknosN$` tag (`_dollar_quote_tag`), closing the SQL-level
+      half of the boundary that `cypher_map` does not cover.
 
 ## Exit criteria
 
@@ -245,8 +277,9 @@ into the segmentation content hash and the window layout is recorded on the segm
       reference corpus is processed once and reused.
 - [x] A document longer than the embedding context ingests with **full** dense
       coverage — no silent truncation (G1.13 slice 2: windowed embedding). No zero
-      vector reaches pgvector: `persist_spans` skips `_is_zero_vector` spans today;
-      replacing the sentinel with `None` end-to-end is G1.17.
+      vector reaches pgvector: `pool_span` now returns `None` for a no-token span and
+      `persist_spans` skips it (G1.17 R3); the legacy zero-vector sentinel is gone, with
+      an all-zero check kept as defense-in-depth.
 - [x] Mixed-polarity extractions never report full agreement; polarity-unstable
       spans yield `provisional` propositions (G1.14).
 - [x] A prompt-template edit alone invalidates the extraction cache (G1.15); an

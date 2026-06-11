@@ -17,6 +17,7 @@ concurrently; each span's writes commit in their own short transaction.
 """
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
@@ -48,6 +49,8 @@ from iknos.types.epistemic import (
     route_for,
 )
 from iknos.types.nodes import Span
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # Imported under TYPE_CHECKING only: verify.py imports PropositionResult from here,
@@ -169,6 +172,34 @@ class PropositionResult:
     faithfulness: float | None = None
     provisional: bool | None = None
     agreement: float | None = None
+
+
+@dataclass(frozen=True)
+class FailedSpan:
+    """A span whose extraction (or persistence) raised, isolated so the run continues (G1.17 R1).
+
+    The error is stringified (not the live exception) so the report is a plain serializable value.
+    The span recorded **no** extract Action, so the next run's content-addressed idempotency
+    (Phase 1) sees no stored hash for it and re-extracts — resume is free, no bespoke retry queue.
+    """
+
+    span_id: uuid.UUID
+    phase: str  # "infer" | "persist" — where it failed
+    error: str
+
+
+@dataclass(frozen=True)
+class PropositionizeReport:
+    """Outcome of a document run: the extract Action ids, plus any spans that failed in isolation.
+
+    ``action_ids`` are the per-span extract Actions committed this run (empty on a full no-op
+    re-run). ``failed_spans`` is empty on a clean run; a non-empty list means the document is
+    *partially* ingested and a re-run will pick up exactly the failed spans via idempotency
+    (G1.17 R1).
+    """
+
+    action_ids: list[uuid.UUID]
+    failed_spans: list[FailedSpan]
 
 
 def span_text(raw_text: str, span: Span) -> str:
@@ -373,7 +404,7 @@ class Propositionizer:
         spans: list[Span],
         raw_text: str,
         inferred: list[tuple[int, list[PropositionResult]]],
-    ) -> list[tuple[int, list[PropositionResult], list["_VerifyOut"]]]:
+    ) -> list[tuple[int, list[PropositionResult], list["_VerifyOut | None"]]]:
         """Verify each inferred proposition against its source span (G1.4) and attach the
         derived faithfulness/provisional (G1.5).
 
@@ -381,15 +412,33 @@ class Propositionizer:
         *same* semaphore — each verify call acquires its own permit, so it never nests
         inside an extract permit (which would serialize throughput). Returns the results
         re-scored, paired with the raw verdicts for the verify Action.
+
+        **Verifier failure degrades, never crashes (G1.17 R2).** If one verify call raises
+        (endpoint down past retries, unparseable response, an enum that won't cast), that
+        proposition keeps ``faithfulness``/``provisional`` *null* — the documented degraded G1.1
+        mode — and its verdict slot is ``None`` so :meth:`_persist` logs the failure on the verify
+        ``Action`` instead of letting an exception abort the whole document's batch.
         """
         verifier = self.verifier
         assert verifier is not None  # only called when a verifier is configured
 
         async def verify_one(
             source: str, r: PropositionResult
-        ) -> tuple[PropositionResult, "_VerifyOut"]:
-            async with sem:
-                verdict = await verifier.verify_proposition(source, r)
+        ) -> tuple[PropositionResult, "_VerifyOut | None"]:
+            try:
+                async with sem:
+                    verdict = await verifier.verify_proposition(source, r)
+            except Exception as exc:
+                # Degraded mode (R2): no verdict → faithfulness/provisional stay as inferred
+                # (null, or provisional=True for a G1.14 twin). The proposition is still
+                # persisted; the failure is recorded on the verify Action by _persist.
+                logger.warning(
+                    "verifier unavailable for proposition %s (span %s): %s",
+                    r.id,
+                    r.span_id,
+                    exc,
+                )
+                return r, None
             verify_component = faithfulness_from_verdict(
                 verdict.entailment, verdict.polarity_preserved, verdict.modality_preserved
             )
@@ -406,7 +455,7 @@ class Propositionizer:
 
         async def verify_group(
             i: int, results: list[PropositionResult]
-        ) -> tuple[int, list[PropositionResult], list["_VerifyOut"]]:
+        ) -> tuple[int, list[PropositionResult], list["_VerifyOut | None"]]:
             source = span_text(raw_text, spans[i])
             pairs = await asyncio.gather(*(verify_one(source, r) for r in results))
             return i, [scored for scored, _ in pairs], [verdict for _, verdict in pairs]
@@ -461,7 +510,7 @@ class Propositionizer:
         context_span_ids: list[str],
         content_hash: str,
         results: list[PropositionResult],
-        verdicts: "list[_VerifyOut] | None" = None,
+        verdicts: "list[_VerifyOut | None] | None" = None,
         twins: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     ) -> uuid.UUID:
         """Persist one span's propositions + edges + indexes + Action in a single transaction.
@@ -564,13 +613,22 @@ class Propositionizer:
         # are no propositions to verify (empty span).
         if verdicts:
             assert self.verifier is not None
-            await record_action(
-                session,
-                actor="verifier",
-                action_type="verify",
-                inputs={"target_span": str(span_id), "propositions": prop_ids},
-                outputs={
-                    "verdicts": [
+            # A None verdict is a degraded-mode entry (G1.17 R2): the verifier was unavailable for
+            # that proposition, so faithfulness/provisional stayed null and the failure is recorded
+            # here (rather than crashing the batch) — the Action stays the faithfulness audit trail.
+            verdict_rows: list[dict[str, Any]] = []
+            for r, v in zip(results, verdicts, strict=True):
+                if v is None:
+                    verdict_rows.append(
+                        {
+                            "proposition": str(r.id),
+                            "verifier_unavailable": True,
+                            "faithfulness": r.faithfulness,
+                            "provisional": r.provisional,
+                        }
+                    )
+                else:
+                    verdict_rows.append(
                         {
                             "proposition": str(r.id),
                             "entailment": v.entailment,
@@ -580,9 +638,13 @@ class Propositionizer:
                             "faithfulness": r.faithfulness,
                             "provisional": r.provisional,
                         }
-                        for r, v in zip(results, verdicts, strict=True)
-                    ]
-                },
+                    )
+            await record_action(
+                session,
+                actor="verifier",
+                action_type="verify",
+                inputs={"target_span": str(span_id), "propositions": prop_ids},
+                outputs={"verdicts": verdict_rows},
                 model=self.verifier.llm.model,
                 sampling=self.verifier.sampling,
             )
@@ -620,8 +682,16 @@ class Propositionizer:
         document_id: uuid.UUID,
         spans: list[Span],
         raw_text: str,
-    ) -> list[uuid.UUID]:
-        """Run the full pipeline for one document. Returns the Action ids produced."""
+    ) -> PropositionizeReport:
+        """Run the full pipeline for one document.
+
+        Returns a :class:`PropositionizeReport` — the extract Action ids committed this run plus
+        any spans that failed *in isolation* (G1.17 R1): one span's extraction or persistence
+        raising no longer aborts the whole document. A failed span records no Action, so a re-run
+        re-extracts exactly it via the content-addressed idempotency check (Phase 1) — resume is
+        free. Whole-document contract violations (an embedding-model swap, a stale pipeline) stay
+        fail-loud below; only per-span *runtime* failures are isolated.
+        """
         # G1.16: fail fast before any LLM inference if this document already has proposition
         # vectors from a different embedding model — never mix two ANN spaces.
         await self._guard_embedding_model(session, document_id)
@@ -666,24 +736,43 @@ class Propositionizer:
         # concurrency. Same permit discipline as the verify fan-out below.
         sem = asyncio.Semaphore(self.concurrency)
 
+        # Per-span error isolation (G1.17 R1): each span's inference is wrapped so one flaky
+        # span (or one flaky sample within it) cannot abort the document. A failure is captured
+        # with its index and tagged onto the run report; the span is dropped from the downstream
+        # verify/persist phases and re-extracted on the next run (it recorded no Action).
+        failed_spans: list[FailedSpan] = []
+
         async def infer(
             i: int,
-        ) -> tuple[int, list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]]]:
-            results, twins = await self._infer_span(sem, spans, i, raw_text)
-            return i, results, twins
+        ) -> tuple[
+            int, list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]], BaseException | None
+        ]:
+            try:
+                results, twins = await self._infer_span(sem, spans, i, raw_text)
+                return i, results, twins, None
+            except Exception as exc:  # noqa: BLE001 — isolate; the span re-runs via idempotency
+                logger.exception("extraction failed for span %s; isolating", spans[i].id)
+                return i, [], [], exc
 
         inferred_raw = await asyncio.gather(*(infer(i) for i in pending))
+        ok_raw: list[tuple[int, list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]]]] = []
+        for i, results, twins, exc in inferred_raw:
+            if exc is not None:
+                failed_spans.append(FailedSpan(span_id=spans[i].id, phase="infer", error=str(exc)))
+            else:
+                ok_raw.append((i, results, twins))
+
         # Twins are carried alongside the per-span hash for persistence; the verify fan-out
         # below operates only on (index, results), so split them out here (G1.14).
         twins_by_index: dict[int, list[tuple[uuid.UUID, uuid.UUID]]] = {
-            i: twins for i, _, twins in inferred_raw
+            i: twins for i, _, twins in ok_raw
         }
-        inferred = [(i, results) for i, results, _ in inferred_raw]
+        inferred = [(i, results) for i, results, _ in ok_raw]
 
         # Phase 2b: independent verification (G1.4) — another DB-free LLM call, so it runs
         # in the concurrent phase under the same budget. Absent verifier → verdicts stay
         # None and faithfulness/provisional remain null (the documented degraded mode).
-        verified: list[tuple[int, list[PropositionResult], list[_VerifyOut] | None]]
+        verified: list[tuple[int, list[PropositionResult], list[_VerifyOut | None] | None]]
         if self.verifier is None:
             verified = [(i, results, None) for i, results in inferred]
         else:
@@ -692,21 +781,32 @@ class Propositionizer:
                 for i, results, verdicts in await self._verify_all(sem, spans, raw_text, inferred)
             ]
 
-        # Phase 3: serial persistence — one short transaction per span.
+        # Phase 3: serial persistence — one short transaction per span. Per-span isolation again
+        # (G1.17 R1): a write failure on one span rolls back *its* transaction and is recorded,
+        # leaving prior spans committed and later spans to proceed; the failed span re-runs next
+        # time (no Action committed for it). A poisoned-session abort of the whole batch is exactly
+        # what this prevents.
         action_ids: list[uuid.UUID] = []
         for i, results, verdicts in verified:
             context_spans, _ = build_context(spans, i, raw_text, self.context_window)
             context_ids = [str(s.id) for s in context_spans]
-            action_ids.append(
-                await self._persist(
-                    session,
-                    document_id,
-                    spans[i].id,
-                    context_ids,
-                    hash_by_index[i],
-                    results,
-                    verdicts,
-                    twins_by_index.get(i),
+            try:
+                action_ids.append(
+                    await self._persist(
+                        session,
+                        document_id,
+                        spans[i].id,
+                        context_ids,
+                        hash_by_index[i],
+                        results,
+                        verdicts,
+                        twins_by_index.get(i),
+                    )
                 )
-            )
-        return action_ids
+            except Exception as exc:  # noqa: BLE001 — isolate; roll back this span and continue
+                await session.rollback()
+                logger.exception("persist failed for span %s; isolating", spans[i].id)
+                failed_spans.append(
+                    FailedSpan(span_id=spans[i].id, phase="persist", error=str(exc))
+                )
+        return PropositionizeReport(action_ids=action_ids, failed_spans=failed_spans)

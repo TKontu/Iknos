@@ -315,6 +315,44 @@ async def test_verify_all_folds_in_agreement() -> None:
     assert results[0].provisional is True
 
 
+@pytest.mark.asyncio
+async def test_verify_all_degrades_on_verifier_failure() -> None:
+    # G1.17 R2: a verifier that raises (endpoint down past retries, unparseable response) must not
+    # crash the batch. The proposition keeps faithfulness/provisional null (the documented degraded
+    # G1.1 mode) and its verdict slot is None so _persist logs the failure on the verify Action.
+    doc = uuid.uuid4()
+    raw = "The rolling surface shows particle indentations."
+    spans = [_span(doc, 0, len(raw))]
+    p = _propositionizer_with_verifier(_verdict())
+    p.verifier.verify_proposition = AsyncMock(side_effect=RuntimeError("verifier endpoint down"))
+    inferred = [(0, [_result("The surface shows indentations.", spans[0].id, doc)])]
+
+    verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, inferred)
+
+    (i, results, verdicts) = verified[0]
+    assert results[0].faithfulness is None
+    assert results[0].provisional is None
+    assert verdicts == [None]
+
+
+@pytest.mark.asyncio
+async def test_verify_all_failure_preserves_twin_provisional() -> None:
+    # A polarity-unstable twin (G1.14) is already provisional=True before verify. If the verifier
+    # then fails (R2), the quarantine must survive — the degraded path must not clear it.
+    doc = uuid.uuid4()
+    raw = "The bearing failed."
+    spans = [_span(doc, 0, len(raw))]
+    p = _propositionizer_with_verifier(_verdict())
+    p.verifier.verify_proposition = AsyncMock(side_effect=RuntimeError("boom"))
+    twin = replace(_result("The bearing failed.", spans[0].id, doc), provisional=True)
+
+    verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, [(0, [twin])])
+
+    results = verified[0][1]
+    assert results[0].provisional is True
+    assert results[0].faithfulness is None
+
+
 # --- multi-sample extraction (G1.3) ---
 
 

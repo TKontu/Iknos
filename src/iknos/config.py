@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     llm_base_url: str = Field("http://192.168.0.247:8000/v1", alias="LLM_BASE_URL")
     llm_model: str = Field("", alias="LLM_MODEL")
 
+    # Hard wall-clock deadline for one guided_complete call *including* all tenacity retries
+    # (G1.17 R5). The retry policy bounds the backoff *waits* (~15 s), but a hung endpoint that
+    # never returns and never errors would otherwise hold its concurrency permit — starving the
+    # whole batch — for as long as the socket stays open. This outer asyncio.timeout is the
+    # backstop above that ceiling: a call exceeding it is cancelled and its permit released.
+    # Generous so a slow-but-healthy model is never cut off; the OpenAI client's own per-request
+    # timeout is the finer guard inside each attempt. Mirrors core/llm.py::DEFAULT_CALL_TIMEOUT_S.
+    llm_call_timeout_s: float = Field(180.0, alias="LLM_CALL_TIMEOUT_S")
+
     # Independent verifier endpoint for extract-then-verify (§3.1/§13, G1.4). A *different
     # model family* from the extractor cuts correlated error; it may be served by the same
     # vLLM on a different model id or by a separate server, so base_url and model are

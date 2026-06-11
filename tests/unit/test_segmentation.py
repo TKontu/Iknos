@@ -122,3 +122,48 @@ def test_segmentation_backbone():
     # The first span should start at 0, the last should end at 55.
     assert char_spans[0][0] == 0
     assert char_spans[-1][1] == 55
+
+
+def test_segmentation_tolerates_none_pooled_sentence():
+    # pool_span returns None for a token-less sentence (review R3). Segmentation must stay total:
+    # substitute a zero vector for the internal adjacency math (it never persists) and still
+    # produce spans covering the whole range.
+    class PartialContext:
+        def pool_span(self, start_char, end_char):
+            if start_char < 12:  # the first sentence pools to no token
+                return None
+            if start_char < 30:
+                return [1.0, 0.0]
+            return [0.0, 1.0]
+
+    sentences = [
+        {"text": "Sentence 1.", "start_char": 0, "end_char": 11},
+        {"text": "Sentence 2.", "start_char": 12, "end_char": 23},
+        {"text": "Sentence 3 has $10.", "start_char": 24, "end_char": 43},
+        {"text": "Sentence 4.", "start_char": 44, "end_char": 55},
+    ]
+
+    backbone = SegmentationBackbone(max_len=5, penalty_weight=0.1)
+    char_spans = backbone.segment_document(sentences, PartialContext())
+
+    assert len(char_spans) > 0
+    assert char_spans[0][0] == 0
+    assert char_spans[-1][1] == 55
+
+
+def test_segmentation_all_none_yields_one_covering_span():
+    # Fully degenerate input: every sentence pools to None → no signal to segment on → a single
+    # span covering the whole range, never a crash on a zero-dimension tensor (review R3).
+    class EmptyContext:
+        def pool_span(self, start_char, end_char):
+            return None
+
+    sentences = [
+        {"text": "a", "start_char": 0, "end_char": 1},
+        {"text": "b", "start_char": 2, "end_char": 3},
+    ]
+
+    backbone = SegmentationBackbone(max_len=5, penalty_weight=0.1)
+    char_spans = backbone.segment_document(sentences, EmptyContext())
+
+    assert char_spans == [(0, 3)]

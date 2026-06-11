@@ -9,7 +9,12 @@ offset-preserving sentence splitter.
 
 import uuid
 
-from iknos.core.ingest import span_content_hash, span_id_for, split_sentences
+from iknos.core.ingest import (
+    _has_no_embedding,
+    span_content_hash,
+    span_id_for,
+    split_sentences,
+)
 
 _PARAMS = {"max_len": 10, "penalty_weight": 0.1, "density_weight": 0.5}
 
@@ -112,3 +117,19 @@ def test_split_sentences_keeps_unterminated_tail() -> None:
     # A trailing fragment with no sentence-ending punctuation is still a sentence.
     sentences = split_sentences("Done. Trailing fragment")
     assert [s["text"] for s in sentences] == ["Done.", "Trailing fragment"]
+
+
+# --- no-embedding skip (review R3) ---
+
+
+def test_has_no_embedding_flags_none_and_zero_vector() -> None:
+    # None (the post-R3 pool_span signal) and a literal zero vector (the legacy sentinel) both
+    # mean "no usable dense vector" — persist_spans skips both so neither reaches pgvector.
+    assert _has_no_embedding(None) is True
+    assert _has_no_embedding([0.0, 0.0, 0.0]) is True
+    assert _has_no_embedding([]) is True  # vacuously all-zero — nothing to index
+
+
+def test_has_no_embedding_passes_real_vector() -> None:
+    assert _has_no_embedding([0.0, 0.1, 0.0]) is False
+    assert _has_no_embedding([1.0]) is False

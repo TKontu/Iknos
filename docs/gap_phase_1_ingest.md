@@ -54,8 +54,13 @@ offsets rebased to document-absolute at persistence; the 2-D structure now survi
 documents are embedded in overlapping macro-windows (each span pooled from the window where
 it is furthest from an edge), so they ingest with full dense coverage instead of slice 1's
 fail-loud refusal (which is now removed); the windowing policy folds into `span_content_hash`
-and the window layout is recorded on the segment Action. Next: G1.6 quarantine enforcement
-(a Phase 2 entry item), then G1.17 robustness batch.
+and the window layout is recorded on the segment Action. **G1.17 robustness hardening (R1–R7)
+is now shipped** — one batch: per-span error isolation + a `PropositionizeReport`,
+verifier-failure degradation, `pool_span`→`None` (zero-vector sentinel removed), parser/
+segmenter `actions` indexes (migration 0010), a per-LLM-call deadline, `EmbeddingSubstrate`
+lifecycle, and `cypher_map` property fuzzing. Next: **G1.6 quarantine enforcement** stays
+Phase-2-gated (no SUPPORTS/REFUTES creation site to gate yet), so the remaining Phase-1 work
+is **G1.7b cross-doc reuse / G1.8 reference amortization** and **G1.10 multi-level/RAPTOR**.
 
 ## Current implementation (baseline)
 
@@ -411,42 +416,50 @@ even detect* the condition.
       converges to all-rows-on-target-model and a second pass is a 0/0 no-op
       (`test_embedding_model_identity.py`).
 
-### G1.17 — Ingest robustness hardening *(review R1–R8 — one batch PR)*
+### G1.17 — Ingest robustness hardening *(review R1–R8 — one batch PR)* — ✅ shipped
 
-- [ ] **Per-span error isolation** (`core/proposition.py`): the span-level
-      `asyncio.gather` must not let one failing span (or one failing sample) abort
-      the document. Use `return_exceptions=True` (or a per-span try), record failed
-      spans `(span_id, error)` on the run result, continue, and let the next run
-      pick them up via idempotency — the content-addressed cache makes resume
-      cheap; lean on it.
-- [ ] **Verifier failure = verdict unavailable, not a crash:** a `None`/unparseable
-      verifier response leaves `faithfulness`/`provisional` null (the documented
-      degraded G1.1 mode) and logs the failure on the verify `Action`, instead of
-      surfacing an enum-cast exception mid-batch.
-- [ ] **Kill the zero-vector sentinel** (`core/embeddings.py::pool_span`): return
-      `None` for no-token spans instead of `[0.0]*hidden`; update callers to skip
-      explicitly. Invariant after this: **no zero vector can reach pgvector** (the
-      sentinel currently relies on every caller remembering to check — and G1.13's
-      truncated spans took this same path).
-- [ ] **Action-lookup indexes:** partial functional indexes on
-      `actions((inputs->>...), timestamp DESC)` for the parser and segmenter
-      idempotency lookups, mirroring migration `0006` (which covered only
-      `actor='propositionizer'`). Note in the migration that `actions` is
-      append-only and on the hot path of every ingest decision; partitioning is
-      deferred until volume warrants.
-- [ ] **Overall per-call deadline:** wrap each LLM/verifier call in
-      `asyncio.timeout` slightly above the tenacity retry ceiling so a hung
-      endpoint cannot hold a semaphore permit through ~5×30 s of backoff and starve
-      the batch.
-- [ ] **`EmbeddingSubstrate` lifecycle:** add `close()` / context-manager support
-      releasing model + tokenizer; document that long-running workers hold one
+- [x] **Per-span error isolation** (`core/proposition.py`, R1): Phase 2 inference and
+      Phase 3 persistence each wrap per span, so one failing span (or one failing sample)
+      no longer aborts the document. `propositionize_document` returns a
+      `PropositionizeReport(action_ids, failed_spans)`; a failed span records **no** extract
+      Action, so the next run re-extracts exactly it via the content-addressed idempotency
+      check (resume is free — the cache carries it). `StaleExtractionError` /
+      `EmbeddingModelMismatchError` stay whole-document fail-loud (Phase 1).
+- [x] **Verifier failure = verdict unavailable, not a crash (R2):** a verify call that
+      raises (endpoint down past retries, unparseable/uncastable response) leaves
+      `faithfulness`/`provisional` null (the degraded G1.1 mode) and records
+      `verifier_unavailable` on the verify `Action`; a G1.14 twin's `provisional=True`
+      survives. `_verify_all` returns `_VerifyOut | None` per proposition.
+- [x] **Kill the zero-vector sentinel** (`core/embeddings.py::pool_span`, R3): returns
+      `None` for a no-token span. `persist_spans` skips `None` (and any all-zero vector via
+      `_has_no_embedding`, defense-in-depth); `segmentation` substitutes a zero vector for
+      its internal adjacency math only and emits one covering span if every sentence is
+      token-less; `reembed` leaves an anomalous `None`-pooling row off-target with a warning.
+      Invariant upheld: **no zero/None vector reaches pgvector**.
+- [x] **Action-lookup indexes (R4):** migration `0010` adds partial functional indexes
+      `ix_actions_parse_document_id` / `ix_actions_segment_document_id`
+      (`(inputs->>'document_id')`, `timestamp DESC`, partial on `actor`), mirroring `0006`.
+      Mirrored in `db/orm.py`; migration notes `actions` is append-only on the hot path,
+      partitioning deferred until volume warrants.
+- [x] **Overall per-call deadline (R5):** `LLMClient.guided_complete` wraps the whole
+      retrying call in `asyncio.timeout(call_timeout_s)` (config `LLM_CALL_TIMEOUT_S`,
+      default 180 s — above the tenacity backoff ceiling), so a hung endpoint is cancelled
+      and its semaphore permit released rather than starving the batch through full backoff.
+- [x] **`EmbeddingSubstrate` lifecycle (R6):** `close()` (idempotent; frees CUDA cache on
+      GPU) + `__enter__`/`__exit__`; docstring states a long-running worker holds **one**
       instance, not one per document.
-- [ ] **`cypher_map` fuzzing** (`db/age.py`): property-based tests (hypothesis)
-      round-tripping hostile strings — quotes, backslashes, unicode escapes,
-      agtype-syntax fragments — through `cypher_map` → AGE → read-back. Document
-      text and LLM output flow through this hand-rolled escaping at an adversarial
-      trust boundary; prefer AGE prepared-statement params where the call path
-      allows.
+- [x] **`cypher_map` fuzzing (R7):** `hypothesis` property tests of the escaping logic
+      (lossless round-trip through the single-quoted Cypher literal; no value can break out)
+      + a live-AGE round-trip over an adversarial corpus (quotes, backslashes, agtype/JSON
+      fragments, injection attempts, unicode). `db/age.py` now imports DB-free — `settings`
+      is lazy-imported inside `cypher()` only — so the pure tests need no `DATABASE_URL`.
+      **The fuzz round-trip caught a real second-layer injection:** the SQL wrapper
+      `cypher('graph', $$ … $$)` used a fixed `$$` dollar-quote, so a property value containing
+      `$$` (LaTeX math, raw `$$` in document text / LLM output) closed the quote early and
+      injected raw SQL. Fixed: `cypher()` now picks a **collision-proof** `$iknosN$` tag absent
+      from the body (`_dollar_quote_tag`) — `cypher_map` escaping handles the Cypher level, the
+      tag handles the SQL level. AGE prepared-statement params remain impossible in the Cypher
+      body, so the escaping boundary stays — now fuzzed *and* hardened at both layers.
 
 ### G1.18 — Structured table payload in the parse wire contract (§1 rule a) *(review A1)* — ✅ shipped
 
@@ -534,9 +547,13 @@ more work than adding the slot now.
    macro-windows with full dense coverage (each span pooled from its most-interior window);
    windowing policy folds into `span_content_hash`, window layout recorded on the segment
    Action; slice 1's fail-loud ceiling removed. Single-window path byte-identical.
-8. **G1.6 quarantine enforcement** — ← **next**: stakes gating (G1.6 flag is set per node;
-   edge-time enforcement gated on Phase 2 — make it a Phase 2 *entry* item).
-9. **G1.17 robustness batch** — one hardening PR.
+8. ~~**G1.17 robustness batch**~~ — ✅ one hardening PR: per-span isolation (R1),
+   verifier-failure degradation (R2), `pool_span`→`None` (R3), parser/segmenter `actions`
+   indexes (R4, migration 0010), per-call deadline (R5), substrate lifecycle (R6),
+   `cypher_map` fuzzing (R7).
+9. **G1.6 quarantine enforcement** — stakes gating; **still Phase-2-gated** (the `provisional`
+   flag is set per node, but no SUPPORTS/REFUTES creation site exists yet to gate at). A Phase 2
+   *entry* item — land it when evidential edges are first created.
 10. **G1.7b cross-doc reuse** + **G1.8 reference amortization** — remaining cost work.
 11. **G1.10 multi-level/summaries**, **G1.11 box**, **G1.12 multi-span**,
     **G1.19 RRF fusion** — incremental, some gated on Phase 2.
