@@ -116,8 +116,9 @@ async def test_proposition_layer_end_to_end(session: AsyncSession) -> None:
         n_vectors=2,
     )
 
-    action_ids = await p.propositionize_document(session, doc_id, [ctx_span, tgt_span], raw)
-    assert len(action_ids) == 2  # one Action per span (the context span yields the same mock)
+    report = await p.propositionize_document(session, doc_id, [ctx_span, tgt_span], raw)
+    assert len(report.action_ids) == 2  # one Action per span (context span yields the same mock)
+    assert report.failed_spans == []
 
     # --- Propositions are walkable: Proposition -> EVIDENCED_BY -> target Span -> source text ---
     rows = await execute_cypher(
@@ -163,7 +164,8 @@ async def test_proposition_layer_end_to_end(session: AsyncSession) -> None:
     # --- Idempotency: a second run is a no-op (Action-based skip) ---
     llm_before = p.llm.guided_complete.await_count
     again = await p.propositionize_document(session, doc_id, [ctx_span, tgt_span], raw)
-    assert again == []
+    assert again.action_ids == []
+    assert again.failed_spans == []
     assert p.llm.guided_complete.await_count == llm_before  # no new inference
     dense_after = await session.execute(
         text("SELECT count(*) FROM proposition_embeddings WHERE document_id = :d"),
@@ -513,3 +515,99 @@ async def test_verifier_absent_leaves_faithfulness_null(session: AsyncSession) -
         {"sid": str(span.id)},
     )
     assert no_verify.scalar_one() == 0
+
+
+# --- G1.17 R1: per-span error isolation + resume ---
+
+
+async def _seed_two_span_doc(
+    session: AsyncSession, raw: str, a_end: int
+) -> tuple[uuid.UUID, Span, Span]:
+    """A document with two adjacent spans [0, a_end) and [a_end+1, len)."""
+    doc_id = uuid.uuid4()
+    await session.execute(
+        text("INSERT INTO document_content (document_id, raw_text) VALUES (:id, :t)"),
+        {"id": doc_id, "t": raw},
+    )
+    await execute_cypher(session, f"CREATE (:Document {cypher_map({'id': str(doc_id)})})")
+    span_a = Span(id=uuid.uuid4(), document_id=doc_id, start=0, end=a_end)
+    span_b = Span(id=uuid.uuid4(), document_id=doc_id, start=a_end + 1, end=len(raw))
+    for s in (span_a, span_b):
+        await execute_cypher(
+            session,
+            "CREATE (:Span "
+            + cypher_map(
+                {"id": str(s.id), "document_id": str(doc_id), "start": s.start, "end": s.end}
+            )
+            + ")",
+        )
+    await session.commit()
+    return doc_id, span_a, span_b
+
+
+def _failing_propositionizer(fail_marker: str) -> Propositionizer:
+    """An extractor that raises on any span whose TARGET text contains ``fail_marker`` and
+    returns one proposition otherwise — to exercise per-span isolation (G1.17 R1)."""
+    llm = MagicMock()
+    llm.model = "test-model"
+
+    async def _guided(messages: list[dict], schema: dict, sampling: dict | None = None) -> dict:
+        target = messages[1]["content"]
+        if fail_marker in target:
+            raise RuntimeError("extractor exploded on this span")
+        return {"propositions": [{"text": "Persisted proposition."}]}
+
+    llm.guided_complete = AsyncMock(side_effect=_guided)
+    substrate = MagicMock()
+    substrate.model_name = "BAAI/bge-m3"
+    substrate.embed_passages = MagicMock(side_effect=lambda texts: [[0.1] * 1024 for _ in texts])
+    return Propositionizer(llm, substrate, context_window=8, concurrency=4)
+
+
+async def _props_on(session: AsyncSession, span: Span) -> list:
+    return await execute_cypher(
+        session,
+        f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span.id)})}) "
+        "RETURN p.id",
+        returns="id agtype",
+    )
+
+
+async def test_failed_span_is_isolated_and_resumable(session: AsyncSession) -> None:
+    """G1.17 R1: one span whose extraction raises does not abort the document — the healthy
+    span commits, the failure is reported, and a later run re-extracts exactly the failed span
+    via the content-addressed idempotency check (it recorded no Action)."""
+    await bootstrap_session(session)
+    raw = "Alpha fact here. Beta fact here."
+    doc_id, span_a, span_b = await _seed_two_span_doc(session, raw, a_end=16)
+
+    report = await _failing_propositionizer("Beta").propositionize_document(
+        session, doc_id, [span_a, span_b], raw
+    )
+
+    # The healthy span committed; the failing span is isolated and reported, not raised.
+    assert len(report.action_ids) == 1
+    assert len(report.failed_spans) == 1
+    assert report.failed_spans[0].span_id == span_b.id
+    assert report.failed_spans[0].phase == "infer"
+    assert len(await _props_on(session, span_a)) == 1
+    assert await _props_on(session, span_b) == []
+
+    # The failed span recorded no extract Action — so the next run treats it as never-extracted.
+    b_actions = await session.execute(
+        text(
+            "SELECT count(*) FROM actions "
+            "WHERE actor = 'propositionizer' AND inputs->>'target_span' = :sid"
+        ),
+        {"sid": str(span_b.id)},
+    )
+    assert b_actions.scalar_one() == 0
+
+    # Resume: a healthy run re-extracts only span_b (span_a no-ops via idempotency).
+    resume = _mock_propositionizer(
+        llm_return={"propositions": [{"text": "Beta now persists."}]}, n_vectors=1
+    )
+    report2 = await resume.propositionize_document(session, doc_id, [span_a, span_b], raw)
+    assert len(report2.action_ids) == 1  # only span_b was pending
+    assert report2.failed_spans == []
+    assert len(await _props_on(session, span_b)) == 1

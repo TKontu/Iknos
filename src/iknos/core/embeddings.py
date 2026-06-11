@@ -151,10 +151,6 @@ class DocumentContext:
         self._windowing = windowing
         return self
 
-    @property
-    def _hidden(self) -> int:
-        return self._windows[0].token_embeddings.shape[-1]
-
     def windowing_policy(self) -> dict[str, Any]:
         """The **policy** that produced this context (overlap / model max / window size).
 
@@ -172,7 +168,7 @@ class DocumentContext:
             "boundaries": [[w.char_start, w.char_end] for w in self._windows],
         }
 
-    def pool_span(self, start_char: int, end_char: int) -> list[float]:
+    def pool_span(self, start_char: int, end_char: int) -> list[float] | None:
         """Pool the token embeddings overlapping ``[start_char, end_char)`` into one vector.
 
         With multiple windows, the span is pooled from the single window where it sits
@@ -185,6 +181,12 @@ class DocumentContext:
         are interior" rule, realized through per-span selection rather than a separate code path.
         Never averages across windows. A single-window context is the degenerate case and is
         byte-identical to the pre-windowing computation.
+
+        Returns ``None`` when the span overlaps no token in any window (e.g. a whitespace-only
+        span) — **not** a zero vector (G1.17, review R3). A zero vector is a meaningless point in
+        cosine space that poisons the ANN index; ``None`` makes "no embedding" explicit so callers
+        skip the span rather than relying on every one of them to recognize the sentinel. The
+        invariant downstream is that no zero vector ever reaches pgvector.
         """
         best_score: int | None = None
         best: tuple[_Window, list[int]] | None = None
@@ -198,8 +200,9 @@ class DocumentContext:
                 best = (w, idx)
 
         if best is None:
-            # No window has a token overlapping the span (e.g. a whitespace-only span).
-            return [0.0] * self._hidden
+            # No window has a token overlapping the span (e.g. a whitespace-only span): no
+            # embedding exists for it. Return None (not a zero-vector sentinel) so callers skip.
+            return None
 
         window, token_indices = best
         span_embeddings = window.token_embeddings[0, token_indices, :]
@@ -210,14 +213,41 @@ class DocumentContext:
 
 
 class EmbeddingSubstrate:
+    """Wraps the long-context embedding model (late chunking — embed once, derive all levels).
+
+    **Lifecycle (G1.17 R6).** Loading the model is the expensive part — seconds and gigabytes of
+    (GPU) memory — so a long-running worker constructs **one** substrate and holds it for its
+    lifetime, embedding every document through it; it does **not** build one per document. Use
+    :meth:`close` (or the context-manager form ``with EmbeddingSubstrate(...) as s:``) to release
+    the model + tokenizer at shutdown, or in a test/CLI that spins up many. ``close`` is idempotent;
+    on CUDA it also frees the allocator's cached blocks.
+    """
+
     def __init__(self, model_name_or_path: str = "BAAI/bge-m3", device: str | None = None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         # Self-describing: the model identity feeds the segmentation content hash and
         # the Action audit row (core/ingest.py), so consumers don't re-specify it.
         self.model_name = model_name_or_path
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        self.model = AutoModel.from_pretrained(model_name_or_path).to(self.device)
+        self.tokenizer: Any = AutoTokenizer.from_pretrained(model_name_or_path)
+        self.model: Any = AutoModel.from_pretrained(model_name_or_path).to(self.device)
         self.model.eval()
+
+    def close(self) -> None:
+        """Release the model + tokenizer; free CUDA cache on GPU. Idempotent (G1.17 R6).
+
+        After ``close`` the substrate must not embed again (the references are dropped so Python
+        can reclaim the model memory). Safe to call more than once.
+        """
+        self.model = None
+        self.tokenizer = None
+        if self.device.startswith("cuda"):
+            torch.cuda.empty_cache()
+
+    def __enter__(self) -> "EmbeddingSubstrate":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     def embed_document(self, text: str) -> DocumentContext:
         """Embed the document into a :class:`DocumentContext` of one or more macro-windows.

@@ -55,6 +55,21 @@ class Action(Base):
             text("timestamp DESC"),
             postgresql_where=text("actor = 'extractor'"),
         ),
+        # Back the parse + segment idempotency lookups (G1.17 R4, migration 0010): the newest
+        # Action for a document_id, filtered by actor. Same functional+partial shape as the
+        # propositionizer index above; the trailing timestamp leg serves the ORDER BY ... LIMIT 1.
+        Index(
+            "ix_actions_parse_document_id",
+            text("(inputs->>'document_id')"),
+            text("timestamp DESC"),
+            postgresql_where=text("actor = 'parser'"),
+        ),
+        Index(
+            "ix_actions_segment_document_id",
+            text("(inputs->>'document_id')"),
+            text("timestamp DESC"),
+            postgresql_where=text("actor = 'segmenter'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

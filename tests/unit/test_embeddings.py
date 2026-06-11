@@ -1,8 +1,12 @@
+from unittest.mock import MagicMock
+
 import pytest
 import torch
 
+import iknos.core.embeddings as emb
 from iknos.core.embeddings import (
     DocumentContext,
+    EmbeddingSubstrate,
     _plan_windows,
     mean_pool_normalize,
 )
@@ -82,15 +86,16 @@ def test_pool_span_every_span_gets_a_nonzero_vector_across_windows() -> None:
     ctx = DocumentContext.from_windows(windows, windowing={"overlap": 4})
     for start in range(0, 50, 3):
         vec = ctx.pool_span(start, start + 2)
+        assert vec is not None, f"span at {start} unexpectedly pooled to no token"
         assert any(c != 0.0 for c in vec), f"span at {start} pooled to a zero vector"
 
 
-def test_pool_span_no_token_overlap_returns_zero_vector() -> None:
-    # A whitespace-only span overlaps no token in any window → zero-vector fallback (the
-    # sentinel ingest skips; G1.17 will replace it with None).
+def test_pool_span_no_token_overlap_returns_none() -> None:
+    # A whitespace-only span overlaps no token in any window → None, not a zero-vector sentinel
+    # (review R3). Callers skip None so no meaningless vector reaches pgvector.
     win = _window([(0, 5, [1.0, 0.0]), (7, 12, [0.0, 1.0])])
     ctx = DocumentContext.from_windows([win], windowing={})
-    assert ctx.pool_span(5, 7) == [0.0, 0.0]
+    assert ctx.pool_span(5, 7) is None
 
 
 def test_window_layout_reports_count_and_boundaries() -> None:
@@ -140,9 +145,9 @@ def test_document_context_pool_span():
     assert res1[0] == pytest.approx(0.7071, abs=1e-3)
     assert res1[1] == pytest.approx(0.7071, abs=1e-3)
 
-    # Test overlap with only whitespace (char 6 to 7)
+    # Test overlap with only whitespace (char 6 to 7) → None, not a zero vector (review R3)
     res2 = ctx.pool_span(6, 7)
-    assert res2 == [0.0, 0.0]
+    assert res2 is None
 
 
 def test_pool_span_exact_match():
@@ -200,3 +205,31 @@ def test_mean_pool_normalize_ignores_padding():
     assert padded[0] == pytest.approx(unpadded[0], abs=1e-5)
     assert padded[0][0] == pytest.approx(0.6, abs=1e-3)
     assert padded[0][1] == pytest.approx(0.8, abs=1e-3)
+
+
+# --- substrate lifecycle (G1.17 R6) ---
+
+
+def test_substrate_close_releases_and_is_idempotent(monkeypatch) -> None:
+    # Mock the model load so no weights are downloaded; close() must drop the references and be
+    # safe to call twice (review R6).
+    monkeypatch.setattr(emb, "AutoTokenizer", MagicMock())
+    monkeypatch.setattr(emb, "AutoModel", MagicMock())
+    monkeypatch.setattr(emb.torch.cuda, "is_available", lambda: False)
+
+    substrate = EmbeddingSubstrate(device="cpu")
+    assert substrate.model is not None and substrate.tokenizer is not None
+
+    substrate.close()
+    assert substrate.model is None and substrate.tokenizer is None
+    substrate.close()  # idempotent — no AttributeError on the already-released handles
+
+
+def test_substrate_context_manager_closes_on_exit(monkeypatch) -> None:
+    monkeypatch.setattr(emb, "AutoTokenizer", MagicMock())
+    monkeypatch.setattr(emb, "AutoModel", MagicMock())
+    monkeypatch.setattr(emb.torch.cuda, "is_available", lambda: False)
+
+    with EmbeddingSubstrate(device="cpu") as substrate:
+        assert substrate.model is not None
+    assert substrate.model is None and substrate.tokenizer is None

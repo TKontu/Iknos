@@ -7,6 +7,7 @@ malformed response is not a normal failure mode under guided decoding, so JSON
 and 4xx errors are deliberately not retried.
 """
 
+import asyncio
 import json
 from typing import Any
 
@@ -27,11 +28,22 @@ _RETRYABLE: tuple[type[Exception], ...] = (
     openai.InternalServerError,
 )
 
+# Default hard deadline for one guided_complete call including all retries (G1.17 R5). Mirrors
+# config.Settings.llm_call_timeout_s; the default is used when a caller constructs an LLMClient
+# without naming one (e.g. DB-free unit tests, which must not touch the config singleton).
+DEFAULT_CALL_TIMEOUT_S = 180.0
+
 
 class LLMClient:
     """Thin wrapper over AsyncOpenAI pointed at the vLLM endpoint."""
 
-    def __init__(self, base_url: str | None = None, model: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str | None = None,
+        model: str | None = None,
+        *,
+        call_timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
+    ) -> None:
         # Only consult the config singleton (which requires DATABASE_URL) when a
         # default is actually needed. Callers that pass both — e.g. unit tests —
         # stay fully DB-free; real callers omit them and run with a populated env.
@@ -41,6 +53,9 @@ class LLMClient:
             base_url = base_url if base_url is not None else settings.llm_base_url
             model = model if model is not None else settings.llm_model
 
+        # Per-call hard deadline (G1.17 R5). Constant default keeps DB-free callers off the config
+        # singleton; the live entrypoint passes settings.llm_call_timeout_s explicitly.
+        self.call_timeout_s = call_timeout_s
         self.model = model
         if not self.model:
             raise ValueError(
@@ -50,19 +65,38 @@ class LLMClient:
         # vLLM ignores the API key but the client requires a non-empty value.
         self._client = AsyncOpenAI(base_url=base_url, api_key="EMPTY")
 
-    @retry(
-        retry=retry_if_exception_type(_RETRYABLE),
-        wait=wait_exponential(multiplier=1, min=1, max=30),
-        stop=stop_after_attempt(5),
-        reraise=True,
-    )
     async def guided_complete(
         self,
         messages: list[dict[str, str]],
         json_schema: dict[str, Any],
         sampling: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Run a chat completion constrained to ``json_schema``; return parsed JSON."""
+        """Run a chat completion constrained to ``json_schema``; return parsed JSON.
+
+        The whole retrying call is wrapped in a hard ``asyncio.timeout`` (G1.17 R5): a hung
+        endpoint that neither returns nor errors is cancelled at ``call_timeout_s`` and raises
+        ``TimeoutError``, so it can never hold its concurrency permit (and starve the batch)
+        indefinitely. The deadline sits *above* the tenacity backoff ceiling — it is a backstop
+        for a pathological hang, not the normal per-attempt timeout (the OpenAI client owns that).
+        """
+        async with asyncio.timeout(self.call_timeout_s):
+            return await self._guided_complete_with_retries(messages, json_schema, sampling)
+
+    @retry(
+        retry=retry_if_exception_type(_RETRYABLE),
+        wait=wait_exponential(multiplier=1, min=1, max=30),
+        stop=stop_after_attempt(5),
+        reraise=True,
+    )
+    async def _guided_complete_with_retries(
+        self,
+        messages: list[dict[str, str]],
+        json_schema: dict[str, Any],
+        sampling: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """The retried inner call: transient transport/5xx failures are retried (see
+        ``_RETRYABLE``); 4xx and JSON errors are not. Wrapped by :meth:`guided_complete`'s
+        outer deadline."""
         response = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,  # type: ignore[arg-type]

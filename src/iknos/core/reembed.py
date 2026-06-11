@@ -123,6 +123,19 @@ async def _reembed_spans(session: AsyncSession, substrate: _Substrate, target: s
         ).all()
         for row_id, span_start, span_end in rows:
             vector = context.pool_span(span_start, span_end)
+            if vector is None:
+                # The span pooled to no token under the target model (review R3). It had a vector
+                # under the old model, so this is anomalous — re-tokenization moved a boundary, or
+                # the stored span is whitespace. Leave the row off-target (don't write a None/zero)
+                # and log, so the run doesn't claim false convergence.
+                logger.warning(
+                    "span row %s [%d:%d] pooled to no token under %s; leaving off-target",
+                    row_id,
+                    span_start,
+                    span_end,
+                    target,
+                )
+                continue
             # ORM update so the pgvector column type adapts the list → vector (a raw text() bind
             # would lose it); a dimension mismatch under the new model is rejected here.
             await session.execute(

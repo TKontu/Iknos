@@ -15,7 +15,11 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from iknos.config import settings
+# Note: ``iknos.config.settings`` (which requires DATABASE_URL) is imported lazily inside
+# ``cypher()`` — the only function here that needs it — so the pure serialization helpers
+# (``cypher_map``, ``merge_*``, ``parse_agtype_map``) import DB-free, exactly like core/ingest.py
+# and core/proposition.py keep their pure logic importable without an env (G1.17 R7 unit tests of
+# ``cypher_map`` rely on this).
 
 
 def cypher_map(props: dict[str, Any]) -> str:
@@ -53,9 +57,31 @@ async def bootstrap_session(session: AsyncSession) -> None:
     await session.execute(text('SET search_path = ag_catalog, "$user", public'))
 
 
+def _dollar_quote_tag(body: str) -> str:
+    """A PostgreSQL dollar-quote tag (``$iknos$`` / ``$iknos1$`` / …) absent from ``body``.
+
+    The Cypher body is wrapped in a dollar-quoted SQL string so its single-quoted Cypher literals
+    need no SQL-level escaping. A fixed ``$$`` delimiter is unsafe: a property **value** carrying
+    ``$$`` (LaTeX math, ``$$`` in document text or LLM output — values reach here via
+    :func:`cypher_map`) would close the quote early and inject raw SQL (G1.17 R7 — caught by the
+    cypher_map fuzz round-trip). Pick the shortest ``$iknosN$`` tag that does not occur in the
+    body, so no body content can terminate it. ``cypher_map`` escaping handles the Cypher level;
+    this handles the SQL level — the two-layer boundary the module docstring warns about.
+    """
+    n = 0
+    while True:
+        tag = f"$iknos{n or ''}$"
+        if tag not in body:
+            return tag
+        n += 1
+
+
 def cypher(query: str, returns: str = "result agtype") -> str:
-    """Wrap a Cypher query body in the SQL/AGE invocation."""
-    return f"SELECT * FROM cypher('{settings.graph_name}', $$ {query} $$) AS ({returns})"
+    """Wrap a Cypher query body in the SQL/AGE invocation (injection-safe dollar quoting)."""
+    from iknos.config import settings
+
+    tag = _dollar_quote_tag(query)
+    return f"SELECT * FROM cypher('{settings.graph_name}', {tag} {query} {tag}) AS ({returns})"
 
 
 async def execute_cypher(

@@ -170,9 +170,15 @@ def span_content_hash(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _is_zero_vector(emb: list[float]) -> bool:
-    """A whitespace-only span pools to a literal zero vector (see ``pool_span``)."""
-    return all(c == 0.0 for c in emb)
+def _has_no_embedding(emb: list[float] | None) -> bool:
+    """True for a span that carries no usable dense vector and must be skipped.
+
+    Two cases collapse here: ``None`` — the post-G1.17 signal from ``pool_span`` that a span
+    overlapped no token (e.g. whitespace) — and a literal all-zero vector, the pre-G1.17 sentinel.
+    Skipping both keeps the invariant "no zero vector reaches pgvector" even for a direct caller
+    that still hands in zeros (defense in depth, review R3).
+    """
+    return emb is None or all(c == 0.0 for c in emb)
 
 
 async def _segmented_hash(session: AsyncSession, document_id: uuid.UUID) -> str | None:
@@ -230,7 +236,7 @@ async def persist_spans(
     session: AsyncSession,
     document_id: uuid.UUID,
     char_spans: list[tuple[int, int]],
-    embeddings: list[list[float]],
+    embeddings: list[list[float] | None],
     *,
     content_hash: str,
     segmenter_params: dict[str, Any],
@@ -245,6 +251,9 @@ async def persist_spans(
     ``char_spans``. ``model`` is the embedding model that produced them — required, because
     it is the dense rows' **vector-space identity** (G1.16): it is written on every
     ``document_embeddings`` row and guards against silently mixing two embedding spaces.
+    ``embeddings`` may contain ``None`` for a span that pooled to no token (``pool_span``
+    returns ``None``, never a zero-vector sentinel — review R3); such spans are skipped from
+    both the graph and the dense index, never written with a meaningless vector.
     ``layouts`` (optional, same alignment) carries the parse front-end's ``{page, bbox}``
     visual-provenance handle per span (G1.0); ``None`` — the whole arg or any element —
     means plain-text ingest with no layout. ``window_layout`` (optional, G1.13 slice 2) is
@@ -283,14 +292,16 @@ async def persist_spans(
     skipped = 0
     rows = 0
     for (start, end), emb, layout in zip(char_spans, embeddings, layout_list, strict=True):
-        if _is_zero_vector(emb):
+        if _has_no_embedding(emb):
             # A whitespace span carries no claims (the propositionizer would extract
-            # nothing) and a zero vector poisons cosine ANN — drop it from both stores.
+            # nothing) and has no usable vector — drop it from both stores so no
+            # zero/None embedding ever reaches pgvector (review R3).
             skipped += 1
             logger.warning(
-                "skipping whitespace/zero-vector span doc=%s [%d:%d]", document_id, start, end
+                "skipping whitespace/no-embedding span doc=%s [%d:%d]", document_id, start, end
             )
             continue
+        assert emb is not None  # narrowed by the _has_no_embedding skip above
 
         span_id = span_id_for(document_id, start, end, level)
         spans.append(

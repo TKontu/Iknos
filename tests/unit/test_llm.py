@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -5,11 +6,13 @@ import httpx
 import openai
 import pytest
 
-from iknos.core.llm import LLMClient
+from iknos.core.llm import DEFAULT_CALL_TIMEOUT_S, LLMClient
 
 
-def _client() -> LLMClient:
-    return LLMClient(base_url="http://vllm.invalid/v1", model="test-model")
+def _client(call_timeout_s: float = DEFAULT_CALL_TIMEOUT_S) -> LLMClient:
+    return LLMClient(
+        base_url="http://vllm.invalid/v1", model="test-model", call_timeout_s=call_timeout_s
+    )
 
 
 def _response(content: str) -> MagicMock:
@@ -75,3 +78,18 @@ async def test_does_not_retry_malformed_json():
         await client.guided_complete([{"role": "user", "content": "hi"}], {"type": "object"})
 
     assert create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_guided_complete_enforces_call_deadline():
+    # G1.17 R5: a hung endpoint (never returns, never errors) is cut off by the outer deadline so
+    # it cannot hold a concurrency permit forever. A tiny call_timeout_s makes the hang observable.
+    client = _client(call_timeout_s=0.05)
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(60)
+
+    client._client.chat.completions.create = AsyncMock(side_effect=_hang)
+
+    with pytest.raises(TimeoutError):
+        await client.guided_complete([{"role": "user", "content": "hi"}], {"type": "object"})

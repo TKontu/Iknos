@@ -13,7 +13,7 @@ class _PoolingContext(Protocol):
     and so a test can pass any object exposing ``pool_span``.
     """
 
-    def pool_span(self, start_char: int, end_char: int) -> list[float]: ...
+    def pool_span(self, start_char: int, end_char: int) -> list[float] | None: ...
 
 
 def calculate_adjacent_similarities(embeddings: list[list[float]]) -> list[float]:
@@ -192,7 +192,18 @@ class SegmentationBackbone:
         # two adjacent sentences select the same interior window and their cosine compares
         # embeddings from one consistent context. A document that fits one window is byte-identical
         # to the pre-windowing path, so boundary placement is unchanged — no code change here.
-        embeddings = [context.pool_span(s["start_char"], s["end_char"]) for s in sentences]
+        #
+        # pool_span returns None for a sentence overlapping no token (review R3). split_sentences
+        # already drops whitespace-only runs, so this is effectively unreachable; but to stay total
+        # we substitute a zero vector for the *internal* adjacency math only (it never persists — a
+        # boundary signal, not an index row), keyed to the dimension of a real pooled vector. If
+        # every sentence is token-less (a fully degenerate input), there is no signal to segment on,
+        # so emit one span covering the whole sentence range.
+        pooled = [context.pool_span(s["start_char"], s["end_char"]) for s in sentences]
+        hidden = next((len(e) for e in pooled if e is not None), 0)
+        if hidden == 0:
+            return [(sentences[0]["start_char"], sentences[-1]["end_char"])]
+        embeddings = [e if e is not None else [0.0] * hidden for e in pooled]
         densities = [calculate_information_density(s["text"]) for s in sentences]
 
         sims = calculate_adjacent_similarities(embeddings)
