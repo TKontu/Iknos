@@ -65,6 +65,55 @@ class BindingState(StrEnum):
     CONFIRMED = "confirmed"
 
 
+class MeronymyType(StrEnum):
+    """The part-whole *type* tag on a ``directPartOf``/``partOf`` edge (§14, §10).
+
+    Part-of is **not uniformly transitive** across meronymy types (Winston/Chaffin/Herrmann;
+    Keet & Artale): only the **component-integral / functional-complex** subtype
+    (gearbox ⊃ shaft ⊃ bearing ⊃ roller) is transitivity-safe, so abstraction roll-up — the
+    ``partOf`` closure and ancestor views — runs **only** along it (:func:`is_transitive`).
+    Member-collection, portion-mass, stuff-object, feature-activity and place-area are tagged
+    and **excluded from blanket roll-up**, or wrong aggregations leak into coarse views (§14).
+    """
+
+    COMPONENT_INTEGRAL = "component-integral"  # the only transitivity-safe subtype
+    MEMBER_COLLECTION = "member-collection"
+    PORTION_MASS = "portion-mass"
+    STUFF_OBJECT = "stuff-object"
+    FEATURE_ACTIVITY = "feature-activity"
+    PLACE_AREA = "place-area"
+
+
+# The transitivity-safe subtypes (§14). A frozenset, not a per-member flag, so the
+# transitivity rule has one definition the closure and any view code read.
+_TRANSITIVE_MERONYMY: frozenset[MeronymyType] = frozenset({MeronymyType.COMPONENT_INTEGRAL})
+
+
+def is_transitive(meronymy_type: MeronymyType) -> bool:
+    """Whether ``partOf`` roll-up may run along this meronymy type (§14).
+
+    Only ``COMPONENT_INTEGRAL`` is transitivity-safe; every other subtype is excluded from the
+    transitive closure (and from blanket ancestor views) to keep wrong aggregations out of
+    coarse-level presentation.
+    """
+    return meronymy_type in _TRANSITIVE_MERONYMY
+
+
+class AttachmentProvenance(StrEnum):
+    """How a part-whole edge's level attachment was produced (§14) — the ``provenance`` tag.
+
+    Records *which acquisition path* set the level, so its confidence is interpretable:
+    ``ANCHORED`` (entity-linked to a domain-pack taxonomy — the reliable, high-confidence
+    path) vs ``INDUCED`` (text-induced meronymy — lower-confidence, human-review-gated) vs
+    ``RELATIVE`` (last-resort relative ordering when no parent is named). The induce slice
+    (G2.5) writes ``INDUCED``; anchoring is the deferred primary path.
+    """
+
+    ANCHORED = "anchored"
+    INDUCED = "induced"
+    RELATIVE = "relative"
+
+
 class Role(StrEnum):
     """The ``role`` property on an ``INVOLVES`` edge (§10).
 

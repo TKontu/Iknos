@@ -131,29 +131,41 @@ because Phase 2 is where its absence turns from latent to expensive.*
 
 ## Part-whole hierarchy (§14) — abstraction levels
 
-- [ ] Build the `PART_OF` hierarchy over `Actor`/`Object` entities as **typed** edges:
+- [x] Build the `PART_OF` hierarchy over `Actor`/`Object` entities as **typed** edges:
       `directPartOf` (intransitive step) + `partOf` (transitive closure) with a
       meronymy-type tag; DAG; defeasible, provenanced, bitemporal, overridable. Restrict
-      transitive roll-up to the component-integral subtype (§10/§14).
+      transitive roll-up to the component-integral subtype (§10/§14). *(G2.5 —
+      `core/partwhole.py` + `edges.MeronymyType`/`is_transitive`: `transitive_closure` is
+      cycle-safe (Kahn-isolates meronymy cycles, excludes+flags them) and component-integral-
+      restricted; edges carry the type tag, two annotations, bitemporal.)*
 - [ ] **Anchor first (primary, reliable):** entity-link each referent to the active
       domain pack's taxonomy (ISO 14224, BOM, FMA…) and read the level off. Record
-      attachment provenance = anchored, high confidence (§14).
-- [ ] **Induce only as fallback (out-of-taxonomy referents):** the `extract` pass emits
+      attachment provenance = anchored, high confidence (§14). *(Deferred — needs
+      entity-linking, the G2.3/G2.4 anchor seam; `AttachmentProvenance.ANCHORED` reserved.)*
+- [x] **Induce only as fallback (out-of-taxonomy referents):** the `extract` pass emits
       `directPartOf` candidates from compositional noun phrases ("high speed shaft
       locating bearing"), "Y of X", possessives, "part of". Lower confidence,
-      human-review-gated; provenance = induced.
+      human-review-gated; provenance = induced. *(G2.5 — `MeronymyInducer`: LLM detection
+      from compositional cues → `directPartOf` with `provenance=induced`, `INDUCED_CONFIDENCE`.)*
 - [ ] **Relative ordering (last resort):** containment cues + co-occurrence/degree
-      asymmetry + the §2 chunk-level prior, when no parent is named.
+      asymmetry + the §2 chunk-level prior, when no parent is named. *(Deferred → §14 step 3.)*
 - [ ] **Coverage policy:** measure the fraction of referents that anchor to the active
       pack(s). High → anchoring is the level mechanism; persistently low → pack
       inadequate, escalate to induction + review and mark levels provisional (§14).
-- [ ] **Level estimation:** anchored → partonomy depth + intrinsic IC (Seco, subtree
+      *(Deferred — needs anchoring to exist to measure coverage against.)*
+- [~] **Level estimation:** anchored → partonomy depth + intrinsic IC (Seco, subtree
       size, structure-only); out-of-taxonomy → box embeddings (or ConE for joint
       is-a + part-of). Do **not** use embedding cosine or lexical concreteness as level
-      proxies (§13).
-- [ ] Attach each fact's **derived level** via its subject-role `INVOLVES` entity;
-      represent ambiguous attachment as uncertain/multiple, not forced (§14).
-- [ ] Keep `PART_OF` distinct from the §6 community structure — community ≠ partonomy.
+      proxies (§13). *(G2.5 — the **structure-only partonomy depth** (`derived_level` =
+      ancestor count) ships; the intrinsic-IC refinement and box-embedding/ConE generality
+      are deferred seams. Embedding cosine / lexical concreteness are correctly never used.)*
+- [x] Attach each fact's **derived level** via its subject-role `INVOLVES` entity;
+      represent ambiguous attachment as uncertain/multiple, not forced (§14). *(G2.5 —
+      `fact_level`: subject-role referent's depth, canonicalized; several subjects → several
+      levels, never forced.)*
+- [x] Keep `PART_OF` distinct from the §6 community structure — community ≠ partonomy.
+      *(G2.5 — `partOf` is compositional containment built from meronymy cues only; the §6
+      Leiden community structure is a separate, later subsystem and is never substituted.)*
 
 ## Provenance & audit (cross-cutting, enforced here)
 

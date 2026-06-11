@@ -26,7 +26,7 @@ bounding pieces (§5.2, §14, §13) — come *after* the node-creation substrate
 | **G2.2** | **`extract` operator core** — proposition → `Fact` + `Actor`/`Object` nodes, `INVOLVES`(role) + `EVIDENCED_BY` edges, two annotations initialized, into a box, with an `Action`. **No dedup yet** (fresh nodes) | G2.1 | **shipped (this increment)** |
 | **G2.3** | Entity resolution subsystem (§5.2) — scored `SAME_AS` components, cheap→expensive cascade, conservative under-merge default + `candidate` links | G2.2 | **shipped (this increment)** — thin slice; anchor-canonicalization + belief-revision/contradiction loop deferred |
 | G2.4 | Reference binding (§3.1) — detect `Mention`s separately from binding; scored `REFERS_TO` via the scoped cascade; low-confidence stays open → provisional → triage | G2.2 | **shipped (this increment)** — thin slice; pronoun/discourse-antecedent + taxonomy-anchor stages + multi-sample/verify confidence deferred |
-| G2.5 | `PART_OF` abstraction levels (§14) — anchor-first to the pack taxonomy, induce fallback, coverage policy; level *derived* from the subject-role referent | G2.2 (+ G2.3 anchoring) | planned |
+| G2.5 | `PART_OF` abstraction levels (§14) — anchor-first to the pack taxonomy, induce fallback, coverage policy; level *derived* from the subject-role referent | G2.2 (+ G2.3 anchoring) | **shipped (this increment)** — the induce path + cycle-safe `partOf` closure + derived-level read; anchoring (needs entity-linking) + embedding/IC level estimation deferred |
 | G2.6 | Conditional credibility (§9.1) gated by epistemic class + sensitivity seeding onto facts | G2.2 | **shipped (this increment)** — derived-not-stored credibility computation + sensitivity seed; the per-claim alignment-judging pass deferred |
 | G2.7 | Quarantine **enforcement** (Phase-1 G1.6) — provisional/low-faithfulness propositions cannot drive a `REFUTES` (gated until evidential edges exist) | Phase 4 edges | planned |
 
@@ -513,3 +513,100 @@ belief revision.
       credibility is interest-independent, a judgement's is interest-weighted.
 - [x] The per-claim `interest_alignment` input slot exists on the Fact (placeholder, `None`
       until the judging pass) and is read by the credibility computation.
+
+---
+
+## G2.5 — Part-whole abstraction levels *(shipped — thin slice)*
+
+**Goal.** A fact attaches at a *level* of the domain's part-whole structure, and **level is
+relative, derived, and a property of the referent — not the sentence** (§14): no stored level
+scalar; a reasoning node's level is the position of its **subject-role** `INVOLVES` entity in
+the `PART_OF` order. This increment builds that order over `Actor`/`Object` entities (typed,
+split into intransitive `directPartOf` + the transitive `partOf` closure, roll-up restricted
+to the transitivity-safe component-integral subtype, §14) and derives level from it.
+Acquisition is **anchor-first, induce-fallback** (§14); since anchoring needs entity-linking
+(the deferred G2.3/G2.4 seam), this slice ships the **induce path** — the §9.1 "induce-mode"
+that is the correct cold-start behaviour, everything provisional.
+
+### What shipped
+
+- **`iknos/core/partwhole.py`.** Pure/DB split on the `core/reference.py` discipline:
+  - *Pure (DB-free, unit-testable):* the detection schema (`_PartOfOut`/`InducedMeronymy`) +
+    prompt; **`transitive_closure`** — the cycle-safe `directPartOf`→`partOf` closure
+    (Kahn-peel to isolate any meronymy *cycle*, which is a contradiction excluded from
+    roll-up and flagged, §14; then memoized DFS over the acyclic DAG); **`derived_level`**
+    (partonomy depth = component-integral ancestor count — depth 0 coarsest, structure-only,
+    *not* embedding cosine / lexical concreteness, §14); `_resolve_endpoints` (map detected
+    surfaces to canonical entities, drop unresolved/self-loop); and the `directPartOf` /
+    `partOf` write contracts.
+  - *`MeronymyInducer`:* the operator (`actor="meronymy-inducer"`, `action_type="induce"`).
+    Box-scoped, three-phase like the reference binder — Action-log idempotency → concurrent
+    detection → serial `directPartOf` persist — then a final box-wide `partOf` closure
+    recompute (restricted to component-integral via `edges.is_transitive`). `entity_level` /
+    `fact_level` are the derived-level reads (a fact with several subject referents yields
+    several levels — uncertain/multiple, never forced, §14).
+- **`iknos/types/edges.py`** gained `MeronymyType` (Winston/Chaffin/Herrmann subtypes) +
+  `is_transitive` (only component-integral) + `AttachmentProvenance`
+  (`anchored`/`induced`/`relative`).
+
+### Decisions
+
+- **Typed and split; roll-up only along component-integral (§14).** `directPartOf` is each
+  direct step; `partOf` is the closure, and `is_transitive` gates which subtype rolls up — a
+  member-collection / portion-mass relation is recorded but **excluded** from `partOf`, so
+  wrong aggregations never leak into coarse views. One definition of the rule
+  (`_TRANSITIVE_MERONYMY`), read by the closure and any later view code.
+- **Cycles are excluded and flagged, not closed through.** A meronymy cycle is a contradiction
+  (no valid hierarchy); the closure isolates the cyclic nodes (Kahn) and excludes them, returning
+  them as an unstable region for review — never a silent self-ancestor.
+- **Level is derived, never stored (§14).** `entity_level`/`fact_level` *compute* depth from
+  the live `partOf` order, so it stays correct as the hierarchy is refined; there is no `level`
+  property on a Fact. The continuous intrinsic-IC refinement (Seco) and box-embedding/ConE
+  generality for out-of-taxonomy entities are deferred seams — this slice is the depth term
+  they scale.
+- **Canonical-by-label endpoints + canonicalizing read.** `directPartOf` connects label-grouped
+  canonical entities (the `reference.group_referents` representative), and the level read
+  resolves a fact's subject node through the **same** grouping (`_canonical_map`) before
+  counting ancestors — so any fresh node of an entity reports the same level, robust to whether
+  entity resolution (G2.3) has run (its `SAME_AS` min-id representative coincides with this
+  canonical; folding `SAME_AS` in is a later refinement).
+- **Idempotency keyed on the proposition id**; the closure recompute is structurally idempotent
+  (`merge_edge` upsert). Retraction/cleanup of stale `partOf` on edge removal is belief revision
+  (Phase 3) — this slice's closure is monotonic per run.
+- **No migration.** `directPartOf`/`partOf` exist (migration 0004); the 0007 indexes cover them.
+
+### Deferred (kept out of the thin slice — documented seams)
+
+- **Anchoring to the pack taxonomy** (the *primary*, reliable path, §14) — needs entity-linking
+  → with G2.3/G2.4 anchor-canonicalization. This slice runs induce-mode (everything provisional).
+- **Relative ordering (last resort)** — containment cues + co-occurrence/degree asymmetry + the
+  §2 chunk prior when no parent is named (§14 step 3).
+- **Continuous level / intrinsic IC + box-embedding/ConE** generality (§14); never embedding
+  cosine or lexical concreteness.
+- **Coverage-policy metric** (fraction of referents that anchor) — needs anchoring to exist.
+- **Belief-revision / retraction** of induced edges + stale-`partOf` cleanup → Phase 3.
+- **Merge with anchored structure / cross-pack taxonomy conflict resolution** → with anchoring.
+
+### Tests
+
+- **Unit (`tests/unit/test_partwhole.py`, DB-free):** `is_transitive` (only component-integral);
+  `transitive_closure` (chain, diamond DAG, cycle exclusion+flag, self-loop drop, order
+  independence); `_acyclic_edges` cycle separation; `derived_level` (ancestor count, distinct
+  ancestors in a DAG); `_resolve_endpoints` (label mapping, unresolved/self-loop drop);
+  detection-schema default; the `directPartOf`/`partOf` write contracts.
+- **Integration (`tests/integration/test_partwhole.py`, live AGE):** a four-level
+  component-integral chain across propositions → 3 `directPartOf` + a 6-pair `partOf` closure;
+  a fact's `fact_level` derives the roller's depth (3) even though its subject is a *different*
+  fresh node than the one in the hierarchy (canonicalization); idempotent re-run; a
+  member-collection relation tagged but **excluded** from the `partOf` roll-up. (Runs in CI.)
+
+### Exit criteria (G2.5)
+
+- [x] `Actor`/`Object` entities form a typed `directPartOf` (step) + `partOf` (closure)
+      hierarchy; roll-up runs only along the transitivity-safe component-integral subtype.
+- [x] The hierarchy is a DAG: meronymy cycles are excluded from roll-up and flagged, never
+      closed through.
+- [x] A fact's abstraction level is **derived** from its subject-role referent's partonomy
+      depth (uncertain/multiple when ambiguous), never a stored scalar.
+- [x] Induced edges carry the meronymy type + `provenance=induced` + confidence + two
+      annotations + bitemporal fields; re-inducing a box writes no duplicate edges.
