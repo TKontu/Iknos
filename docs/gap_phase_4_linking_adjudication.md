@@ -25,7 +25,7 @@ until the gate passes").
 |----|-----------|------------|-------|
 | **G4.1** | **QBAF gradual-semantics adjudication core** — the semantics decision (DF-QuAD vs Quadratic Energy) + the pure `solve` engine (bounded fixpoint, non-convergence surfaced) + verdict banding / computed hypothesis state | Phase 3 Layer B (contract only) | **shipped (this increment)** |
 | G4.2 | **Candidate generation** (§5.1) — the cheap→expensive funnel: structural priors (shared `INVOLVES`, co-occurrence), embedding k-NN over pgvector, coarse-to-fine over §2 levels; tuned for recall early | Phase 1 embeddings, Phase 2 graph | planned |
-| G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | planned |
+| G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | **slice 1 shipped** (the subjective-logic confidence-scoring core, `core/subjective_logic.py`); LLM judge + recalibration + AGE producer planned |
 | **G4.4** | **QBAF persistence adapter** — load the active `SUPPORTS`/`REFUTES` subgraph + hypothesis base scores (Layer B) from AGE → `BAF`; write the computed `acceptability` / `state` back to the `Hypothesis` node. The Phase-4 analogue of G3.4 | G4.1, Phase 2/3 adapters | **shipped (this increment)** |
 | G4.5 | **`corroborate` / `find-contradiction` operators + ensemble gate** (§7.2) — gather supporting/refuting evidence; `find-contradiction` as a first-class refuter generator; the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement) that authorises a persisted `refuted` flip; wires the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize` driver | G4.3, G4.4, G3.9 | planned |
 | G4.6 | **Validation gate** (§8 experiment) — planted-contradiction corpus (regression suite); measure retraction propagation, hypothesis-state flip, consistency-vs-verbalized confidence, ensemble-vs-single, candidate/refuter recall, level-attachment accuracy; bias-controlled scoring, not LLM-as-judge | G4.2–G4.5 | planned |
@@ -124,6 +124,90 @@ bar). ruff + `ruff format` clean; mypy(`src/iknos`) clean (only the pre-existing
   algorithm for incrementally updating final strengths under graph change). Incrementality
   stops at Layer A's delta; the affected QBAF sub-region is recomputed in full (acceptable at
   investigation scale, §13). `solve` is that full recompute.
+
+## G4.3 — Edge-judgment pipeline, slice 1: the subjective-logic confidence-scoring core
+
+**What shipped.** `core/subjective_logic.py` — the pure, in-memory algebra behind **steps 3–4**
+of the §8 confidence pipeline (encode each judgment as a subjective-logic opinion with
+source-reliability discounting; fuse with cumulative/averaging, never raw Dempster's rule). The
+Phase-4 analogue of G4.1 (pure engine) and `core/confidence.py` (Layer B math): no DB, no AGE,
+no LLM, no migration — a value algebra unit-testable with hand-built opinions, the in-house
+re-implementation of the subjective-logic operators (QBAF-Py / Uncertainpy / Jøsang's library
+are **reference only**, §8 Tooling). Three parts, in the Phase-3/G4.1 order:
+
+**1. The fusion decision (G4.3's G3.5/G4.1-style fixture).** §8 names *two* fusion operators
+(cumulative *or* averaging) and they are not interchangeable, so the choice is made with a
+numeric fixture *before* the pipeline is trusted:
+
+- **`Fusion`** is the operator-as-a-value (mirroring `GradualSemantics`): a `name` + a binary
+  `fuse_pair`, so `fuse` is written **once, generic over the operator**, and the default is
+  swapped at the seam — not branched on. The two instances are `CUMULATIVE` (aleatory; assumes
+  **independent** sources; *accrues* certainty) and `AVERAGING` (epistemic; assumes possibly
+  **dependent** sources; **idempotent** — does not accrue).
+- **Decision, recorded eyes-open: `DEFAULT_FUSION = AVERAGING`.** The fixture
+  (`test_subjective_logic.py::test_decision_fixture_…`) shows three *correlated copies* of one
+  weak judgment fuse **back to that one judgment** under averaging (no manufactured certainty)
+  but **collapse the uncertainty and climb the belief** under cumulative (false confidence). The
+  standing §13 risk is that **correlated LLM error is not removed by the disciplines** — blind,
+  randomized, multi-sample judgments from one model are *not* independent — so averaging is the
+  **conservative** default: it cannot inflate certainty from correlated judges. This parallels
+  the Layer B (Gödel over Viterbi) and QBAF (DF-QuAD over Quadratic Energy) choices — *default
+  to the operator that cannot inflate; retain the other at the seam* (`CUMULATIVE`, for a
+  genuinely decorrelated varied-model sub-domain). Reversible — a value, not a branch.
+
+**2. The operators.** The binomial `Opinion` `(belief, disbelief, uncertainty, base_rate)`
+(validated frozen value; `belief+disbelief+uncertainty == 1`, all on `[0, 1]`), with:
+`projected_probability = belief + base_rate·uncertainty` (the read-off — **this is the
+calibrated edge `strength`** the QBAF consumes); `opinion_from_evidence(positive, negative)` —
+the **multi-sample-consistency → opinion** map (Beta/binomial, non-informative prior weight `W`:
+agreement raises belief, more samples shrink uncertainty — consistency *is* certainty, §3.1 at
+the edge layer); `discount(opinion, reliability)` — SL **trust discounting** (the §8 ↔ §9.1
+seam: each opinion is discounted toward uncertainty by its source's `effective_credibility`
+before fusion); and `cumulative_fuse` / `averaging_fuse` / `fuse`.
+
+- **The vacuous/neutral asymmetry (recorded so it is not got wrong).** The vacuous opinion is
+  the **neutral element of cumulative** fusion but **not of averaging** — averaging weights each
+  opinion by its uncertainty mass, so an abstaining (or fully source-discounted) judge *dilutes
+  toward uncertainty* rather than being silently dropped. The more-conservative behavior, and
+  part of why averaging is the default. Both-dogmatic (`uncertainty == 0`) inputs share a
+  documented equal-weight-average limit (one helper, so the two operators cannot diverge on it).
+- **Bounds are enforced, not clamped.** Out-of-range masses/counts/reliability *raise* (the
+  `epistemic.combine_faithfulness` / `credibility` convention), and fusion requires a shared
+  base rate (fusing opinions about *different* propositions is a caller bug, surfaced).
+
+**3. The read-off (the QBAF seam).** `projected_probability` of the fused, discounted opinion is
+the calibrated `strength` ∈ [0, 1] that replaces the raw LLM confidence (§8, §10). `core/qbaf.py`
+already names this upstream ("subjective-logic fusion has already decorrelated the evidence");
+this slice supplies it. **Sign** stays structural and categorical — the `SUPPORTS` vs `REFUTES`
+edge type (§10), decided first and separately (§8 "sign before magnitude") — so this slice scores
+*magnitude* for a sign already fixed.
+
+**Tests** (`tests/unit/test_subjective_logic.py`, DB-free; 29 new, 595 unit total). The decision
+fixture (averaging idempotent vs cumulative accrues on correlated evidence; the independent-
+supporters flip side); opinion validity + projection; the consistency→opinion map (agreement→
+belief, more samples→less uncertainty, zero observations→vacuous, bad inputs reject); discounting
+(full=identity, zero=vacuous, partial, out-of-range rejects); and the fusion properties the
+pipeline relies on (cumulative neutrality of vacuous, averaging dilution, commutativity,
+averaging idempotency, fused-opinion validity, single=identity, empty/base-rate-mismatch reject).
+ruff + `ruff format` + mypy(`src/iknos`) clean (only the pre-existing `resolve.py` error remains).
+
+**Deferred (documented seams, not regressions) — the rest of G4.3:**
+
+- **The LLM judge** (next slice) — **sign-before-magnitude** (classify supports/refutes/
+  irrelevant first and separately; estimate magnitude only for non-irrelevant edges), **relative
+  not absolute** (elicit by ranking competing evidence on the same hypothesis), **blind +
+  randomized** (judge blind to the current hypothesis state — sycophancy guard; randomize
+  evidence order across samples — position-bias guard). That prompted elicitation produces the
+  per-sample counts `opinion_from_evidence` consumes; this slice is the scoring algebra that
+  consumes them (the pure/LLM split, exactly as G4.1(pure)/G4.4(AGE)).
+- **Per-model recalibration (step 2)** — a *fitted* per-model consistency→correctness curve with
+  no data yet; like the `combine_faithfulness` calibration seam and the G4.1 verdict bands, it
+  swaps in at `opinion_from_evidence` (scaling the evidence) or post-projection without a contract
+  change. Identity until G4.6 fits it against the planted corpus.
+- **The AGE producer** (next slice) — writing the `SUPPORTS`/`REFUTES` edge carrying the fused
+  `strength` + `significance` (from the node/tier, §9) and an `Action` (raw judgment + sampling +
+  calibration, §10.1); the data-bound increment that consumes this read-off, the Phase-4 analogue
+  of how `derivation_adapter` (G3.4) consumes `core/confidence.py`.
 
 ## G4.4 — QBAF persistence adapter (this increment)
 

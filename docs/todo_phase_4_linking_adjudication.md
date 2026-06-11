@@ -21,9 +21,16 @@ loads the active `SUPPORTS`/`REFUTES` subgraph + base scores → `BAF`, adjudica
 computed `acceptability`/`state` back to the `Hypothesis` node (partial `SET`, band derived-not-
 stored); it reuses the shared `load_active_box_ids`/`load_reasoning_nodes` reads and consumes the
 `types/intentional.py` vocabulary (the G4.1 banding/state duplication was reconciled here).
-Candidate generation (§5.1, G4.2), the LLM edge-judgment pipeline (§8, G4.3), the `corroborate` /
-`find-contradiction` operators + ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6)
-are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
+**G4.3 slice 1** (`core/subjective_logic.py`) lands the pure subjective-logic confidence-scoring
+core (§8(c), steps 3–4): the binomial `Opinion`, the multi-sample-consistency → opinion map,
+source-reliability discounting, and **cumulative/averaging fusion** — with the fusion **decided
+by a fixture** (`DEFAULT_FUSION = AVERAGING`, idempotent under correlated evidence so it cannot
+inflate certainty; cumulative retained at the seam). The fused/discounted opinion's projected
+probability *is* the calibrated edge `strength` the QBAF consumes. Candidate generation (§5.1,
+G4.2), the rest of the edge-judgment pipeline (§8, G4.3 — the blind/randomized LLM judge,
+per-model recalibration, the AGE producer), the `corroborate` / `find-contradiction` operators +
+ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6) are open. See
+`gap_phase_4_linking_adjudication.md` for the build plan.
 
 ## Candidate generation (§5.1) — which pairs to assess
 
@@ -47,9 +54,15 @@ are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
       competing evidence on the same hypothesis.
 - [ ] **Blind + randomized:** judge blind to current hypothesis state (sycophancy
       guard); randomize evidence order across samples (position-bias guard).
-- [ ] **Multi-sample consistency**, per-model recalibration, encode as subjective-logic
+- [~] **Multi-sample consistency**, per-model recalibration, encode as subjective-logic
       opinion with source discounting, fuse with cumulative/averaging (not raw
-      Dempster's rule).
+      Dempster's rule). *(G4.3 slice 1 — `core/subjective_logic.py`: the pure algebra —
+      `Opinion`, `opinion_from_evidence` (the consistency→opinion map), `discount` (source
+      reliability, the §8↔§9.1 seam), and `cumulative_fuse`/`averaging_fuse`/`fuse` with
+      `DEFAULT_FUSION = AVERAGING` decided by a fixture (idempotent under correlated evidence —
+      cannot inflate; cumulative retained at the seam). **Open:** the blind/randomized LLM
+      elicitation that produces the per-sample counts, and per-model recalibration (a fitted
+      curve, identity until G4.6).)*
 - [ ] Write `SUPPORTS`/`REFUTES` edges carrying `sign`, fused/recalibrated `strength`,
       and `significance` (from the node/tier). Stored `strength` is **never** the raw
       LLM number (§10).
