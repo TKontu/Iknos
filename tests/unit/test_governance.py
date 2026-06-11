@@ -10,6 +10,7 @@ from iknos.types.annotations import Annotations
 from iknos.types.edges import EdgeSign, EvidentialEdge
 from iknos.types.governance import (
     _SENSITIVITY_RANK,
+    InterestAlignment,
     Sensitivity,
     SensitivityLevel,
     SourceInterest,
@@ -107,6 +108,54 @@ def test_flatten_default_is_public_empty() -> None:
     assert Sensitivity().flatten() == {
         "sensitivity_level": "public",
         "sensitivity_compartments": [],
+    }
+
+
+# --- from_props (read inverse of flatten, §9.1) -----------------------------
+
+
+def test_from_props_round_trips_flatten() -> None:
+    # flatten writes the compartment list directly; cypher_map would JSON-encode it to a
+    # string, so from_props must read either form. Here the list form.
+    s = Sensitivity(level=SensitivityLevel.CONFIDENTIAL, compartments=frozenset({"eu", "export"}))
+    assert Sensitivity.from_props(s.flatten()) == s
+
+
+def test_from_props_decodes_json_string_compartments() -> None:
+    # The shape cypher_map actually persists: compartments as a JSON-encoded string.
+    props = {"sensitivity_level": "restricted", "sensitivity_compartments": '["a", "b"]'}
+    s = Sensitivity.from_props(props)
+    assert s.level is SensitivityLevel.RESTRICTED
+    assert s.compartments == frozenset({"a", "b"})
+
+
+def test_from_props_absent_level_defaults_to_public_origin() -> None:
+    s = Sensitivity.from_props({})
+    assert s.level is SensitivityLevel.PUBLIC
+    assert s.compartments == frozenset()
+
+
+def test_from_props_handles_null_and_empty_compartments() -> None:
+    assert Sensitivity.from_props({"sensitivity_level": "internal"}).compartments == frozenset()
+    assert (
+        Sensitivity.from_props(
+            {"sensitivity_level": "internal", "sensitivity_compartments": ""}
+        ).compartments
+        == frozenset()
+    )
+
+
+# --- InterestAlignment vocabulary (§9.1) ------------------------------------
+
+
+def test_interest_alignment_serializes_to_plain_strings() -> None:
+    assert str(InterestAlignment.SELF_SERVING) == "self-serving"
+    assert str(InterestAlignment.AGAINST_INTEREST) == "against-interest"
+    assert {a.value for a in InterestAlignment} == {
+        "self-serving",
+        "neutral",
+        "against-interest",
+        "unknown",
     }
 
 

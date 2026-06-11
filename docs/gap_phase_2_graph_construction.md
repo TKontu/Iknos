@@ -25,9 +25,9 @@ bounding pieces (§5.2, §14, §13) — come *after* the node-creation substrate
 | **G2.1** | **Box operationalization** — the box registry + case box; the shared Box↔AGE serialization the loader and indexes write through | Phase 0 | shipped |
 | **G2.2** | **`extract` operator core** — proposition → `Fact` + `Actor`/`Object` nodes, `INVOLVES`(role) + `EVIDENCED_BY` edges, two annotations initialized, into a box, with an `Action`. **No dedup yet** (fresh nodes) | G2.1 | **shipped (this increment)** |
 | **G2.3** | Entity resolution subsystem (§5.2) — scored `SAME_AS` components, cheap→expensive cascade, conservative under-merge default + `candidate` links | G2.2 | **shipped (this increment)** — thin slice; anchor-canonicalization + belief-revision/contradiction loop deferred |
-| G2.4 | Reference binding (§3.1) — detect `Mention`s separately from binding; scored `REFERS_TO` via the scoped cascade; low-confidence stays open → provisional → triage | G2.2 | planned |
-| G2.5 | `PART_OF` abstraction levels (§14) — anchor-first to the pack taxonomy, induce fallback, coverage policy; level *derived* from the subject-role referent | G2.2 (+ G2.3 anchoring) | planned |
-| G2.6 | Conditional credibility (§9.1) gated by epistemic class + sensitivity seeding onto facts | G2.2 | planned |
+| G2.4 | Reference binding (§3.1) — detect `Mention`s separately from binding; scored `REFERS_TO` via the scoped cascade; low-confidence stays open → provisional → triage | G2.2 | **shipped (this increment)** — thin slice; pronoun/discourse-antecedent + taxonomy-anchor stages + multi-sample/verify confidence deferred |
+| G2.5 | `PART_OF` abstraction levels (§14) — anchor-first to the pack taxonomy, induce fallback, coverage policy; level *derived* from the subject-role referent | G2.2 (+ G2.3 anchoring) | **shipped (this increment)** — the induce path + cycle-safe `partOf` closure + derived-level read; anchoring (needs entity-linking) + embedding/IC level estimation deferred |
+| G2.6 | Conditional credibility (§9.1) gated by epistemic class + sensitivity seeding onto facts | G2.2 | **shipped (this increment)** — derived-not-stored credibility computation + sensitivity seed; the per-claim alignment-judging pass deferred |
 | G2.7 | Quarantine **enforcement** (Phase-1 G1.6) — provisional/low-faithfulness propositions cannot drive a `REFUTES` (gated until evidential edges exist) | Phase 4 edges | planned |
 
 Cross-cutting (enforced from G2.2 on): every created node/edge has a non-empty
@@ -315,3 +315,298 @@ edge keeps the entities separate but the fragmentation visible and the evidence 
 - [x] The canonical entity is the `confirmed`-`SAME_AS`-connected component, read for evidence
       aggregation; every run emits an `Action`.
 - [x] Re-resolving a box writes no duplicate edges (structural idempotency).
+
+---
+
+## G2.4 — Reference binding *(shipped — thin slice)*
+
+**Goal.** A proposition's surface references — a pronoun ("it"), a definite description
+("the bearing"), a named reference ("bearing 3") — denote entities already in the graph.
+**Reference binding is a separate, scored decision, not resolved invisibly** (§3.1):
+*detecting* that a mention needs a referent is robust, but choosing *which* entity is
+error-prone, so the two steps are split (as sign is split from magnitude in §8). G2.4
+detects `Mention`s and binds each to a canonical entity via a defeasible, confidence-bearing
+`REFERS_TO` edge through the scoped cascade (local antecedent → in-graph entity → taxonomy →
+unresolved). The default is **conservative**: a binding is `confirmed` only when a single
+referent clears a high bar; otherwise it stays **open** (one or more `candidate` edges) and
+the dependent proposition is marked `provisional` and routed to expert triage — an
+over-eager binding silently fabricates coreference and corrupts every downstream derivation.
+
+### What shipped
+
+- **`iknos/core/reference.py`.** Pure/DB split on the `core/resolve.py` discipline:
+  - *Pure (DB-free, unit-testable):* `MentionType` (pronoun/definite/proper); the detection
+    schema (`_MentionOut`/`DetectedMentions`) + prompt (`SYSTEM_PROMPT`/`build_messages`,
+    vocab generated from the same enums); `group_referents` (collapse same-label fresh nodes
+    into one canonical referent, with `exclude_ids` for the no-self-bind rule);
+    `block_referents` (the cheap stage — shared-token, kind-scoped); `score_binding` (the
+    deterministic lexical+attribute score — containment + exact label + kind agreement,
+    **never** similarity/attention); `decide_binding` (the conservative bars + tie handling);
+    and the canonical write contracts `mention_to_props` / `refers_to_to_props`.
+  - *`ReferenceBinder`:* the operator (`actor="reference-binder"`, `action_type="bind"`).
+    Box-scoped like the resolver; three-phase like the extractor — (1) serial Action-log
+    idempotency filter, (2) concurrent **detection** holding no DB session (LLM detection
+    only), (3) serial per-proposition persist (Mention vertices + `EVIDENCED_BY` provenance +
+    scored `REFERS_TO` + provisional OR-fold + one `bind` Action). Writes go through the
+    shared `merge_vertex`/`merge_edge` primitives.
+- **`iknos/types/edges.py`** gained `BindingState` (`candidate`/`confirmed`, mirroring
+  `SameAsState`); an unresolved mention writes **no** edge (the absence is the state).
+
+### Decisions
+
+- **Detection ≠ binding (§3.1).** The LLM does detection only and proposes *no* binding; the
+  binding score is deterministic (the `resolve.score_pair` precedent — no LLM in the scoring
+  path). Attention/embedding similarity never scores a binding; the lexical signal is
+  *containment* of the mention's surface in a referent's label (a referring expression is
+  typically a shorter form of a fuller name — "the bearing" ⊂ "bearing 3").
+- **No self-binding.** A mention's referent pool **excludes its own proposition's** extracted
+  entities — the same-clause entity is already captured by `INVOLVES`, not coreference; the
+  antecedent is elsewhere. Without this, a definite description trivially confirm-binds to the
+  fresh node extracted from its own clause and never discovers the cross-proposition referent.
+  This is what makes binding do real work (`group_referents(exclude_ids=…)`).
+- **Conservative, calibrated by the bars.** `confirm` (0.85) requires a *single* referent at
+  an exact label + agreeing kind; a near-tie (within `TIE_MARGIN`) or a merely-contained
+  partial match lands in the `candidate` band — kept **open** with one edge per tied referent
+  (§3.1 "multiple candidate targets when ambiguous"), and the proposition marked provisional.
+- **Provisional OR-fold (§3.1/G1.6).** A proposition resting on an unresolved or only
+  candidate-bound mention is set `provisional = true`; never cleared here (the proposition
+  layer's OR-fold discipline).
+- **Referents are label-grouped, not component-keyed.** Same-label fresh nodes collapse to one
+  referent at the canonical-min id (the `resolve.canonical_id` representative), so binding is
+  robust whether or not entity resolution (G2.3) has run — it need not be ordered after it.
+- **Idempotency keyed on the proposition id.** A proposition with an existing `bind` Action is
+  a no-op (Action-table backed, mirroring `extract._already_extracted`) — including a
+  mention-less proposition, so a re-run over a box settles. Re-binding under a changed pipeline
+  or after new entities arrive is belief revision (Phase 3).
+- **No migration.** `Mention` / `REFERS_TO` exist (migration 0004) and the 0007 label indexes
+  cover both.
+
+### Deferred (kept out of the thin slice — documented seams)
+
+- **Pronoun anaphora / the local-discourse-antecedent stage.** A bare pronoun has no lexical
+  content, so the in-graph-entity stage blocks it to the empty set — this slice **detects** it
+  and leaves it unresolved (→ provisional), the correct conservative behaviour. Binding it
+  needs the discourse-order antecedent stage (a dedicated coreference model, §3.1).
+- **Taxonomy-anchor stage** — binding a mention to a domain-pack taxonomy node needs
+  entity-linking → G2.5 (with the part-whole anchoring).
+- **Relational tie-break** — when several same-kind referents match a definite description
+  equally, this slice keeps them all `candidate`; using shared-fact/role context to break the
+  tie (the `resolve.score_pair` relational signal) is the natural enhancement.
+- **Multi-sample / verify confidence** (§3.1 "confidence from consistency + verification") —
+  this slice's confidence is the single deterministic binding score.
+- **Re-binding as belief revision** (re-run Layer A/B over the affected proposition) → Phase 3.
+- **Expert-triage queue** for open bindings → Phase 7; the slice marks the proposition
+  provisional and records the `candidate` edges the queue will later consume.
+
+### Tests
+
+- **Unit (`tests/unit/test_reference.py`, DB-free):** referent grouping (collapse, kind
+  separation, empty-label drop, `exclude_ids` self-bind exclusion + emptied-group drop);
+  blocking (shared-token requirement, pronoun→empty, kind-guess narrowing); scoring (exact
+  confirm, containment-only candidate, no-overlap/pronoun zero, partial-overlap monotonicity);
+  the decision bars (single-exact confirm, unresolved, tied candidates, single-partial open,
+  deterministic target ordering); and the `Mention`/`REFERS_TO` write contracts.
+- **Integration (`tests/integration/test_reference.py`, live AGE):** seed a box via the
+  extractor (mocked LLM) → bind (mocked detector) → a `confirmed` `REFERS_TO` to a prior named
+  entity with the proposition left non-provisional + the `bind` Action joinable + idempotent
+  re-run (no duplicate mentions/edges); an ambiguous definite description → two `candidate`
+  edges + provisional; a pronoun → no edge, Mention recorded, provisional. (Runs in CI;
+  locally collected only when `DATABASE_URL` is set.)
+
+### Exit criteria (G2.4)
+
+- [x] A proposition's surface references become `Mention` nodes (detection), provenance-linked
+      to their Span(s), separate from binding.
+- [x] Each mention binds to a canonical entity via a scored `REFERS_TO` through the in-graph
+      cascade stage; the score is deterministic (no attention), conservative by the bars.
+- [x] Ambiguous/low-confidence bindings stay **open** (multiple `candidate` targets / no edge)
+      and mark the dependent proposition `provisional`; every run emits an `Action`.
+- [x] Re-binding a settled proposition is a no-op (Action-log idempotency).
+
+---
+
+## G2.6 — Conditional credibility + sensitivity seeding *(shipped — thin slice)*
+
+**Goal.** Wire the two §9.1 governance quantities a Fact carries from the source, **keeping
+credibility derived and sensitivity propagated** — never a flat stored scalar (§9.1/§10).
+(1) **Sensitivity** seeds onto each base Fact as the lub of its source Span(s) — the §9.1
+information-flow high-water-mark, base case of the provenance propagation. (2) **Credibility
+is conditional and gated by epistemic class**: this increment ships the canonical
+*computation* over the stored inputs (box `reliability_prior` × an interest modifier that an
+**observation** ignores and a **judgement** applies fully) — **derived at use-time, never
+stored**, so a stored scalar can't collapse the conditional nature or fix it against later
+belief revision.
+
+### What shipped
+
+- **`iknos/core/credibility.py` (pure + one DB read).** `interest_modifier` (the §9.1
+  modifier interpolated from identity toward the alignment endpoint by the epistemic-class
+  *gate* — observation gate 0 ⇒ always 1.0; judgement gate 1 ⇒ full discount/boost) and
+  `effective_credibility` (`reliability_prior × modifier`, clamped) — both DB-free,
+  fail-loud on an unmapped enum (the `_ROUTING`/`_SENSITIVITY_RANK` convention).
+  `effective_credibility_of(session, fact_id)` is the use-time read: it walks Fact→Box
+  (`reliability_prior`), Fact→Proposition (`epistemic_class`), and the Fact's
+  `interest_alignment` slot, returning `None` when the chain is incomplete.
+- **`iknos/types/governance.py`** gained `InterestAlignment`
+  (`self-serving`/`neutral`/`against-interest`/`unknown`) — the derived per-claim credibility
+  input — and `Sensitivity.from_props` (the read inverse of `flatten`, decoding the
+  JSON-string compartment property; absent level ⇒ public origin).
+- **`iknos/core/extract.py`** now seeds the Fact's sensitivity from its source spans
+  (`seed_sensitivity` = lub-fold; `_span_sensitivities` reads them via
+  `Sensitivity.from_props`) instead of leaving the lattice origin, and serializes the
+  `interest_alignment` slot (omitted while `None`). **`iknos/types/nodes.py`** Fact gained
+  the `interest_alignment` field (the schema-contract placeholder).
+
+### Decisions
+
+- **Credibility is derived, never stored (§9.1/§10).** Phase 2 seeds the *inputs* only; the
+  scalar is computed by `effective_credibility_of` at use-time (Phase 4's adjudication — the
+  §8↔credibility seam) and may be materialized later as a recomputed cache, like level (§14).
+  A stored credibility number is the explicit anti-pattern §9.1 forbids.
+- **Gated by epistemic class, in the formula.** The observation/judgement split is a property
+  of `interest_modifier` (the class gate), not a caller branch — "credibility applies where it
+  matters" can't be forgotten at a call site. Observation credibility is interest-independent;
+  judgement/testimony are interest-weighted (self-serving discounted, against-interest boosted
+  to the clamp ceiling — an admission against interest is maximally credible).
+- **Unknown alignment is the identity, not a penalty.** A Fact's `interest_alignment` is `None`
+  until the (deferred) judging pass runs; the read coerces it to `UNKNOWN` (modifier 1.0), so
+  an un-judged claim's credibility is just the box reliability — defer, never penalize on
+  absence (the `faithfulness`/`provisional` placeholder convention).
+- **Sensitivity seed is the base case of the §9.1 propagation.** A base Fact's antecedents are
+  its source Span(s); its sensitivity is their lub. The `DERIVED_FROM` walk that carries
+  sensitivity to *conclusions* (the lub over a derivation's antecedents) stays deferred to
+  Phase 3/5 — this increment does the base layer the walk will build on.
+- **No migration.** AGE is schemaless for properties; `interest_alignment` /
+  `sensitivity_*` are plain property strings on existing labels.
+
+### Deferred (kept out of the thin slice — documented seams)
+
+- **The per-claim interest-alignment judging pass** (LLM/expert-flagged against the pack's
+  source-interest patterns, §9.1) — the Fact's `interest_alignment` is `None` until it runs.
+- **Track-record belief revision** of source credibility after a refuted claim (§9.1) → Phase
+  3/4; this increment computes point-in-time credibility from current inputs.
+- **Independence-aware corroboration + coherence/triage** defenses (§9.1) compose *around*
+  credibility in Phase 4, not inside the scalar.
+- **`DERIVED_FROM` sensitivity propagation** to conclusions → Phase 3/5.
+- **`significance` prior** is an *edge* property (SUPPORTS/REFUTES), so it lands with those
+  edges in Phase 4; a Fact stores no significance — the box `reliability_prior` it would seed
+  from is already reachable (Fact→Box).
+
+### Tests
+
+- **Unit:** `test_credibility.py` (the gate — observation interest-independent for every
+  alignment; judgement discount/boost; clamp to [0,1]; UNKNOWN identity; out-of-range raise);
+  `test_governance.py` (`Sensitivity.from_props` round-trip + JSON-string/absent/empty
+  compartments; `InterestAlignment` vocab); `test_extract.py` (`seed_sensitivity` lub-fold;
+  `fact_to_props` omits `interest_alignment` when unjudged, writes it when set).
+- **Integration (`tests/integration/test_credibility.py`, live AGE):** a Fact inherits a
+  confidential span's sensitivity (lub); `effective_credibility_of` returns the box reliability
+  for an observation; for a judgement it passes reliability through while unjudged, then
+  discounts once an alignment pass flags it self-serving. (Runs in CI.)
+
+### Exit criteria (G2.6)
+
+- [x] A base Fact's `sensitivity` is the lub of its source Span(s) (§9.1), not the lattice
+      origin — seeded at extraction.
+- [x] Effective credibility is **computed** from stored inputs (box reliability ×
+      epistemic-class-gated interest modifier), never stored as a scalar; an observation's
+      credibility is interest-independent, a judgement's is interest-weighted.
+- [x] The per-claim `interest_alignment` input slot exists on the Fact (placeholder, `None`
+      until the judging pass) and is read by the credibility computation.
+
+---
+
+## G2.5 — Part-whole abstraction levels *(shipped — thin slice)*
+
+**Goal.** A fact attaches at a *level* of the domain's part-whole structure, and **level is
+relative, derived, and a property of the referent — not the sentence** (§14): no stored level
+scalar; a reasoning node's level is the position of its **subject-role** `INVOLVES` entity in
+the `PART_OF` order. This increment builds that order over `Actor`/`Object` entities (typed,
+split into intransitive `directPartOf` + the transitive `partOf` closure, roll-up restricted
+to the transitivity-safe component-integral subtype, §14) and derives level from it.
+Acquisition is **anchor-first, induce-fallback** (§14); since anchoring needs entity-linking
+(the deferred G2.3/G2.4 seam), this slice ships the **induce path** — the §9.1 "induce-mode"
+that is the correct cold-start behaviour, everything provisional.
+
+### What shipped
+
+- **`iknos/core/partwhole.py`.** Pure/DB split on the `core/reference.py` discipline:
+  - *Pure (DB-free, unit-testable):* the detection schema (`_PartOfOut`/`InducedMeronymy`) +
+    prompt; **`transitive_closure`** — the cycle-safe `directPartOf`→`partOf` closure
+    (Kahn-peel to isolate any meronymy *cycle*, which is a contradiction excluded from
+    roll-up and flagged, §14; then memoized DFS over the acyclic DAG); **`derived_level`**
+    (partonomy depth = component-integral ancestor count — depth 0 coarsest, structure-only,
+    *not* embedding cosine / lexical concreteness, §14); `_resolve_endpoints` (map detected
+    surfaces to canonical entities, drop unresolved/self-loop); and the `directPartOf` /
+    `partOf` write contracts.
+  - *`MeronymyInducer`:* the operator (`actor="meronymy-inducer"`, `action_type="induce"`).
+    Box-scoped, three-phase like the reference binder — Action-log idempotency → concurrent
+    detection → serial `directPartOf` persist — then a final box-wide `partOf` closure
+    recompute (restricted to component-integral via `edges.is_transitive`). `entity_level` /
+    `fact_level` are the derived-level reads (a fact with several subject referents yields
+    several levels — uncertain/multiple, never forced, §14).
+- **`iknos/types/edges.py`** gained `MeronymyType` (Winston/Chaffin/Herrmann subtypes) +
+  `is_transitive` (only component-integral) + `AttachmentProvenance`
+  (`anchored`/`induced`/`relative`).
+
+### Decisions
+
+- **Typed and split; roll-up only along component-integral (§14).** `directPartOf` is each
+  direct step; `partOf` is the closure, and `is_transitive` gates which subtype rolls up — a
+  member-collection / portion-mass relation is recorded but **excluded** from `partOf`, so
+  wrong aggregations never leak into coarse views. One definition of the rule
+  (`_TRANSITIVE_MERONYMY`), read by the closure and any later view code.
+- **Cycles are excluded and flagged, not closed through.** A meronymy cycle is a contradiction
+  (no valid hierarchy); the closure isolates the cyclic nodes (Kahn) and excludes them, returning
+  them as an unstable region for review — never a silent self-ancestor.
+- **Level is derived, never stored (§14).** `entity_level`/`fact_level` *compute* depth from
+  the live `partOf` order, so it stays correct as the hierarchy is refined; there is no `level`
+  property on a Fact. The continuous intrinsic-IC refinement (Seco) and box-embedding/ConE
+  generality for out-of-taxonomy entities are deferred seams — this slice is the depth term
+  they scale.
+- **Canonical-by-label endpoints + canonicalizing read.** `directPartOf` connects label-grouped
+  canonical entities (the `reference.group_referents` representative), and the level read
+  resolves a fact's subject node through the **same** grouping (`_canonical_map`) before
+  counting ancestors — so any fresh node of an entity reports the same level, robust to whether
+  entity resolution (G2.3) has run (its `SAME_AS` min-id representative coincides with this
+  canonical; folding `SAME_AS` in is a later refinement).
+- **Idempotency keyed on the proposition id**; the closure recompute is structurally idempotent
+  (`merge_edge` upsert). Retraction/cleanup of stale `partOf` on edge removal is belief revision
+  (Phase 3) — this slice's closure is monotonic per run.
+- **No migration.** `directPartOf`/`partOf` exist (migration 0004); the 0007 indexes cover them.
+
+### Deferred (kept out of the thin slice — documented seams)
+
+- **Anchoring to the pack taxonomy** (the *primary*, reliable path, §14) — needs entity-linking
+  → with G2.3/G2.4 anchor-canonicalization. This slice runs induce-mode (everything provisional).
+- **Relative ordering (last resort)** — containment cues + co-occurrence/degree asymmetry + the
+  §2 chunk prior when no parent is named (§14 step 3).
+- **Continuous level / intrinsic IC + box-embedding/ConE** generality (§14); never embedding
+  cosine or lexical concreteness.
+- **Coverage-policy metric** (fraction of referents that anchor) — needs anchoring to exist.
+- **Belief-revision / retraction** of induced edges + stale-`partOf` cleanup → Phase 3.
+- **Merge with anchored structure / cross-pack taxonomy conflict resolution** → with anchoring.
+
+### Tests
+
+- **Unit (`tests/unit/test_partwhole.py`, DB-free):** `is_transitive` (only component-integral);
+  `transitive_closure` (chain, diamond DAG, cycle exclusion+flag, self-loop drop, order
+  independence); `_acyclic_edges` cycle separation; `derived_level` (ancestor count, distinct
+  ancestors in a DAG); `_resolve_endpoints` (label mapping, unresolved/self-loop drop);
+  detection-schema default; the `directPartOf`/`partOf` write contracts.
+- **Integration (`tests/integration/test_partwhole.py`, live AGE):** a four-level
+  component-integral chain across propositions → 3 `directPartOf` + a 6-pair `partOf` closure;
+  a fact's `fact_level` derives the roller's depth (3) even though its subject is a *different*
+  fresh node than the one in the hierarchy (canonicalization); idempotent re-run; a
+  member-collection relation tagged but **excluded** from the `partOf` roll-up. (Runs in CI.)
+
+### Exit criteria (G2.5)
+
+- [x] `Actor`/`Object` entities form a typed `directPartOf` (step) + `partOf` (closure)
+      hierarchy; roll-up runs only along the transitivity-safe component-integral subtype.
+- [x] The hierarchy is a DAG: meronymy cycles are excluded from roll-up and flagged, never
+      closed through.
+- [x] A fact's abstraction level is **derived** from its subject-role referent's partonomy
+      depth (uncertain/multiple when ambiguous), never a stored scalar.
+- [x] Induced edges carry the meronymy type + `provenance=induced` + confidence + two
+      annotations + bitemporal fields; re-inducing a box writes no duplicate edges.

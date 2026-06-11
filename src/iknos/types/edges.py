@@ -42,6 +42,78 @@ class SameAsState(StrEnum):
     CONFIRMED = "confirmed"
 
 
+class BindingState(StrEnum):
+    """The ``state`` property on a ``REFERS_TO`` binding edge (§3.1, §10).
+
+    Reference binding is a **separate, scored decision** — detecting that a mention needs
+    a referent is robust, but choosing *which* entity is error-prone, so it is split out and
+    kept defeasible (§3.1). The state mirrors :class:`SameAsState`'s conservative default:
+
+    - ``CONFIRMED`` — a single referent cleared the high binding bar: the ``Mention``'s
+      denotation is committed.
+    - ``CANDIDATE`` — below that bar, or two referents tie: the binding stays **open**. The
+      mention may carry *several* ``CANDIDATE`` ``REFERS_TO`` edges (the competing referents,
+      §3.1 "may carry multiple candidate targets when ambiguous"), and a proposition resting
+      on an un-confirmed mention is marked ``provisional`` and routed to expert triage.
+
+    An ``unresolved`` mention (no referent above even the candidate bar) writes **no** edge —
+    the absence of a ``REFERS_TO`` is itself the unresolved state, and still marks its
+    proposition provisional.
+    """
+
+    CANDIDATE = "candidate"
+    CONFIRMED = "confirmed"
+
+
+class MeronymyType(StrEnum):
+    """The part-whole *type* tag on a ``directPartOf``/``partOf`` edge (§14, §10).
+
+    Part-of is **not uniformly transitive** across meronymy types (Winston/Chaffin/Herrmann;
+    Keet & Artale): only the **component-integral / functional-complex** subtype
+    (gearbox ⊃ shaft ⊃ bearing ⊃ roller) is transitivity-safe, so abstraction roll-up — the
+    ``partOf`` closure and ancestor views — runs **only** along it (:func:`is_transitive`).
+    Member-collection, portion-mass, stuff-object, feature-activity and place-area are tagged
+    and **excluded from blanket roll-up**, or wrong aggregations leak into coarse views (§14).
+    """
+
+    COMPONENT_INTEGRAL = "component-integral"  # the only transitivity-safe subtype
+    MEMBER_COLLECTION = "member-collection"
+    PORTION_MASS = "portion-mass"
+    STUFF_OBJECT = "stuff-object"
+    FEATURE_ACTIVITY = "feature-activity"
+    PLACE_AREA = "place-area"
+
+
+# The transitivity-safe subtypes (§14). A frozenset, not a per-member flag, so the
+# transitivity rule has one definition the closure and any view code read.
+_TRANSITIVE_MERONYMY: frozenset[MeronymyType] = frozenset({MeronymyType.COMPONENT_INTEGRAL})
+
+
+def is_transitive(meronymy_type: MeronymyType) -> bool:
+    """Whether ``partOf`` roll-up may run along this meronymy type (§14).
+
+    Only ``COMPONENT_INTEGRAL`` is transitivity-safe; every other subtype is excluded from the
+    transitive closure (and from blanket ancestor views) to keep wrong aggregations out of
+    coarse-level presentation.
+    """
+    return meronymy_type in _TRANSITIVE_MERONYMY
+
+
+class AttachmentProvenance(StrEnum):
+    """How a part-whole edge's level attachment was produced (§14) — the ``provenance`` tag.
+
+    Records *which acquisition path* set the level, so its confidence is interpretable:
+    ``ANCHORED`` (entity-linked to a domain-pack taxonomy — the reliable, high-confidence
+    path) vs ``INDUCED`` (text-induced meronymy — lower-confidence, human-review-gated) vs
+    ``RELATIVE`` (last-resort relative ordering when no parent is named). The induce slice
+    (G2.5) writes ``INDUCED``; anchoring is the deferred primary path.
+    """
+
+    ANCHORED = "anchored"
+    INDUCED = "induced"
+    RELATIVE = "relative"
+
+
 class Role(StrEnum):
     """The ``role`` property on an ``INVOLVES`` edge (§10).
 

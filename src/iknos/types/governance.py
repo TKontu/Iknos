@@ -13,6 +13,7 @@ somewhere to write:
   credibility (§9.1). Credibility itself is derived, never stored (see ``Box``).
 """
 
+import json
 from enum import StrEnum
 from typing import Any
 
@@ -81,6 +82,29 @@ class Sensitivity(BaseModel):
             "sensitivity_compartments": sorted(self.compartments),
         }
 
+    @classmethod
+    def from_props(cls, props: dict[str, Any]) -> "Sensitivity":
+        """Read a :class:`Sensitivity` back from flat AGE properties — inverse of
+        :meth:`flatten` (cf. ``boxes/serde.box_from_props``).
+
+        ``cypher_map`` writes ``sensitivity_compartments`` as a JSON-encoded **string**
+        (a list is not a native agtype scalar), so it comes back as JSON text to decode;
+        a real list (defensive) or an absent/null value is tolerated. An absent
+        ``sensitivity_level`` defaults to the lattice origin (``PUBLIC``) — the §9.1 floor
+        for an un-annotated node, so the propagation seed is never below it.
+        """
+        level_raw = props.get("sensitivity_level")
+        level = SensitivityLevel(level_raw) if level_raw else SensitivityLevel.PUBLIC
+
+        comp_raw = props.get("sensitivity_compartments")
+        if comp_raw is None or comp_raw == "":
+            compartments: frozenset[str] = frozenset()
+        elif isinstance(comp_raw, str):
+            compartments = frozenset(json.loads(comp_raw))
+        else:
+            compartments = frozenset(comp_raw)
+        return cls(level=level, compartments=compartments)
+
 
 class SourceInterest(BaseModel):
     """A source's stake/role — an input to conditional credibility (§9.1).
@@ -111,3 +135,26 @@ class SourceInterest(BaseModel):
             "interest_role": self.role,
             "interest_stake": sorted(self.stake),
         }
+
+
+class InterestAlignment(StrEnum):
+    """The per-claim alignment between a claim and its source's interest (§9.1).
+
+    The **derived per-claim input** to conditional credibility (§10 ``credibility``): given
+    a source's ``SourceInterest`` (role/stake, from the domain pack) and a specific claim,
+    whether the claim *serves* the source's interest (discount — a bearing supplier blaming
+    transport for its own component's failure), is *neutral*, or runs *against* it (boost — an
+    admission against interest is a recognized reliability signal). A ``StrEnum`` so it
+    serializes to a plain AGE property string like the epistemic enums.
+
+    Per-claim alignment is **LLM/expert-flagged, defeasible, overridable, and logged** (§9.1)
+    — the judging pass is a later increment, so a Fact carries ``None`` until then (the
+    schema-contract-placeholder convention, cf. ``Proposition.faithfulness``).
+    :func:`iknos.core.credibility.effective_credibility` treats an absent alignment as
+    ``UNKNOWN`` (the identity modifier — defer, never penalize on absence).
+    """
+
+    SELF_SERVING = "self-serving"
+    NEUTRAL = "neutral"
+    AGAINST_INTEREST = "against-interest"
+    UNKNOWN = "unknown"

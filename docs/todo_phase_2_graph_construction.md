@@ -29,30 +29,46 @@ because Phase 2 is where its absence turns from latent to expensive.*
       atoms cannot drive high-stakes moves (e.g. a `REFUTES`)" is enforced at
       edge-creation time — which begins in this phase. Until enforced, the flag is
       decorative.
-- [ ] **Polarity-aware agreement (G1.14) and the truncation guard (G1.13 slice 1)
+- [x] **Polarity-aware agreement (G1.14) and the truncation guard (G1.13 slice 1)
       shipped** — Phase 2 consumes propositions and their faithfulness; both fixes
-      change what reaches it.
+      change what reaches it. *(Shipped in #32 — `feat(ingest): G1.13 slice 1
+      truncation guard + G1.14 polarity-aware agreement`.)*
 - [ ] **Structured table payload available (G1.18)** if table extraction is in this
       phase's scope — the "rows/cells → propositions with column semantics" task
       below has nothing to read without it.
 
 ## Boxes & tiers (§9)
 
-- [ ] Operationalize the **tier** axis (schema → reference → case → working) as the
+- [x] Operationalize the **tier** axis (schema → reference → case → working) as the
       reasoning/entrenchment ordering; `tier` resolved from `Box`, override allowed.
-- [ ] Operationalize the **box** axis (lifecycle/provenance unit): create, version,
-      set reliability prior, status (active/deprecated).
-- [ ] **Source vs working** boxes: source boxes append-on-ingest; one mutable working
-      box per investigation (full lifecycle wiring in Phase 6).
-- [ ] Box-scoped management operations (SQL by `box`); reasoning reads across active
-      boxes by tier + reliability.
-- [ ] Reference boxes are mostly TBox (rules/taxonomies); case boxes are ABox
-      (observations) — reflect in how extraction populates each.
-- [ ] **Domain packs (§9):** activate the investigation's domain pack(s); resolve the
+      *(G2.1 — `boxes/serde.resolve_tier(box, override)`; the `Tier` order is the §9
+      entrenchment ordering, consumed by `extract` when it stamps Facts.)*
+- [x] Operationalize the **box** axis (lifecycle/provenance unit): create, version,
+      set reliability prior, status (active/deprecated). *(G2.1 — `boxes/registry`:
+      `create_box` (create-only `valid_from`), `deprecate_box`; `Box.version`/
+      `reliability_prior`/`status`. Metadata *editing* (changing reliability) is the
+      later governance/soft-override concern.)*
+- [~] **Source vs working** boxes: source boxes append-on-ingest; one mutable working
+      box per investigation (full lifecycle wiring in Phase 6). *(G2.1 — the source side
+      ships: `boxes/serde.case_box` builds an append-on-ingest case box (the `extract`
+      write target). The mutable per-investigation working box is Phase 6, as scoped.)*
+- [x] Box-scoped management operations (SQL by `box`); reasoning reads across active
+      boxes by tier + reliability. *(G2.1 — `boxes/registry.list_boxes` (by box/tier/
+      status) and `active_boxes_by_tier` (joint read across active boxes, ordered by
+      `reliability_prior` desc) — the §9 "reasoning reads across active boxes" query.)*
+- [x] Reference boxes are mostly TBox (rules/taxonomies); case boxes are ABox
+      (observations) — reflect in how extraction populates each. *(Reflected: the domain
+      pack loader (G0.7 `domain/loader`) populates **reference** boxes with the TBox
+      taxonomy; `extract` (G2.2) populates **case** boxes with ABox Facts.)*
+- [~] **Domain packs (§9):** activate the investigation's domain pack(s); resolve the
       domain entity-type ontology + part-whole taxonomy + optional **reference hypothesis
       set** (known failure modes / FMEA / diagnosis libraries, for Task seeding §11.2)
       from them. The epistemic schema stays fixed; only the domain layer comes from packs.
-      Cross-domain = multiple packs active.
+      Cross-domain = multiple packs active. *(G0.7 — `domain/loader.load_pack` resolves a
+      pack's entity-type ontology + part-whole taxonomy (Objects + `directPartOf`/`partOf`)
+      into a reference Box; `Box.status == active` is the activation flag and `list_active_packs`
+      the lookup. **Investigation-scoped** activation (an `ACTIVATES` edge from the root Task)
+      and the **reference hypothesis set** are Phase 6 seams.)*
 
 ## Node extraction (the `extract` operator, §6)
 
@@ -89,25 +105,41 @@ because Phase 2 is where its absence turns from latent to expensive.*
   - [x] Scope by box/pack; cross-box `SAME_AS` belongs to the working box (§9). *(G2.3 —
         within-source-box resolution: the caller passes one box's entities. Cross-box
         `SAME_AS` in the working box is deferred to the investigation runtime, Phase 6.)*
-- [ ] **Reference binding (§3.1):** detect `Mention`s ("it", "the bearing", "bearing 3")
+- [x] **Reference binding (§3.1):** detect `Mention`s ("it", "the bearing", "bearing 3")
       as a step *separate* from binding; bind each to a canonical entity with a scored,
       defeasible `REFERS_TO` edge via the scoped cascade (local antecedent → in-graph
       entity → domain-pack taxonomy → unresolved). Use a dedicated coreference model +
       entity linking; **do not score bindings by attention.** Confidence from
       consistency + verification. Low-confidence/ambiguous bindings stay open (multiple
       candidates), mark dependent propositions `provisional`, and route to expert triage.
+      *(G2.4 — `core/reference.py`: LLM **detection** only → deterministic lexical binding
+      (no attention) → scored `REFERS_TO` with `BindingState`; ambiguous/unresolved stay
+      open + mark the proposition `provisional`. Thin slice: the in-graph-entity cascade
+      stage. Deferred seams — pronoun/local-discourse-antecedent + taxonomy-anchor stages,
+      multi-sample/verify confidence, expert-triage queue (Phase 7), re-bind belief
+      revision (Phase 3).)*
 - [x] `INVOLVES` edges (fact → actor/object) with `role`; `EVIDENCED_BY` edges (fact →
       proposition/span). *(G2.2 — Fact `EVIDENCED_BY` its Proposition and each Span.)*
-- [ ] Seed each fact's source-reliability/`significance` prior from its box tier (§9,
-      feeds Phase 4 edge significance).
-- [ ] **Conditional credibility (§9.1), gated by epistemic class:** for **observations**
+- [x] Seed each fact's source-reliability/`significance` prior from its box tier (§9,
+      feeds Phase 4 edge significance). *(G2.6 — the source-reliability prior (box
+      `reliability_prior`) is reachable Fact→Box and consumed by `effective_credibility`;
+      `significance` is an SUPPORTS/REFUTES *edge* property, so it lands with those edges in
+      Phase 4, not on the Fact.)*
+- [x] **Conditional credibility (§9.1), gated by epistemic class:** for **observations**
       credibility is minor (checked by corroboration/verification, not interest-discount);
       for **judgements** effective credibility = box base reliability × claim-interest
       alignment (self-serving discounted; against-interest boosted). Source `interest`/role
       patterns come from the domain pack; per-claim alignment is LLM/expert-flagged,
-      defeasible, logged. Distinct from faithfulness and strength.
-- [ ] **Sensitivity (§9.1):** carry the source `sensitivity` onto facts; derived nodes
-      inherit the max of antecedents (propagated in Phase 3/5).
+      defeasible, logged. Distinct from faithfulness and strength. *(G2.6 —
+      `core/credibility.py`: `effective_credibility` is **derived, never stored** — box
+      reliability × an epistemic-class-gated `interest_modifier`; `effective_credibility_of`
+      reads the stored inputs at use-time. The per-claim `interest_alignment`
+      (`InterestAlignment`) slot exists on the Fact; the LLM/expert alignment-judging pass is
+      a deferred seam, so it is `None`→`UNKNOWN` (identity) until then.)*
+- [x] **Sensitivity (§9.1):** carry the source `sensitivity` onto facts; derived nodes
+      inherit the max of antecedents (propagated in Phase 3/5). *(G2.6 — `extract` seeds a
+      base Fact's `sensitivity` as the lub of its source Span(s) (`seed_sensitivity`); the
+      `DERIVED_FROM` walk that propagates to conclusions is Phase 3/5.)*
 - [x] Both annotations initialized: support-count and confidence (§12). *(G2.2 —
       `base_annotations`: `support_count=1` (one `EVIDENCED_BY` grounding), `confidence`
       seeded from faithfulness or the Viterbi identity `1.0`; the computed Layer-B value
@@ -115,47 +147,80 @@ because Phase 2 is where its absence turns from latent to expensive.*
 
 ## Part-whole hierarchy (§14) — abstraction levels
 
-- [ ] Build the `PART_OF` hierarchy over `Actor`/`Object` entities as **typed** edges:
+- [x] Build the `PART_OF` hierarchy over `Actor`/`Object` entities as **typed** edges:
       `directPartOf` (intransitive step) + `partOf` (transitive closure) with a
       meronymy-type tag; DAG; defeasible, provenanced, bitemporal, overridable. Restrict
-      transitive roll-up to the component-integral subtype (§10/§14).
+      transitive roll-up to the component-integral subtype (§10/§14). *(G2.5 —
+      `core/partwhole.py` + `edges.MeronymyType`/`is_transitive`: `transitive_closure` is
+      cycle-safe (Kahn-isolates meronymy cycles, excludes+flags them) and component-integral-
+      restricted; edges carry the type tag, two annotations, bitemporal.)*
 - [ ] **Anchor first (primary, reliable):** entity-link each referent to the active
       domain pack's taxonomy (ISO 14224, BOM, FMA…) and read the level off. Record
-      attachment provenance = anchored, high confidence (§14).
-- [ ] **Induce only as fallback (out-of-taxonomy referents):** the `extract` pass emits
+      attachment provenance = anchored, high confidence (§14). *(Deferred — needs
+      entity-linking, the G2.3/G2.4 anchor seam; `AttachmentProvenance.ANCHORED` reserved.)*
+- [x] **Induce only as fallback (out-of-taxonomy referents):** the `extract` pass emits
       `directPartOf` candidates from compositional noun phrases ("high speed shaft
       locating bearing"), "Y of X", possessives, "part of". Lower confidence,
-      human-review-gated; provenance = induced.
+      human-review-gated; provenance = induced. *(G2.5 — `MeronymyInducer`: LLM detection
+      from compositional cues → `directPartOf` with `provenance=induced`, `INDUCED_CONFIDENCE`.)*
 - [ ] **Relative ordering (last resort):** containment cues + co-occurrence/degree
-      asymmetry + the §2 chunk-level prior, when no parent is named.
+      asymmetry + the §2 chunk-level prior, when no parent is named. *(Deferred → §14 step 3.)*
 - [ ] **Coverage policy:** measure the fraction of referents that anchor to the active
       pack(s). High → anchoring is the level mechanism; persistently low → pack
       inadequate, escalate to induction + review and mark levels provisional (§14).
-- [ ] **Level estimation:** anchored → partonomy depth + intrinsic IC (Seco, subtree
+      *(Deferred — needs anchoring to exist to measure coverage against.)*
+- [~] **Level estimation:** anchored → partonomy depth + intrinsic IC (Seco, subtree
       size, structure-only); out-of-taxonomy → box embeddings (or ConE for joint
       is-a + part-of). Do **not** use embedding cosine or lexical concreteness as level
-      proxies (§13).
-- [ ] Attach each fact's **derived level** via its subject-role `INVOLVES` entity;
-      represent ambiguous attachment as uncertain/multiple, not forced (§14).
-- [ ] Keep `PART_OF` distinct from the §6 community structure — community ≠ partonomy.
+      proxies (§13). *(G2.5 — the **structure-only partonomy depth** (`derived_level` =
+      ancestor count) ships; the intrinsic-IC refinement and box-embedding/ConE generality
+      are deferred seams. Embedding cosine / lexical concreteness are correctly never used.)*
+- [x] Attach each fact's **derived level** via its subject-role `INVOLVES` entity;
+      represent ambiguous attachment as uncertain/multiple, not forced (§14). *(G2.5 —
+      `fact_level`: subject-role referent's depth, canonicalized; several subjects → several
+      levels, never forced.)*
+- [x] Keep `PART_OF` distinct from the §6 community structure — community ≠ partonomy.
+      *(G2.5 — `partOf` is compositional containment built from meronymy cues only; the §6
+      Leiden community structure is a separate, later subsystem and is never substituted.)*
 
 ## Provenance & audit (cross-cutting, enforced here)
 
-- [ ] Every created node/edge has a non-empty provenance path to `Span`(s) (§10).
-- [ ] Every `extract` run emits an `Action` record: inputs (spans/propositions),
-      outputs (node ids), model, sampling (§10.1).
-- [ ] Verify per-node auditability: from a `Fact`, reach its spans, source text, and
-      producing `Action` (§10.2).
+- [~] Every created node/edge has a non-empty provenance path to `Span`(s) (§10).
+      *(G2.2 writes the path at creation — Fact `EVIDENCED_BY` Proposition + Span(s),
+      entities box-tagged and named in the same Action; G2.7 makes the **Fact-anchored**
+      path checkable (`audit_box_facts`). A *universal* per-node/edge crawler (every
+      Actor/Object/edge proven independently) is a deferred seam — entities are reached
+      through their Fact, so they inherit its provenance.)*
+- [x] Every `extract` run emits an `Action` record: inputs (spans/propositions),
+      outputs (node ids), model, sampling (§10.1). *(G2.2 — and every Phase-2 write
+      operator does likewise: `resolve`, `reference`, `partwhole`, the box registry, and
+      the pack loader each `record_action` at creation, via `provenance/action_log`.)*
+- [x] Verify per-node auditability: from a `Fact`, reach its spans, source text, and
+      producing `Action` (§10.2). *(G2.7 — `provenance/audit`: `fact_provenance` walks
+      Fact → Proposition + Span(s) → resolved source text → producing extract `Action`;
+      `audit_box_facts` is the box-level invariant (returns the Facts that fail, with the
+      gap reasons). Backed by the migration-0008 partial functional index on
+      `actions(outputs->>'fact')` so the reach-back stays O(log n).)*
 
 ## Exit criteria
 
-- [ ] Ingested propositions become a deduplicated graph of facts/actors/objects in the
-      correct box and tier.
-- [ ] No node or edge exists without provenance and an `Action` record.
-- [ ] Reference vs case knowledge can be loaded into distinct boxes and queried both
-      separately (by box) and jointly (by tier).
-- [ ] Facts attach to a `PART_OF` hierarchy — anchored to a domain pack where coverage
+- [x] Ingested propositions become a deduplicated graph of facts/actors/objects in the
+      correct box and tier. *(G2.2 produces Facts + Actor/Object nodes boxed/tiered;
+      "deduplicated" = the **non-destructive** `SAME_AS`-component identity of G2.3 — the
+      canonical entity is the connected component, reasoning aggregates at component level.)*
+- [~] No node or edge exists without provenance and an `Action` record. *(Enforced at
+      creation by every write operator; **verified** for Facts by G2.7 `audit_box_facts`.
+      The universal per-node/edge crawler that would make this fully checkable is the
+      deferred seam noted under Provenance & audit.)*
+- [x] Reference vs case knowledge can be loaded into distinct boxes and queried both
+      separately (by box) and jointly (by tier). *(G0.7 pack loader → reference boxes;
+      G2.2 extract → case boxes; G2.1 `list_boxes` (by box) + `active_boxes_by_tier`
+      (jointly by tier).)*
+- [~] Facts attach to a `PART_OF` hierarchy — anchored to a domain pack where coverage
       allows, induced+flagged otherwise — and a node's level resolves from its referent.
+      *(G2.5 — the **induced+flagged** path and structure-only level ship; `fact_level`
+      resolves a node's level from its subject-role referent. **Anchored** attachment
+      (entity-link to the pack taxonomy) is the deferred entity-linking seam.)*
 
 ## Phase risks / decisions
 

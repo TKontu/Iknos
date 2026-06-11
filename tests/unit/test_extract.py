@@ -22,9 +22,10 @@ from iknos.core.extract import (
     build_messages,
     fact_to_props,
     seed_confidence,
+    seed_sensitivity,
 )
 from iknos.types.annotations import Annotations
-from iknos.types.governance import Sensitivity, SensitivityLevel
+from iknos.types.governance import InterestAlignment, Sensitivity, SensitivityLevel
 from iknos.types.nodes import Fact, Tier
 from iknos.types.temporal import BitemporalFields
 
@@ -141,6 +142,43 @@ def test_fact_to_props_serializes_event_time_and_sensitivity():
 def test_fact_to_props_omits_override_for_machine_fact():
     # §10.3: override is null on machine-produced values — omitted, not written as null.
     assert "override" not in fact_to_props(_fact())
+
+
+def test_fact_to_props_omits_interest_alignment_when_unjudged():
+    # None = no alignment pass has run yet — omitted, not written as null (the placeholder
+    # convention; effective credibility treats absence as UNKNOWN, the identity modifier).
+    assert "interest_alignment" not in fact_to_props(_fact())
+
+
+def test_fact_to_props_writes_interest_alignment_when_set():
+    props = fact_to_props(_fact(interest_alignment=InterestAlignment.SELF_SERVING))
+    assert props["interest_alignment"] == "self-serving"
+
+
+# --- sensitivity seeding (§9.1) — the base-fact lub of its source spans ---
+
+
+def test_seed_sensitivity_empty_is_public_origin():
+    s = seed_sensitivity([])
+    assert s.level is SensitivityLevel.PUBLIC
+    assert s.compartments == frozenset()
+
+
+def test_seed_sensitivity_single_passes_through():
+    s = seed_sensitivity([Sensitivity(level=SensitivityLevel.CONFIDENTIAL)])
+    assert s.level is SensitivityLevel.CONFIDENTIAL
+
+
+def test_seed_sensitivity_lubs_level_and_unions_compartments():
+    # The information-flow high-water-mark: the highest level, every compartment (§9.1).
+    s = seed_sensitivity(
+        [
+            Sensitivity(level=SensitivityLevel.INTERNAL, compartments=frozenset({"a"})),
+            Sensitivity(level=SensitivityLevel.RESTRICTED, compartments=frozenset({"b"})),
+        ]
+    )
+    assert s.level is SensitivityLevel.RESTRICTED
+    assert s.compartments == frozenset({"a", "b"})
 
 
 # --- inference path (mocked LLM, DB-free) ---
