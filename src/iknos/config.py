@@ -1,5 +1,12 @@
-from pydantic import Field
+import re
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# A bare SQL identifier: a letter/underscore start, then alphanumerics/underscores. AGE
+# graph names are Postgres identifiers (≤63 bytes), so this is their real shape — and the
+# guard the cypher() interpolation relies on (see graph_name below).
+_SQL_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class Settings(BaseSettings):
@@ -10,6 +17,25 @@ class Settings(BaseSettings):
     api_port: int = Field(8000, alias="API_PORT")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     graph_name: str = Field("iknos", alias="GRAPH_NAME")
+
+    @field_validator("graph_name")
+    @classmethod
+    def _validate_graph_name(cls, v: str) -> str:
+        """Reject any GRAPH_NAME that is not a bare SQL identifier.
+
+        ``graph_name`` is interpolated *directly* into the ``cypher('<graph>', …)`` SQL
+        invocation (``db/age.py``) — it is the one config value that reaches SQL unquoted.
+        It is operator config, not request input, but enforcing the identifier contract at
+        load time turns an assumed invariant into a checked one (review M1 / V11): a
+        punctuated value fails fast at startup rather than producing a broken or injectable
+        statement at first query. AGE graph names are Postgres identifiers anyway (≤63 bytes).
+        """
+        if not _SQL_IDENTIFIER.fullmatch(v) or len(v) > 63:
+            raise ValueError(
+                "GRAPH_NAME must be a bare SQL identifier "
+                f"([A-Za-z_][A-Za-z0-9_]*, ≤63 chars); got {v!r}"
+            )
+        return v
 
     # vLLM OpenAI-compatible endpoint for propositionization (Phase 1 Increment 3).
     # llm_model has no usable default (it is the served model id, recorded in
