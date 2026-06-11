@@ -22,6 +22,26 @@ class EdgeSign(StrEnum):
     REFUTES = "refutes"
 
 
+class SameAsState(StrEnum):
+    """The ``state`` property on a ``SAME_AS`` identity edge (§5.2, §10).
+
+    Identity is a defeasible, scored assertion, never a destructive id reassignment:
+    the ``SAME_AS``-connected component *is* the canonical entity, and asserting/
+    retracting an edge is a merge/split handled as belief revision. The state encodes
+    the **conservative under-merge default** — over-merge fabricates contradictions and
+    corrupts reasoning, so auto-merge happens only above a high confidence bar:
+
+    - ``CONFIRMED`` — auto-merged; the edge joins its endpoints into one canonical
+      component (the unit reasoning aggregates evidence over).
+    - ``CANDIDATE`` — below the auto-merge bar: the endpoints stay **separate** but the
+      link keeps the fragmentation visible and the evidence bridgeable, pending expert
+      confirmation via soft override (§10.3). Candidates do **not** merge components.
+    """
+
+    CANDIDATE = "candidate"
+    CONFIRMED = "confirmed"
+
+
 class Role(StrEnum):
     """The ``role`` property on an ``INVOLVES`` edge (§10).
 

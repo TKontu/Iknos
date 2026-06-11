@@ -24,7 +24,7 @@ bounding pieces (§5.2, §14, §13) — come *after* the node-creation substrate
 |----|-----------|------------|-------|
 | **G2.1** | **Box operationalization** — the box registry + case box; the shared Box↔AGE serialization the loader and indexes write through | Phase 0 | shipped |
 | **G2.2** | **`extract` operator core** — proposition → `Fact` + `Actor`/`Object` nodes, `INVOLVES`(role) + `EVIDENCED_BY` edges, two annotations initialized, into a box, with an `Action`. **No dedup yet** (fresh nodes) | G2.1 | **shipped (this increment)** |
-| G2.3 | Entity resolution subsystem (§5.2) — scored `SAME_AS` components, cheap→expensive cascade, conservative under-merge default + `candidate` links, anchor-canonicalizes to taxonomy | G2.2 | planned |
+| **G2.3** | Entity resolution subsystem (§5.2) — scored `SAME_AS` components, cheap→expensive cascade, conservative under-merge default + `candidate` links | G2.2 | **shipped (this increment)** — thin slice; anchor-canonicalization + belief-revision/contradiction loop deferred |
 | G2.4 | Reference binding (§3.1) — detect `Mention`s separately from binding; scored `REFERS_TO` via the scoped cascade; low-confidence stays open → provisional → triage | G2.2 | planned |
 | G2.5 | `PART_OF` abstraction levels (§14) — anchor-first to the pack taxonomy, induce fallback, coverage policy; level *derived* from the subject-role referent | G2.2 (+ G2.3 anchoring) | planned |
 | G2.6 | Conditional credibility (§9.1) gated by epistemic class + sensitivity seeding onto facts | G2.2 | planned |
@@ -223,3 +223,95 @@ Phase-2 slice builds on. **No entity dedup** (fresh nodes) — resolution is G2.
 - [x] Every created node/edge has a non-empty provenance path to `Span`(s) and a producing
       `Action` (§10.1/§10.2).
 - [x] Re-extracting a proposition is a no-op (no duplicate Fact).
+
+---
+
+## G2.3 — Entity resolution subsystem *(shipped — thin slice)*
+
+**Goal.** Resolve the **fresh, un-deduplicated** `Actor`/`Object` nodes G2.2 emits (two
+mentions of one entity → two nodes) into canonical entities (§5.2). Identity is a
+**defeasible, scored assertion**, never a destructive id reassignment: two entities are "the
+same" only via a scored `SAME_AS` edge, and the canonical entity is the `SAME_AS`-connected
+component — reasoning aggregates evidence at the component level. Resolution is a
+cheap→expensive **cascade** (block → score → resolve) with a **conservative under-merge
+default**: auto-merge only above a high confidence bar (`confirmed`); below it a `candidate`
+edge keeps the entities separate but the fragmentation visible and the evidence bridgeable.
+
+### What shipped
+
+- **`iknos/core/resolve.py`.** Pure/DB split on the `core/extract.py` discipline:
+  - *Pure (DB- and LLM-free, unit-testable):* `normalize_label` (the blocking + exact-agreement
+    key); `block_candidates` (the cheap stage — shared-token pairs within a `NodeKind`, via a
+    token→entities inverted index); `score_pair` (the deterministic **relational/contextual**
+    score, §5.2); `decide` (the conservative bars); **`same_as_to_props`** (the single canonical
+    `SAME_AS` write contract, cf. `extract.fact_to_props`); and `components`/`canonical_id`
+    (union-find over `confirmed` edges → canonical components).
+  - *`Resolver`:* the operator. `_load_entities` reads a box's `Actor`/`Object` nodes with their
+    `INVOLVES` roles and a **relational context fingerprint** (the normalized labels of
+    co-involved entities); `resolve_box` runs load → block → score → decide → persist with one
+    `resolve` Action (`actor="entity-resolver"`); `canonical_components` is the component read
+    reasoning consumes. Writes go through the shared `merge_edge` primitive, in a canonical
+    endpoint direction (min-id → max-id), so the edge set is a structurally-idempotent function
+    of the box contents.
+- **`iknos/types/edges.py`** gained `SameAsState` (`candidate`/`confirmed`, the §10 edge state).
+
+### Decisions
+
+- **Deterministic relational scoring, no LLM in the resolve path** (user-confirmed). §5.2 scores
+  on shared facts/roles/attributes and **bars similarity from scoring** (similarity is a
+  *blocking* signal only). The slice scores on exact attribute *agreement* (same normalized
+  label / type — legitimate evidence) plus relational context (shared co-involved labels, shared
+  role); fuzzy/embedding similarity never enters the score. A conflicting non-empty type is
+  disconfirming.
+- **Conservative under-merge, calibrated by the bars.** Weights are set so exact label + agreeing
+  type *alone* (0.75) lands in the candidate band — never an auto-merge; only added relational
+  context crosses the confirm bar (0.85). Over-merge fabricates contradictions and corrupts
+  reasoning, so under-merge is the safer failure (§5.2).
+- **Label-based relational fingerprint.** The co-involved entities are themselves un-resolved
+  fresh nodes this pass, so "shared facts" is computed over the *normalized labels* of
+  neighbours, not their ids — genuine relational evidence rather than surface similarity of the
+  entity itself.
+- **Structural idempotency.** `SAME_AS` is written via the upsert `merge_edge` keyed on
+  endpoints+label, in canonical direction — re-resolving an unchanged box recomputes the same
+  edges and writes no duplicates. No proposition-style Action-log skip is needed; the resolve
+  Action is an audit record per run.
+- **No migration.** `SAME_AS` exists (migration 0004) and the 0007 label indexes cover
+  `Actor`/`Object`/`INVOLVES`/`SAME_AS`.
+
+### Deferred (kept out of the thin slice — documented seams)
+
+- **Blocking signals beyond lexical/type** — embedding-neighbourhood and taxonomy-anchor
+  blocking (§5.2) need an entity-embedding store / G2.4–G2.5 entity-linking.
+- **Anchor canonicalization** — a mention that entity-links to the pack taxonomy takes that node
+  as its canonical identity (§5.2/§14) → G2.4/G2.5.
+- **Merge/split as belief revision** — asserting/retracting a `SAME_AS` should re-run Layer A/B
+  over the affected component → Phase 3. This slice writes edges; it does not re-run reasoning.
+- **Contradiction→split-review loop + hysteresis** (§5.2) → needs `find-contradiction` (Phase 4).
+- **Cross-box `SAME_AS`** (belongs to the working box, §9) → this slice resolves within a source
+  box (the caller passes one box's entities).
+- **Expert-triage queue** for `candidate` merges → Phase 7; the slice records the `candidate`
+  edge the queue will later consume.
+
+### Tests
+
+- **Unit (`tests/unit/test_resolve.py`, DB-free):** `normalize_label`; `block_candidates`
+  (shared-token same-kind pairing, cross-kind exclusion, multi-token dedup); `score_pair`
+  (confirm on label+type+context, candidate on label+type alone, conflicting-type suppression,
+  distinct-label rejection, relational monotonicity); `decide` boundaries; `same_as_to_props`
+  flattening (state, strength, two annotations, open bitemporal); `components` union-find
+  (transitive collapse, singleton omission) + `canonical_id`.
+- **Integration (`tests/integration/test_resolve.py`, live AGE):** seed a box via the extractor
+  (mocked LLM) → resolve → two `confirmed` `SAME_AS` with strength + annotations; canonical
+  components exposed with their representative; the `entity-resolver` Action joinable; idempotent
+  re-run (no duplicate edges). A second box exercises the `candidate` band (no component formed).
+  (Runs in CI; locally collected only when `DATABASE_URL` is set, per the integration conftest.)
+
+### Exit criteria (G2.3)
+
+- [x] Fresh `Actor`/`Object` nodes resolve into scored `SAME_AS` components via a cheap→expensive
+      cascade, box-scoped.
+- [x] The default is conservative under-merge: `confirmed` only above a high bar, else a
+      bridgeable `candidate` edge that keeps entities separate.
+- [x] The canonical entity is the `confirmed`-`SAME_AS`-connected component, read for evidence
+      aggregation; every run emits an `Action`.
+- [x] Re-resolving a box writes no duplicate edges (structural idempotency).
