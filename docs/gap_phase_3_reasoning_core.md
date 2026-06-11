@@ -29,7 +29,7 @@ for every faster engine that follows.
 | **G3.4** | **Phase 2 adapter** — select the *active* subgraph (`valid_to` null, active boxes) and map AGE/UUID ids ↔ `NodeId`; assemble `DerivationGraph` + Layer B side maps; feed both layers | Phase 2, G2.3 | **shipped (this increment)** |
 | **G3.5** | **Layer B semiring decision** — the Phase-3-entry fixture (deep vs shallow chain, multi-path) deciding **Viterbi `max-·` vs Gödel `max-min`** *before* any Layer B code (§12, review A6) | — | **shipped (this increment)** |
 | **G3.6** | **Layer B confidence valuation** — least fixpoint over the chosen semiring, computed only over Layer-A-certified nodes; cycle-convergent (incremental-on-delta deferred) | G3.5, G3.2 | **shipped (this increment)** |
-| G3.7 | **`SAME_AS`-component aggregation** — support/confidence accrue to the canonical component; merge/split is a belief-revision trigger re-running A/B on the affected component (§5.2) | G3.2, G3.6, G2.3 | planned |
+| **G3.7** | **`SAME_AS`-component aggregation** — support/confidence accrue to the canonical component; merge/split is a belief-revision trigger re-running A/B on the affected component (§5.2) | G3.2, G3.6, G2.3 | **shipped (this increment)** |
 | **G3.8** | **Derivation operators** — `deduce` (→ `DeductiveConclusion`) and `induce` (→ provisional `InductiveConclusion`), `DERIVED_FROM` group + provenance, each emitting an `Action`; conclusion annotations computed by Layer A/B (§6, §10.2) | G3.4 | **shipped (this increment)** |
 | G3.9 | **Composed-loop termination** — iteration bound + oscillation detection on REFUTES→retract→A→B→QBAF; non-convergence surfaced as a finding (§12, §7.2) | Phase 4 | planned |
 
@@ -329,6 +329,46 @@ clean; 346 unit tests pass.
   support (never lowers an existing node's annotations); rewriting every changed node's stored
   annotations per derivation is the incremental persisted-write path (with G3.3). Downstream
   reads recompute via the adapter regardless.
+
+## G3.7 — `SAME_AS`-component aggregation (this increment)
+
+**What shipped.** `core/component_aggregate.py` — where, once G2.3 draws the `SAME_AS` edges,
+evidence actually *accumulates* at the entity level (§5.2: "reasoning aggregates evidence at
+the component level"). `aggregate_components` folds the per-node Layer A/B annotations to the
+canonical component; `ComponentReasoner` does the AGE reads + the merge/split belief revisions.
+
+**The two annotations aggregate by their own algebra (§12), never merged.** Per canonical
+component: **support** accrues **additively** (Σ of the involving nodes' integer
+support-counts — more mentions ⇒ more support, the counting/group side); **confidence**
+accrues by the semiring **`⊕`** (`max` — best available evidence; idempotent + absorptive, so
+overlapping/re-presented evidence never inflates it). A node mentioning two *merged* members
+accrues **once** (the `nodes` set), so support is not self-double-counted. Unsupported nodes
+contribute nothing (the §12 foundedness gate carries through).
+
+**Merge/split is belief revision (§5.2), and it is recoverable.** `ComponentReasoner.merge`
+asserts a confirmed `SAME_AS` (canonical-direction upsert, the resolve.py key discipline);
+`.split` **bitemporally retracts** it (stamps `valid_to`, never a destructive delete) — both
+re-aggregate and emit a `belief-revision` Action (§10.1). In the current graph model a
+`SAME_AS` change does not touch `DERIVED_FROM`/`EVIDENCED_BY` (identity, not derivation
+grounding), so the revision *is* exactly this re-aggregation; a split separates the components
+again, so "over-merging is recoverable". The contradiction→split-review loop that *lowers a
+wrong merge's confidence* needs `find-contradiction` + the QBAF and is Phase 4 / G3.9.
+
+**Tests.** `tests/unit/test_component_aggregate.py` (DB-free): additive support + max
+confidence on merge, singleton self-aggregation, intra-node no-double-count, idempotent
+confidence, foundedness gate, lexicographic canonical, split→singletons recovery.
+`tests/integration/test_component_aggregate.py` (real AGE): two duplicate-actor facts →
+merge accrues to one canonical (support 2, confidence max) → split recovers two; a **candidate**
+`SAME_AS` (below the bar) correctly does **not** merge. ruff + mypy(`src/iknos`) clean; 353
+unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **Affected-component-only recompute** — MVP re-aggregates the whole active subgraph (small
+  per investigation, §13); scoping to the touched component is the incremental refinement
+  (with G3.3's persisted maintenance).
+- **The contradiction→split-review loop + hysteresis** (§5.2, §6) — lowering a wrong merge's
+  `SAME_AS` confidence is the Phase 4 `find-contradiction`/QBAF path (and G3.9's composed loop).
 
 ## Phase risks / decisions (carried from §12, §13)
 

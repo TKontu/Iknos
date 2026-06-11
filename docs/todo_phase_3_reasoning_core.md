@@ -32,9 +32,11 @@ boxes) and assembles the `DerivationGraph` + Layer B side maps, defining the `DE
 grouping contract the operators will write. **G3.8** ships those operators:
 `core/derive.py` `deduce`/`induce` write `DeductiveConclusion`/`InductiveConclusion` nodes +
 `DERIVED_FROM` groups + provenance + an `Action`, with both annotations **computed by Layer
-A/B** ("engine disposes"). Still open: `SAME_AS`-component aggregation (G3.7), the
-clingo/SCC/persisted path (G3.3), and composed-loop termination (G3.9). See
-`gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
+A/B** ("engine disposes"). **G3.7** ships `SAME_AS`-component aggregation
+(`core/component_aggregate.py`): support/confidence accrue to the canonical component
+(additive Layer A, `⊕` Layer B), with merge/split as belief-revision triggers that
+re-aggregate. Still open: the clingo/SCC/persisted path (G3.3) and composed-loop termination
+(G3.9). See `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
 
 ## Layer A — truth maintenance over a commutative group (owns retraction)
 
@@ -119,10 +121,16 @@ clingo/SCC/persisted path (G3.3), and composed-loop termination (G3.9). See
 - [x] Confirm idempotent confidence is *not* subtracted; retraction lives only in the
       group/count layer. *(G3.6 — `valuate` is a pure fixpoint with no subtraction;
       retraction is entirely Layer A's DRed/count layer. `test_idempotent_rerun_is_stable`.)*
-- [ ] **Aggregate evidence over `SAME_AS` components (§5.2):** support counts and
+- [x] **Aggregate evidence over `SAME_AS` components (§5.2):** support counts and
       confidence accrue to the canonical component, not the raw node. A **merge/split**
       (assert/retract `SAME_AS`) is a belief-revision trigger — re-run Layer A/B over the
-      affected component only.
+      affected component only. *(G3.7 — `core/component_aggregate.py`: `aggregate_components`
+      folds per-node Layer A/B annotations to the canonical component — **additive** support
+      (§12 counting), **`⊕`/max** confidence (idempotent, best evidence); `ComponentReasoner.merge`
+      / `.split` are the belief-revision triggers (assert confirmed `SAME_AS` / bitemporally
+      retract it) that re-aggregate and emit an Action, so over-merge is recoverable. The
+      **affected-component-only** scoping is the deferred incremental refinement — MVP
+      re-aggregates the whole active subgraph, §13.)*
 
 ## Derivation operators (§6)
 
