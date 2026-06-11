@@ -205,7 +205,10 @@ async def test_reembed_converges_and_is_rerunnable(session: AsyncSession) -> Non
     await session.commit()
 
     report = await reembed_to_model(session, _FakeSubstrate("new-model"), batch_size=128)
-    assert (report.span_rows, report.proposition_rows) == (1, 1)
+    # >= 1, not == 1: reembed is a *global* migration and the live DB is shared with sibling
+    # integration tests whose rows are also off the "new-model" target. The seeded rows below
+    # are asserted specifically; the re-run no-op asserts global convergence.
+    assert report.span_rows >= 1 and report.proposition_rows >= 1
 
     # Both rows converged to the target model, and the vectors were actually re-pooled/re-embedded
     # (markers 0.5 for spans, 0.25 for passages — not the seeded 0.1).

@@ -99,7 +99,11 @@ class DocumentEmbedding(Base):
     # The embedding model that produced this vector — the ANN **vector-space identity** (G1.16).
     # Cosine across two models is meaningless, so a same-dimension model swap must be refused
     # (EmbeddingModelMismatchError) and migrated via scripts/reembed.py, never silently mixed.
-    model: Mapped[str] = mapped_column(Text, nullable=False)
+    # The comment is mirrored in migration 0008 — this DB has compare_comments on, so they must
+    # match exactly or the autogenerate-drift gate fails.
+    model: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Embedding model id — the ANN vector-space identity (G1.16)."
+    )
 
 
 class PropositionEmbedding(Base):
@@ -128,7 +132,9 @@ class PropositionEmbedding(Base):
     embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
     # The embedding model that produced this vector — the ANN vector-space identity (G1.16).
     # See DocumentEmbedding.model: a model swap is refused, not mixed into one ANN space.
-    model: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Embedding model id — the ANN vector-space identity (G1.16)."
+    )
 
 
 class PropositionLexicalIndex(Base):
