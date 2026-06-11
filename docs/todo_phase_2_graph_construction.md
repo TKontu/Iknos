@@ -56,8 +56,9 @@ because Phase 2 is where its absence turns from latent to expensive.*
 
 ## Node extraction (the `extract` operator, §6)
 
-- [ ] `extract`: proposition → `Fact` with `Actor`/`Object` nodes. Actors and objects
-      are **nodes, not properties** (§5/§10).
+- [x] `extract`: proposition → `Fact` with `Actor`/`Object` nodes. Actors and objects
+      are **nodes, not properties** (§5/§10). *(G2.2 — `core/extract.py`: one Fact per
+      proposition; entities are fresh `Actor`/`Object` vertices. Dedup is G2.3.)*
 - [ ] **Entity resolution as a subsystem (§5.2), not a dedup pass.** Identity via scored
       `SAME_AS` edges; the canonical entity is the `SAME_AS`-connected component;
       reasoning aggregates evidence at component level (no destructive id reassignment).
@@ -86,8 +87,8 @@ because Phase 2 is where its absence turns from latent to expensive.*
       entity linking; **do not score bindings by attention.** Confidence from
       consistency + verification. Low-confidence/ambiguous bindings stay open (multiple
       candidates), mark dependent propositions `provisional`, and route to expert triage.
-- [ ] `INVOLVES` edges (fact → actor/object) with `role`; `EVIDENCED_BY` edges (fact →
-      proposition/span).
+- [x] `INVOLVES` edges (fact → actor/object) with `role`; `EVIDENCED_BY` edges (fact →
+      proposition/span). *(G2.2 — Fact `EVIDENCED_BY` its Proposition and each Span.)*
 - [ ] Seed each fact's source-reliability/`significance` prior from its box tier (§9,
       feeds Phase 4 edge significance).
 - [ ] **Conditional credibility (§9.1), gated by epistemic class:** for **observations**
@@ -98,7 +99,10 @@ because Phase 2 is where its absence turns from latent to expensive.*
       defeasible, logged. Distinct from faithfulness and strength.
 - [ ] **Sensitivity (§9.1):** carry the source `sensitivity` onto facts; derived nodes
       inherit the max of antecedents (propagated in Phase 3/5).
-- [ ] Both annotations initialized: support-count and confidence (§12).
+- [x] Both annotations initialized: support-count and confidence (§12). *(G2.2 —
+      `base_annotations`: `support_count=1` (one `EVIDENCED_BY` grounding), `confidence`
+      seeded from faithfulness or the Viterbi identity `1.0`; the computed Layer-B value
+      is the Phase-3 fixpoint.)*
 
 ## Part-whole hierarchy (§14) — abstraction levels
 
