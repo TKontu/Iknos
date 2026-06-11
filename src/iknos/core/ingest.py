@@ -134,19 +134,29 @@ def span_content_hash(
     segmenter_params: dict[str, Any],
     model: str,
     parse_content_hash: str | None = None,
+    windowing: dict[str, Any] | None = None,
 ) -> str:
     """SHA-256 over the segmentation **inputs** — the immutability discriminator.
 
-    Inputs only (raw text + params + model + schema version + the upstream parse hash),
-    never the *derived* char-spans or embeddings: torch/CUDA float drift in pooling must
-    not spuriously trip the resegmentation guard (cf. ``DomainPack.content_hash`` hashes
-    the declaration, not the computed closure).
+    Inputs only (raw text + params + model + schema version + the upstream parse hash +
+    the embedding windowing policy), never the *derived* char-spans or embeddings:
+    torch/CUDA float drift in pooling must not spuriously trip the resegmentation guard
+    (cf. ``DomainPack.content_hash`` hashes the declaration, not the computed closure).
 
     ``parse_content_hash`` (G1.0) folds the Stage 0 parse identity into the segmentation
     identity: two parsers yielding *identical* reading-order text but different layout
     must still re-segment (else the stale layouts are served silently). ``None`` is the
     legacy/no-parse value for direct ``persist_spans`` callers; ``ingest_document``
     always threads the real (null-parser) hash.
+
+    ``windowing`` (G1.13 slice 2) folds the embedding **windowing policy** (overlap /
+    model max / window token size — :meth:`DocumentContext.windowing_policy`, *not* the
+    data-dependent window count/boundaries) into the identity: a changed windowing policy
+    yields different span vectors, so it must re-segment rather than silently reuse spans
+    pooled under the old policy. ``None`` is the legacy/no-windowing value for direct
+    callers; ``_ingest_parsed`` always threads the real policy. (Like the G1.15 cache-key
+    change, the first run after this lands re-hashes existing documents — a one-time loud
+    resegmentation refusal, not a silent regression.)
     """
     payload = {
         "raw_text": raw_text,
@@ -154,6 +164,7 @@ def span_content_hash(
         "model": model,
         "schema_version": SEGMENT_SCHEMA_VERSION,
         "parse_content_hash": parse_content_hash,
+        "windowing": windowing,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -226,6 +237,7 @@ async def persist_spans(
     model: str,
     level: int = 0,
     layouts: list[dict[str, Any] | None] | None = None,
+    window_layout: dict[str, Any] | None = None,
 ) -> SpanPersistResult:
     """Persist segmented spans (Span vertices + dense rows) idempotently.
 
@@ -235,8 +247,11 @@ async def persist_spans(
     ``document_embeddings`` row and guards against silently mixing two embedding spaces.
     ``layouts`` (optional, same alignment) carries the parse front-end's ``{page, bbox}``
     visual-provenance handle per span (G1.0); ``None`` — the whole arg or any element —
-    means plain-text ingest with no layout. Caller-owned transaction — does **not** commit.
-    See module docstring for the immutability / atomicity model.
+    means plain-text ingest with no layout. ``window_layout`` (optional, G1.13 slice 2) is
+    the embedding window layout (count + boundaries + policy) recorded on the segment
+    ``Action`` for audit; ``None`` for direct callers that don't window. Caller-owned
+    transaction — does **not** commit. See module docstring for the immutability / atomicity
+    model.
     """
     from iknos.db.age import cypher_map, execute_cypher
 
@@ -346,6 +361,10 @@ async def persist_spans(
                 "params": segmenter_params,
                 "level": level,
                 "schema_version": SEGMENT_SCHEMA_VERSION,
+                # G1.13 slice 2: window count/boundaries/policy, so a windowed long-document
+                # ingest is auditable (which span pooled from which window). None for callers
+                # that don't window (the key is simply absent then).
+                **({"windowing": window_layout} if window_layout is not None else {}),
             },
             outputs={"span_ids": [str(s.id) for s in spans], "skipped": skipped},
             model=model,
@@ -442,6 +461,7 @@ async def _ingest_parsed(
         segmenter_params=segmenter_params,
         model=substrate.model_name,
         parse_content_hash=parse_ch,
+        windowing=context.windowing_policy(),
     )
 
     return await persist_spans(
@@ -453,6 +473,7 @@ async def _ingest_parsed(
         segmenter_params=segmenter_params,
         model=substrate.model_name,
         layouts=layouts,
+        window_layout=context.window_layout(),
     )
 
 

@@ -1,7 +1,19 @@
 import re
+from typing import Any, Protocol
 
 import torch
 import torch.nn.functional as F
+
+
+class _PoolingContext(Protocol):
+    """The slice of :class:`~iknos.core.embeddings.DocumentContext` segmentation needs.
+
+    Structural (not an import) so this pure module stays free of the heavy
+    transformers/torch-model dependency that ``embeddings`` pulls in at import time —
+    and so a test can pass any object exposing ``pool_span``.
+    """
+
+    def pool_span(self, start_char: int, end_char: int) -> list[float]: ...
 
 
 def calculate_adjacent_similarities(embeddings: list[list[float]]) -> list[float]:
@@ -166,13 +178,20 @@ class SegmentationBackbone:
         self.penalty_weight = penalty_weight
         self.density_weight = density_weight
 
-    def segment_document(self, sentences: list[dict], context) -> list[tuple[int, int]]:
+    def segment_document(
+        self, sentences: list[dict[str, Any]], context: _PoolingContext
+    ) -> list[tuple[int, int]]:
         """
         sentences: list of dicts with 'text', 'start_char', 'end_char'
         """
         if not sentences:
             return []
 
+        # Windowed embedding (G1.13 slice 2) is transparent here: each sentence pools from the
+        # macro-window where it sits furthest from a window edge (DocumentContext.pool_span), so
+        # two adjacent sentences select the same interior window and their cosine compares
+        # embeddings from one consistent context. A document that fits one window is byte-identical
+        # to the pre-windowing path, so boundary placement is unchanged — no code change here.
         embeddings = [context.pool_span(s["start_char"], s["end_char"]) for s in sentences]
         densities = [calculate_information_density(s["text"]) for s in sentences]
 
