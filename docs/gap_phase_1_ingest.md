@@ -44,7 +44,18 @@ time-sensitive while the wire schema is on a branch), and the RRF fusion decisio
 (G1.19). **G1.13 slice 1 + G1.14 are now shipped** — the two cheap critical fixes that
 stop silent data corruption (over-long-document refusal; polarity-aware agreement with
 twin quarantine), landed before any further perception-layer tuning and before Trial A5
-fits thresholds. G1.15 (prompt-hash cache key) + G1.16 (embedding-model column) are next.
+fits thresholds. **G1.15 (prompt/schema-hash cache key) + G1.16 (embedding-model identity
+column + ingest guards + `reembed` reindex path) are now shipped** — the two silent-staleness
+closures; G1.15 triggers one loud full re-extraction on first deploy. **G1.18 (structured
+table payload in the parse wire contract) is now shipped** — a `TABLE` element carries a
+validated `Table`/`TableCell` grid through the wire schema, with element-relative cell
+offsets rebased to document-absolute at persistence; the 2-D structure now survives Stage 0
+(consumer stays Phase 2). **G1.13 slice 2 (windowed embedding) is now shipped** — long
+documents are embedded in overlapping macro-windows (each span pooled from the window where
+it is furthest from an edge), so they ingest with full dense coverage instead of slice 1's
+fail-loud refusal (which is now removed); the windowing policy folds into `span_content_hash`
+and the window layout is recorded on the segment Action. Next: G1.6 quarantine enforcement
+(a Phase 2 entry item), then G1.17 robustness batch.
 
 ## Current implementation (baseline)
 
@@ -268,32 +279,47 @@ returns a zero vector; `persist_spans` skips those dense rows; the content is
 "silent false negative" §5.1 warns about. Segmentation similarity past the cutoff is
 likewise undefined. Two slices, shippable independently:
 
-- [x] **Slice 1 — fail-loud guard (do first; tiny).** `embed_document` now tokenizes
-      **without** truncation and raises `DocumentTooLongError` (`core/embeddings.py`,
-      same fail-loud pattern as `DocumentResegmentationError`) when the true token
-      count exceeds `MAX_MODEL_TOKENS` (8192) — before any forward pass, so no partial
-      index is written. The decision is a pure `_raise_if_truncated` (unit-tested over/
-      at/under the limit without loading the model). Silent data loss → loud refusal
-      until Slice 2 lands.
-- [ ] **Slice 2 — overlapping macro-windows ("late chunking over windows").**
-      Embed consecutive max-length windows with a fixed token overlap (start at
-      1024; make it a constant, not config). `DocumentContext` becomes a list of
-      windows, each with its own `token_embeddings` + char-offset mapping;
+- [x] **Slice 1 — fail-loud guard (do first; tiny).** *Superseded by Slice 2 and
+      removed.* The stopgap tokenized **without** truncation and raised
+      `DocumentTooLongError` (pure `_raise_if_truncated`) when the true token count
+      exceeded `MAX_MODEL_TOKENS` — turning silent data loss into a loud refusal "until
+      Slice 2 lands". Slice 2 now covers any length, so the error class and guard are
+      gone; their guarantee (no span silently dropped past the cutoff) is upheld by full
+      windowed coverage.
+- [x] **Slice 2 — overlapping macro-windows ("late chunking over windows").**
+      `embed_document` tokenizes the whole document once **without truncation**
+      (content tokens only) and tiles it into overlapping windows (`_plan_windows`,
+      fixed overlap `WINDOW_OVERLAP_TOKENS` = 1024 — a **constant, not config**), one
+      model forward pass per window, each re-framed with the model's own special tokens
+      (so interior windows are bracketed). `DocumentContext` holds a list of windows,
+      each with its own `token_embeddings` + char-offset mapping;
       `pool_span(start_char, end_char)` selects the window where the span sits
-      **furthest from a window edge** and pools there (never average across
-      windows). Callers (`ingest.py`, `segmentation.py`) keep their current API.
-- [ ] **Provenance + idempotency:** record the window layout (window count,
-      boundaries, overlap, model max length) in the segment `Action.inputs`, and
-      fold it into the `span_content_hash` inputs so a changed windowing policy
-      re-segments instead of silently reusing spans.
-- [ ] **Segmentation across windows:** compute adjacent-window similarities within
-      each macro-window; in overlap zones take the values from the window where both
-      compared positions are interior. Boundary placement must be identical for a
-      document that happens to fit one window.
-- [ ] **Tests:** a synthetic document spanning >2 windows gets a non-zero dense
-      vector for *every* span; a span straddling a window seam pools from the
-      interior window; ingest of the same long document twice is a no-op; the
-      single-window path is byte-identical to today's behaviour.
+      **furthest from a window edge** (maximizes `min(start−win_start, win_end−end)`
+      among windows containing the span's tokens) and pools there — never averaged
+      across windows. Callers (`ingest.py`, `segmentation.py`) keep their current API.
+- [x] **Provenance + idempotency:** the window layout (count, boundaries, overlap,
+      model max, window token size) is recorded on the segment `Action.inputs`
+      (`window_layout`), and the windowing **policy** (overlap / model max / window
+      size — `DocumentContext.windowing_policy`, not the data-dependent boundaries)
+      folds into `span_content_hash`, so a changed windowing policy re-segments instead
+      of silently reusing spans pooled under the old policy. One-time loud
+      resegmentation on first deploy, like G1.15.
+- [x] **Segmentation across windows:** realized through `pool_span`'s per-span
+      interior-window selection rather than a separate code path — each sentence pools
+      from its most-interior window, so two adjacent sentences (tiny relative to the
+      1024-token overlap) select the *same* window and their cosine compares embeddings
+      from one consistent context. A document that fits one window is byte-identical to
+      the pre-windowing path, so boundary placement is unchanged; `segmentation.py` is
+      untouched but for a comment documenting this transparency.
+- [x] **Tests (pure, hand-built windows):** `_plan_windows` covers single-window /
+      overlap-coverage / anchored-final-window / `overlap≥size` rejection; multi-window
+      `pool_span` selects the interior window for an overlap-zone span and the sole
+      window for an edge span; every span across >2 windows pools to a non-zero vector;
+      a no-token span returns the zero-vector fallback; `window_layout`/`windowing_policy`
+      shape; `span_content_hash` moves on a windowing-policy change. The model-backed
+      byte-identical / no-op-twice properties hold by construction (single window = n=1
+      case, pool math unchanged) and are exercised by the existing single-window
+      `pool_span` tests. *(`test_embeddings.py`, `test_ingest.py`.)*
 
 ### G1.14 — Polarity-aware agreement clustering + degenerate-sampling guard (§3.1) *(review C2 — **critical**, inflated confidence on negation flips)*
 
@@ -328,7 +354,7 @@ are just unused for identity.
 - [x] **Ordering note for Trial A5:** landed **before** A5 fits `PROP_AGREEMENT_THRESHOLD`,
       so the threshold is calibrated against the polarity-aware clusterer.
 
-### G1.15 — Cache key: hash the actual prompt + schema, not a hand-bumped constant (§6.1) *(review A4)*
+### G1.15 — Cache key: hash the actual prompt + schema, not a hand-bumped constant (§6.1) *(review A4)* — ✅ shipped
 
 **Why.** `extraction_content_hash` (`core/cache.py`) discriminates on
 `EXTRACT_SCHEMA_VERSION`, a constant whose docstring says "bumped on any prompt /
@@ -336,40 +362,54 @@ schema / enum change" — a human-discipline guard on exactly the staleness clas
 G1.7 was built to close. Edit the prompt, forget the bump, and every cached span
 silently replays the old extraction.
 
-- [ ] Add to the hash payload: `prompt_sha` = SHA-256 of the rendered system-prompt
-      template (the string `build_messages` interpolates, before per-span
-      substitution) and `schema_sha` = SHA-256 of the canonical JSON
-      (`sort_keys=True`, compact separators) of the guided-decoding schema. Do the
-      same inside the verifier signature (verifier prompt + `VerifyVerdict`
-      schema).
-- [ ] Keep `schema_version` in the key as a *semantic* version of the output shape;
+- [x] Add to the hash payload: `prompt_sha` = SHA-256 of the rendered prompt
+      scaffold and `schema_sha` = SHA-256 of the canonical JSON (`sort_keys=True`,
+      compact separators) of the guided-decoding schema. *(Shipped: two pure leaf
+      helpers `cache.sha256_hex`/`canonical_json_sha256`; `proposition.extractor_prompt_sha`
+      renders `build_messages` with sentinels — covering `SYSTEM_PROMPT` **and** the
+      CONTEXT/TARGET wrapper, per-span text excluded — and `extractor_schema_sha` over
+      `EXTRACTION_SCHEMA`; the verifier signature carries `Verifier.prompt_sha`/`schema_sha`
+      (verifier `SYSTEM_PROMPT` + `VERIFY_SCHEMA`).)*
+- [x] Keep `schema_version` in the key as a *semantic* version of the output shape;
       it no longer carries invalidation alone.
-- [ ] **Tests:** changing one character of the prompt template changes the hash;
-      re-ordering schema keys does not; toggling the verifier still does.
-- [ ] **Expected effect:** one-time full re-extraction on the next run after this
-      lands (the key changes). That is correct and loud, not a regression.
+- [x] **Tests:** `prompt_sha`/`schema_sha` each independently move the cache key; a
+      one-char prompt edit moves `extractor_prompt_sha`; re-ordering schema keys does
+      not (`canonical_json_sha256`); toggling/rewording the verifier still does.
+- [ ] **Expected effect (operational, on first deploy):** one-time full re-extraction
+      on the next run after this lands (the key changes). That is correct and loud, not
+      a regression.
 
-### G1.16 — Embedding-model identity on dense rows + reindex path (§4) *(review A5)*
+### G1.16 — Embedding-model identity on dense rows + reindex path (§4) *(review A5)* — ✅ shipped
 
 **Why.** `document_embeddings` / `proposition_embeddings` rows carry no record of
 which model produced them. Swap or upgrade the embedding model and the ANN index
 becomes a mixed-space soup — cosine across spaces is meaningless — and *nothing can
 even detect* the condition.
 
-- [ ] **Migration:** add `model TEXT NOT NULL` to both tables; backfill existing
-      rows with `'BAAI/bge-m3'`; include `model` in the table comment as the vector
-      space identifier. (Dimension is implicit in the pgvector column; a model
-      change that alters dimension fails loudly already — same-dimension swaps are
-      the silent case this closes.)
-- [ ] **Ingest guard** (mirror `DocumentResegmentationError`): before upserting,
+- [x] **Migration:** add `model TEXT NOT NULL` to both tables; backfill existing
+      rows with `'BAAI/bge-m3'`; record `model` as the vector-space identifier in a
+      column comment. *(Migration `0008`: add NOT NULL with a `server_default` to
+      backfill atomically, then drop the default so future inserts must name their
+      model. Mirrored in `db/orm.py` for the autogenerate-drift gate.)* (Dimension is
+      implicit in the pgvector column; a model change that alters dimension fails loudly
+      already — same-dimension swaps are the silent case this closes.)
+- [x] **Ingest guard** (mirror `DocumentResegmentationError`): before upserting,
       if rows exist for this document (or proposition set) under a *different*
       `model`, raise `EmbeddingModelMismatchError` — never mix spaces in place.
-- [ ] **Reindex path:** `scripts/reembed.py` — for a target model: re-run
-      `embed_document`+`pool_span` over each document's raw text to refresh span
-      vectors, and `embed_passages` over proposition texts; batched, idempotent
-      (skip rows already on the target model), caller owns transaction per batch.
-- [ ] **Tests:** mismatch guard raises (integration, ephemeral DB); reembed script
-      converges to all-rows-on-target-model and is re-runnable.
+      *(`core/embeddings.py::EmbeddingModelMismatchError`; checked in
+      `ingest.persist_spans` (span rows) and `proposition._guard_embedding_model`
+      (proposition rows — the load-bearing case, since the extraction cache key keys on
+      the *LLM* model, not the embedding model, so a substrate swap slips past
+      `StaleExtractionError`).)*
+- [x] **Reindex path:** `scripts/reembed.py` (CLI) over `core/reembed.py` (logic) —
+      for a target model: re-run `embed_document`+`pool_span` over each document's raw
+      text to refresh span vectors, and `embed_passages` over proposition texts (read
+      back from AGE); batched, idempotent (skip rows already on the target model),
+      commits per batch (durable/resumable). Substrate injected so it is testable
+      without a model download.
+- [x] **Tests:** both mismatch guards raise (span + proposition, integration); reembed
+      converges to all-rows-on-target-model and a second pass is a 0/0 no-op
+      (`test_embedding_model_identity.py`).
 
 ### G1.17 — Ingest robustness hardening *(review R1–R8 — one batch PR)*
 
@@ -408,7 +448,7 @@ even detect* the condition.
       trust boundary; prefer AGE prepared-statement params where the call path
       allows.
 
-### G1.18 — Structured table payload in the parse wire contract (§1 rule a) *(review A1 — do while the wire schema is still on a branch)*
+### G1.18 — Structured table payload in the parse wire contract (§1 rule a) *(review A1)* — ✅ shipped
 
 **Why.** §1 promises "tables ingest as structured observations (rows/cells →
 propositions with column semantics)". But `ParseResult` is one reading-order text
@@ -418,20 +458,36 @@ trust boundary and Phase 2's table extractor would have nothing to read.
 Retrofitting a wire contract after the MinerU service adapter ships is strictly
 more work than adding the slot now.
 
-- [ ] Add an optional `table` payload to `ParseElement` (only valid when
-      `kind == TABLE`): `{n_rows, n_cols, cells: [{row, col, row_span, col_span,
-      is_header, start, end, bbox?}]}` — each cell's `[start, end)` indexes into
-      the **same** reading-order blob, so cell provenance still resolves to spans
-      and visual provenance still works.
-- [ ] **Validation (in `ParseResult.from_offsets` / a table validator):** cell
-      offsets lie within the parent element's range; `(row, col)` within bounds; no
-      two cells claim the same grid position. Cells need *not* tile the element
-      range (separators/whitespace between cells are fine) — do not reuse the
-      strict element-tiling rule here.
-- [ ] Thread through the wire schema (`mineru.py::_WireResponse`), and persist on
-      the span `layout` dict (it is versioned — bump `layout_schema_version`).
-- [ ] **Consumer stays Phase 2** (cells → observation-class propositions with
+- [x] Added a `table` payload to `ParseElement` (only valid when `kind == TABLE`):
+      `Table{n_rows, n_cols, cells: tuple[TableCell{row, col, start, end, row_span,
+      col_span, is_header, bbox?}]}`, mirrored on `OffsetSpec`. **Design note:** cell
+      `[start, end)` offsets are **element-relative** (into the element's own text), not
+      blob-absolute as the original sketch read — this keeps `ParseElement`
+      position-independent (the module's "offsets are derived, never parser-supplied"
+      principle; a directly-constructed table element can't know its blob position). They
+      are rebased to **document-absolute** in `layouts_for_spans` (the one place the
+      element's place in the reading-order text is known), so cell provenance resolves to
+      spans and visual provenance still works — the gap goal, reached without violating
+      element position-independence.
+- [x] **Validation, all fail-loud at construction (so `from_offsets` /
+      `MinerUParser` surface it as a hard parse failure):** grid consistency — cells fit
+      `n_rows × n_cols`, no two claim the same position after span expansion (sparse and
+      merged cells allowed; *not* the strict element-tiling rule) — in
+      `Table.__post_init__`; element-relative cell-offset bounds vs the element text and
+      "a cell bbox needs the element's frame" in `ParseElement.__post_init__`;
+      offset ordering / positive spans in `TableCell.__post_init__`.
+- [x] Threaded through the wire schema (`mineru.py::_WireTable`/`_WireCell` →
+      `_to_table`), and persisted on the span `layout` dict — `LAYOUT_SCHEMA_VERSION`
+      bumped to **2** (a region may now carry a `table`, and may be geometry-less when it
+      exists only to carry a table whose element lacked page geometry — so table structure
+      is never silently dropped).
+- [x] **Consumer stays Phase 2** (cells → observation-class propositions with
       column semantics). This task only makes the structure *survive Stage 0*.
+- [x] **Tests:** grid/offset/coupling validators each reject their bad case; a table
+      round-trips through `from_offsets` (element-relative, re-validated against the
+      slice) and through the MinerU wire client; `layouts_for_spans` rebases cell offsets
+      to document-absolute and persists a geometry-less table. (`test_parse.py`,
+      `test_mineru.py`.)
 
 ### G1.19 — Hybrid-retrieval rank fusion (RRF) + sparse-ranking decision (§4) *(review A3)*
 
@@ -465,13 +521,20 @@ more work than adding the slot now.
    temperature guard)**~~ — ✅ the two critical correctness fixes: `embed_document`
    refuses over-long documents (`DocumentTooLongError`); multi-sample clustering is
    polarity-partitioned with twin quarantine. Landed before Trial A5 threshold fitting.
-5. **G1.15 (prompt-hash cache key) + G1.16 (embedding-model column)** — ← **next**: two
-   small silent-staleness closures; G1.15 triggers one loud full re-extraction.
-6. **G1.18 (table payload in wire contract)** — while the MinerU wire schema is
-   still on a branch / before the service adapter hardens.
-7. **G1.13 slice 2 (windowed embedding)** — before the MinerU service starts
-   feeding real multi-page PDFs.
-8. **G1.6 quarantine enforcement** — stakes gating (G1.6 flag is set per node;
+5. ~~**G1.15 (prompt/schema-hash cache key) + G1.16 (embedding-model identity)**~~ — ✅
+   two silent-staleness closures: the extraction cache key now hashes the actual prompt +
+   schema (no hand-bumped constant); dense rows carry their `model` with ingest guards
+   refusing a swap and `scripts/reembed.py` migrating the index. G1.15 triggers one loud
+   full re-extraction on first deploy.
+6. ~~**G1.18 (table payload in wire contract)**~~ — ✅ a `TABLE` element carries a validated
+   `Table`/`TableCell` grid through the wire schema; element-relative cell offsets rebased to
+   document-absolute at persistence (`LAYOUT_SCHEMA_VERSION` → 2). Landed while the wire schema
+   is still on a branch, as planned. Consumer stays Phase 2.
+7. ~~**G1.13 slice 2 (windowed embedding)**~~ — ✅ long documents embed in overlapping
+   macro-windows with full dense coverage (each span pooled from its most-interior window);
+   windowing policy folds into `span_content_hash`, window layout recorded on the segment
+   Action; slice 1's fail-loud ceiling removed. Single-window path byte-identical.
+8. **G1.6 quarantine enforcement** — ← **next**: stakes gating (G1.6 flag is set per node;
    edge-time enforcement gated on Phase 2 — make it a Phase 2 *entry* item).
 9. **G1.17 robustness batch** — one hardening PR.
 10. **G1.7b cross-doc reuse** + **G1.8 reference amortization** — remaining cost work.
@@ -503,5 +566,5 @@ more work than adding the slot now.
       auditable from the segment Action (G1.13).
 - [x] Mixed-polarity extractions can never report full agreement; a
       polarity-unstable span yields `provisional` propositions (G1.14).
-- [ ] A prompt-template edit alone invalidates the extraction cache (G1.15); an
+- [x] A prompt-template edit alone invalidates the extraction cache (G1.15); an
       embedding-model swap is refused, not silently mixed (G1.16).

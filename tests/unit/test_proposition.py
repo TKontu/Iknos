@@ -5,12 +5,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import iknos.core.proposition as proposition_mod
 from iknos.core.proposition import (
+    EXTRACTION_SCHEMA,
     Propositionizer,
     PropositionResult,
     _PropositionOut,
     build_context,
     build_messages,
+    extractor_prompt_sha,
+    extractor_schema_sha,
     span_text,
 )
 from iknos.core.verify import _VerifyOut
@@ -413,3 +417,34 @@ def test_rejects_nonpositive_samples() -> None:
     llm.model = "m"
     with pytest.raises(ValueError, match=">= 1"):
         Propositionizer(llm, substrate, n_samples=0)
+
+
+# --- G1.15: prompt/schema hashes feed the extraction cache key ---
+
+
+def test_extractor_prompt_sha_shape_and_determinism() -> None:
+    h = extractor_prompt_sha()
+    assert len(h) == 64 and all(c in "0123456789abcdef" for c in h)
+    assert h == extractor_prompt_sha()
+
+
+def test_extractor_prompt_sha_changes_when_system_prompt_changes(monkeypatch) -> None:
+    # The core G1.15 property: edit one character of the prompt and the digest moves, so the
+    # extraction cache invalidates without anyone bumping EXTRACT_SCHEMA_VERSION.
+    before = extractor_prompt_sha()
+    monkeypatch.setattr(proposition_mod, "SYSTEM_PROMPT", proposition_mod.SYSTEM_PROMPT + " ")
+    assert extractor_prompt_sha() != before
+
+
+def test_extractor_prompt_sha_excludes_per_span_text() -> None:
+    # The hash is over the *static* scaffold only — it is parameterless and reflects no document
+    # text (which is keyed separately as target_text/context_text in extraction_content_hash).
+    assert extractor_prompt_sha() == extractor_prompt_sha()
+
+
+def test_extractor_schema_sha_is_key_order_insensitive() -> None:
+    # Re-ordering schema keys must not change the digest (canonical JSON).
+    from iknos.core.cache import canonical_json_sha256
+
+    reordered = {k: EXTRACTION_SCHEMA[k] for k in reversed(list(EXTRACTION_SCHEMA))}
+    assert extractor_schema_sha() == canonical_json_sha256(reordered)

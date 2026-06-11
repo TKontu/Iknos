@@ -24,9 +24,16 @@ service** that emits the wire schema (ops/AGPL-side adapter) and **table/figure 
 (`review_2026-06_architecture_plan.md`) added **G1.13–G1.19** — two critical correctness
 fixes (long-document truncation G1.13, polarity-blind agreement G1.14) plus staleness,
 robustness, table-contract, and rank-fusion work. **G1.13 slice 1** (truncation guard) and
-**G1.14** (polarity-aware agreement + twin quarantine) are now shipped — the two critical
-correctness fixes that stopped silent data loss/inflated confidence; G1.15 (prompt-hash
-cache key) + G1.16 (embedding-model column) are the new front of the queue. See
+**G1.14** (polarity-aware agreement + twin quarantine), **G1.15** (prompt/schema-hash cache
+key) and **G1.16** (embedding-model identity column + ingest guards + `reembed` reindex path)
+are now shipped — the two critical correctness fixes plus the two silent-staleness closures.
+**G1.18** (structured table payload in the parse wire contract) is now shipped too — the
+table 2-D structure survives Stage 0. **G1.13 slice 2 (windowed embedding) is now shipped** —
+a document longer than the embedding context is embedded in overlapping macro-windows (each
+span pooled from the window where it sits furthest from an edge), so long documents ingest
+with full dense coverage instead of the slice-1 fail-loud refusal; the windowing policy folds
+into the segmentation content hash and the window layout is recorded on the segment Action.
+**G1.6 quarantine enforcement** (a Phase 2 *entry* item) is the new front of the queue. See
 `gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state below; not every box maps
 1:1 to a gap ID.)*
 
@@ -46,12 +53,18 @@ cache key) + G1.16 (embedding-model column) are the new front of the queue. See
 - [ ] **Tables → structured observations:** ingest table rows/cells as propositions with
       column semantics preserved (observation-class, §3.1); do not flatten to prose.
       *(Phase 2; `ParseKind.TABLE` reserved.)*
-- [ ] **Table structure must survive Stage 0 (G1.18 — do now, while the wire schema is
-      on a branch):** add the optional structured `table` payload (cell grid with
-      per-cell `[start, end)` into the same reading-order blob + bbox) to
-      `ParseElement` and the MinerU wire schema. Without it a TABLE element is just a
-      char range — the 2-D structure is destroyed at the trust boundary and the Phase-2
-      consumer has nothing to read. *(Review A1.)*
+- [x] **Table structure survives Stage 0 (G1.18):** `core/parse.py` now carries an
+      optional structured `Table`/`TableCell` payload on a `TABLE` `ParseElement` (and
+      `OffsetSpec`), threaded through the MinerU wire schema (`_WireTable`/`_WireCell`).
+      Cell `[start, end)` offsets are **element-relative** (into the element's own text —
+      keeping `ParseElement` position-independent, the module's anti-drift principle) and
+      rebased to **document-absolute** at persistence in `layouts_for_spans` (into
+      `raw_text`, the coordinate spans live in), so cell provenance resolves to spans and
+      visual provenance still works. Grid consistency (cells fit `n_rows × n_cols`, no two
+      overlap; sparse/merged cells allowed — *not* the strict element-tiling rule) is
+      validated in `Table.__post_init__`; cell-offset-vs-element-text and cell-bbox-needs-
+      element-frame in `ParseElement.__post_init__` — both fail loud at the trust boundary.
+      `LAYOUT_SCHEMA_VERSION` bumped to 2. Consumer stays Phase 2. *(Review A1.)*
 - [ ] **Figures located here, interpreted later:** store figure region + caption + bbox;
       a vision `extract` operator (Phase 2/§3) reads propositions off the figure, flagged
       provisional. *(Phase 2; `ParseKind.FIGURE`/`CAPTION` reserved.)*
@@ -64,7 +77,7 @@ cache key) + G1.16 (embedding-model column) are the new front of the queue. See
       visualization for expert QA against the original. *(`SourceQuality` carried now;
       consumed in G1.5/G1.6.)*
 
-## Embedding substrate (§1) — built (increment 1); long-document coverage open (G1.13)
+## Embedding substrate (§1) — built (increment 1); long-document coverage shipped (G1.13)
 
 - [x] Long-context embedding model run **once** per document; contextualized token
       embeddings held for the run ("late chunking" — embed once, derive all
@@ -73,17 +86,29 @@ cache key) + G1.16 (embedding-model column) are the new front of the queue. See
       persist keyed by `(document, model)` or budget the re-embed; §1.)*
 - [x] Confirm boundary detection, multi-level pooling, and search all read from the
       cached vectors (no per-level re-embedding).
-- [x] **Truncation guard (G1.13 slice 1 — critical):** a document longer than the
-      model context (8192 tokens) now **fails loudly** (`DocumentTooLongError`)
-      instead of silently indexing a prefix. *(`core/embeddings.py`:
-      `embed_document` tokenizes **without** truncation and guards on the true token
-      count via the pure `_raise_if_truncated` (`MAX_MODEL_TOKENS`) before any forward
-      pass — so no partial index is ever written for an over-long document. Review C1.
-      Windowed embedding (slice 2) lifts the ceiling.)*
-- [ ] **Windowed embedding (G1.13 slice 2):** overlapping macro-windows over long
-      documents; each span pooled from the window where it sits furthest from a
-      window edge; window layout recorded in the segment Action and folded into
-      the span content hash. Needed before MinerU feeds real multi-page PDFs.
+- [x] **Truncation guard (G1.13 slice 1 — critical):** *superseded by slice 2.* The
+      slice-1 stopgap made an over-long document **fail loudly** (`DocumentTooLongError`)
+      instead of silently indexing a prefix. Slice 2 (windowed embedding, below) lifts
+      the ceiling entirely, so the refusal — by design a placeholder "until slice 2
+      lands" — is removed. The guarantee it protected (no span past the cutoff is
+      silently dropped from the dense index) now holds via full windowed coverage.
+      *(Review C1.)*
+- [x] **Windowed embedding (G1.13 slice 2):** `embed_document` now tokenizes the
+      whole document **once without truncation** (content tokens only) and tiles it
+      into overlapping macro-windows (`_plan_windows`, overlap `WINDOW_OVERLAP_TOKENS`
+      = 1024, a constant not config), one model forward pass per window — each window
+      re-framed with the model's own special tokens so interior windows are properly
+      bracketed. `DocumentContext` holds the windows; `pool_span(start, end)` selects
+      the single window where the span sits **furthest from a window edge** (maximal
+      bilateral context) and pools there — never averaged across windows. A document
+      that fits one window is the n=1 case, **byte-identical** to the pre-windowing
+      path (so segmentation boundary placement is unchanged). The window layout
+      (count + boundaries + policy) is recorded on the segment `Action` and the
+      windowing **policy** folds into `span_content_hash` (a policy change re-segments;
+      one-time loud resegmentation on first deploy, like G1.15). Supersedes slice 1's
+      `DocumentTooLongError` ceiling (removed — no length a windowed pass cannot cover).
+      Segmentation is transparent to windowing (per-span interior-window selection
+      makes adjacent sentences share one context); callers keep their API. *(Review C1.)*
 
 ## Segmentation backbone (§2) — built (increment 2; single-level)
 
@@ -166,11 +191,12 @@ cache key) + G1.16 (embedding-model column) are the new front of the queue. See
       under-ranking, and only service-isolated like MinerU.
 - [ ] Both indexes carry `box` id so retrieval can be scoped to the active working set.
       *(G1.11 — gated on Phase 2 boxing.)*
-- [ ] **Embedding-model identity (G1.16):** `model` column on
-      `document_embeddings`/`proposition_embeddings` + mismatch guard
-      (`EmbeddingModelMismatchError`) + `scripts/reembed.py` migration path — a
-      same-dimension model swap must be refused, not silently mixed into one ANN
-      space. *(Review A5.)*
+- [x] **Embedding-model identity (G1.16):** `model TEXT NOT NULL` column on
+      `document_embeddings`/`proposition_embeddings` (migration `0008`) + mismatch guard
+      (`EmbeddingModelMismatchError`, raised in `ingest.persist_spans` for spans and
+      `proposition._guard_embedding_model` for propositions) + `scripts/reembed.py`
+      (over `core/reembed.py`) migration path — a same-dimension model swap is now
+      refused and migrated, not silently mixed into one ANN space. *(Review A5.)*
 - [ ] (Keyword/entity index feeds graph nodes in Phase 2 and candidate generation in
       Phase 4 — keep keyworders in the lexical layer, not the graph.)
 
@@ -182,10 +208,11 @@ cache key) + G1.16 (embedding-model column) are the new front of the queue. See
       content_hash)` over the extractor model/prompt/regime/verifier (`core/cache.py`).
       Unchanged content no-ops; a changed pipeline re-extracts (or fails loud). Cross-document
       output reuse — "extract once" across docs/re-segmentation — is the remaining G1.7b.)*
-- [ ] **Hash the real prompt + schema into the cache key (G1.15):** today invalidation
-      rides on a hand-bumped `EXTRACT_SCHEMA_VERSION`; a prompt edit without the bump
-      silently serves stale extractions. Add `prompt_sha`/`schema_sha` (extractor and
-      verifier) to `extraction_content_hash`. One-time loud re-extraction when it lands.
+- [x] **Hash the real prompt + schema into the cache key (G1.15):** `prompt_sha`/`schema_sha`
+      (extractor *and* verifier) now feed `extraction_content_hash`, so a prompt edit
+      re-extracts even without a hand-bumped `EXTRACT_SCHEMA_VERSION`; the version stays a
+      *semantic* output-shape marker. `schema_sha` is key-order-insensitive
+      (`cache.canonical_json_sha256`). One-time loud full re-extraction on first deploy.
       *(Review A4.)*
 - [ ] **Amortize reference processing:** reference-corpus / domain-pack boxes are ingested
       **once** and persisted read-only for reuse across investigations; only case
@@ -216,11 +243,13 @@ cache key) + G1.16 (embedding-model column) are the new front of the queue. See
       source text resolvable.
 - [ ] Re-ingesting an unchanged document hits the cache (no re-extraction); a static
       reference corpus is processed once and reused.
-- [ ] A document longer than the embedding context ingests with **full** dense
-      coverage — no silent truncation, no zero vectors in pgvector (G1.13).
+- [x] A document longer than the embedding context ingests with **full** dense
+      coverage — no silent truncation (G1.13 slice 2: windowed embedding). No zero
+      vector reaches pgvector: `persist_spans` skips `_is_zero_vector` spans today;
+      replacing the sentinel with `None` end-to-end is G1.17.
 - [x] Mixed-polarity extractions never report full agreement; polarity-unstable
       spans yield `provisional` propositions (G1.14).
-- [ ] A prompt-template edit alone invalidates the extraction cache (G1.15); an
+- [x] A prompt-template edit alone invalidates the extraction cache (G1.15); an
       embedding-model swap is refused, not silently mixed (G1.16).
 - [ ] Maintain a small fixture corpus exercising this path (seed for the gate corpus).
       Include at least one document longer than one embedding window and one span
