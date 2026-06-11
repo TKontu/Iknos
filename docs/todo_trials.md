@@ -33,6 +33,12 @@ can proceed while harness code is written. The Phase 1 fixture corpus is the see
 Include at least one document longer than one embedding window and spans with
 hard negation/modality cases (regression anchors for G1.13/G1.14).
 
+> **Escalated (2026-06-11 review, F1).** The parallel-with-Phase-1 scheduling was
+> not executed; Phase 4's core has now shipped and A0 **is the critical path**.
+> Execute the agent-executable work breakdown below (**V1** corpus, **V2** gold
+> labels + second annotator, **V3** metrics harness) — the checkboxes in this
+> section are satisfied by V1–V3 landing; do not duplicate work.
+
 - [ ] Assemble a small fixed corpus: sources with deliberately planted contradictions
       plus a later **overturning fact**.
 - [ ] Plant a labeled set of ground-truth `SUPPORTS` **and** `REFUTES` edges (including
@@ -48,6 +54,68 @@ hard negation/modality cases (regression anchors for G1.13/G1.14).
       refuter), ECE/Brier, hypothesis-state-flip error, Cohen's κ, Spearman ρ.
 - [ ] Keep the corpus + harness as the permanent regression suite.
 - **Gates:** all of A1–A7; feeds B2.
+
+#### A0 work breakdown — V1/V2/V3 *(merged from `archive/gap_review_2026-06-11.md`; one task per PR, branch `gate/v<N>-<slug>`)*
+
+**V1 — gate corpus: planted documents + manifest.** New
+`tests/fixtures/gate_corpus/` with a `manifest.toml` following the existing
+`tests/fixtures/corpus/` schema exactly (quoted anchors, never offsets); prefer
+parameterizing the existing loader's directory over duplicating it. Domain:
+gearbox/bearing RCA (§14's running example). **10 authored plain-text documents**
+(300–3,000 words except d08), each planted item tracked under a `[[planted]]`
+manifest table (stable id + anchor quote(s) + `kind`):
+d01 incident report (hard negation + a hedge); d02 maintenance log (contradiction
+pair #1 vs d01); d03 supplier analysis (genuine observations + a self-serving
+judgement, §9.1); d04 OEM manual excerpt (reference tier; component hierarchy in
+prose); d05 vibration survey (**dissimilar refuter #1** — a routine reading that
+quietly rules out a live hypothesis without naming it; the §5.1 test case);
+d06 operator interviews (attribution/reported speech; "the HSS bearing"/"bearing
+3"/"it" one entity + a different bearing as the over-merge trap; an admission
+against interest); d07 metallurgy report (**dissimilar refuter #2** vs the
+counterfeit hypothesis, none of its vocabulary); d08 purchasing records (**> one
+embedding window**, >8,192 bge-m3 tokens of realistic line items, a load-bearing
+fact in the final 10%); d09 industry bulletin (reference hypothesis set, §11.2);
+d10 follow-up correction (**the overturning fact** — retracts a key d02 claim,
+explicit later date). **4 hypotheses** in the manifest: H1 lubrication failure
+(true cause), H2 installation error (favoured *before* d10), H3 counterfeit part
+(refuted by d07), H4 overload (refuted by d05) — the pre/post-d10 flip is the
+retraction measurement. Plus `gate_corpus/README.md` (scenario + planted
+inventory, spoiler warning) and a smoke test (loader loads all 10; every anchor
+occurs exactly once; d08 exceeds the window). **No labels in V1** (V2's scope);
+no real company names; no ingest/extraction runs.
+
+**V2 — gold labels + second annotator** *(longest-lead item in the project —
+start recruiting on day one; depends on V1)*. Labeling happens **before** the
+annotator reads `gate_corpus/README.md` (it is the answer key);
+`labels/INSTRUCTIONS.md` (jargon-free, 2 worked examples per family) is safe.
+Fallback if no second annotator after two weeks of trying: the developer labels
+twice ≥14 days apart without reviewing pass 1 — documented as a limitation
+(intra- not inter-annotator). One TOML per family, rows referencing planted ids
+or `(document, quote)` anchors: `gold_edges.toml` (evidence anchor, hypothesis,
+sign, `dissimilar` flag); `gold_hypothesis_states.toml` (state before/after d10);
+`gold_faithfulness.toml` (~30 spans: polarity/modality/attribution/epistemic
+class — A5); `gold_entity_clusters.toml` (mention → cluster incl. the d06 traps —
+A6); `gold_levels.toml` (fact → component level, **per annotator**, the κ-gated
+family). `scripts/gate_agreement.py` prints Cohen's κ per dual-annotated family,
+exits non-zero below 0.6 (the §13 automation gate). Disagreements reconciled into
+a `consensus` column, originals kept (κ uses originals, trials use consensus).
+**Never generate labels with an LLM** (§8 bias control). Extend the V1 smoke test
+to verify every label anchor resolves.
+
+**V3 — evaluation harness: metrics + bias-controlled scoring** *(parallel with
+V1; also the calibration measurement the gate needs)*. New package
+`src/iknos/trials/`, importable without `DATABASE_URL`, **never calls an LLM**
+(assert via an import-graph test that it does not import `core/llm.py`):
+`metrics.py` pure functions, each unit-tested against a hand-computed fixture —
+`recall_at_budget` (used split by sign: supporter vs **refuter** recall, A1),
+`ece` + `brier` (A3/E1), `reliability_diagram` (bin confidence/accuracy/n —
+no plotting), `cohen_kappa` (V2/A4), `spearman_rho` (A4 depth recovery),
+`state_flip_error` (per hypothesis: flipped-when-should / held-when-should /
+wrong-direction — the d10 measurement). `scoring.py`: evaluate under a fixed
+content-hash-seeded permutation schedule (reuse the `_permutation` pattern in
+`core/edge_judge.py`) so no metric depends on presentation order. `report.py`:
+metrics dict → markdown table. **No trial runners** (each trial wires its own
+inputs when V1/V2 data exists); no plotting dependencies.
 
 ### Trial A1 — Candidate-generation recall (esp. refuter recall)  ⚠ may force redesign
 
@@ -231,7 +299,7 @@ them maximizes rework. The benchmark needs no production code: generate a
 **synthetic** graph at target density and measure. Days of work; de-risks the
 single biggest potential architecture swap. It is now a **Phase 2 entry
 criterion** (`todo_phase_2_graph_construction.md`), paired with the G0.R2
-property-index migration (`gap_phase_0_residual.md`).
+property-index migration (`archive/gap_phase_0_residual.md`).
 
 - [ ] **Prerequisite:** the G0.R2 AGE property-index migration is merged — benchmark
       the indexed engine, and verify with `EXPLAIN` through the real `cypher()` call
@@ -286,6 +354,49 @@ A-series proves mechanisms, not efficacy; this instrument tests both efficacy an
       Budget the baseline implementations explicitly (retrieval-tuned plain RAG;
       multi-hop/agentic RAG with tool use; an expert+search protocol), start them
       before Phase 4 completes, and reuse them as Phase 1's retrieval sanity check.
+      *(2026-06-11 review, F1: "before Phase 4 completes" has passed with zero
+      baseline code. Execute the V4–V6 work breakdown below — one output contract
+      so the V3 harness scores the whole ladder identically.)*
+
+#### E1 work breakdown — V4/V5/V6 *(merged from `archive/gap_review_2026-06-11.md`)*
+
+**V4 — baseline 1: tuned plain-RAG rig.** A *fair strong* baseline, not a
+strawman: same LLM endpoint and embedding model as the system, but what a
+competent team would build *without* this project. New `src/iknos/baselines/rag.py`:
+fixed-size chunking (512 tokens / 64 overlap — deliberately **not** iknos
+segmentation), own `baseline_chunks` table (own migration: id, document_id, text,
+embedding vector(1024), model; embed through the existing substrate seam),
+top-k cosine retrieval (k=8, configurable) + one answer call with citations via
+`core/llm.py` (plumbing yes, project *reasoning* no — enforce with an import test
+against segmentation/proposition/graph modules). **Shared output contract** for
+all three rungs: `BaselineAnswer {question_id, answer_text, cited_chunk_ids,
+confidence}` — confidence is the model's verbalized 0–1 (the baseline's own
+calibration story; do not multi-sample it). Runner `scripts/run_baseline.py
+--baseline rag --corpus … --questions <toml>` → `docs/trials/
+baseline_rag_answers.toml` (add `questions.toml` to the gate corpus if V1 did
+not). Tests: chunk boundaries + prompt assembly (mock LLM); small
+ingest+retrieve integration. Tuning knobs are constructor params. No reranker/
+query rewriting (that is V5); no scoring (V3's job).
+
+**V5 — baseline 2: agentic / multi-hop RAG rig** *(after V4)*. The strongest
+cheap competitor: an LLM-driven loop (max 6 steps) over `search(query)` (V4's
+retrieval) and `answer(text, citations, confidence)` — query reformulation and
+multiple searches allowed, must end with `answer`. Implement directly on
+`core/llm.py` structured output (no agent-framework dependency). Same output
+contract + `--baseline agentic`. Persist the per-question **trace** (queries
+issued, chunks seen) — E1's traceability axis scores what the baseline can cite,
+so the trace must be complete. Malformed tool call → one retry then record the
+question as unanswered loudly. Budget: ≤ 6 LLM calls + 1 answer per question.
+Never give it iknos's graph/propositions/contradiction machinery.
+
+**V6 — baseline 3: expert+search protocol** *(no code — do not let it block the
+others)*. `docs/trials/e1_expert_search_protocol.md`: who (the V2 second
+annotator or another colleague — **not** the developer, who knows the answers);
+toolset (corpus as plain files + editor/ripgrep search, no iknos); time box
+(~25 min/question); record per question: answer, relied-on passages, 0–1
+confidence, time. Plus `docs/trials/e1_expert_answers_template.toml` matching
+the V4/V5 contract. Contamination rule: the expert has not read
+`gate_corpus/README.md` or the labels.
 - [ ] **Measure on the differentiator axes** (where RAG is weak — an easy factoid tie is
       fine): contradiction / refuter handling; correct **retraction** when an overturning
       fact is added; completeness/correctness of **traceability** to source; **calibration**
@@ -324,6 +435,50 @@ A-series proves mechanisms, not efficacy; this instrument tests both efficacy an
   after a working system.
 
 ---
+
+## Gate prerequisites — infrastructure *(merged from `archive/gap_review_2026-06.md` R10/R11; land before the gate trials ingest the V1 corpus — a real multi-document ingest as a synchronous in-process foreground job is the failure mode these prevent)*
+
+**R10 — serve embedding inference out-of-process.** `EmbeddingSubstrate` loads
+bge-m3 into the calling process. Put it behind the same swappable-service seam as
+the LLM and parser (copy `core/mineru.py` httpx/pydantic/retry pattern +
+`core/parse.py` protocol/factory/fallback pattern): (1) `EmbeddingBackend`
+protocol in `core/embeddings.py` (`embed_document`, `embed_passages`) — the
+current in-process class is the default/local backend; (2) new
+`core/embeddings_http.py::HTTPEmbeddingBackend` — TEI-compatible for
+`embed_passages`, custom `/embed_document` endpoint for the windowed token+offsets
+path (our versioned wire schema: `{text, window_tokens, overlap_tokens}` →
+`{model_version, offsets, embeddings}`; pydantic-validated, reject length
+mismatches; retries transport/5xx only; `EMBEDDINGS_TIMEOUT_S` default 300);
+(3) `make_embedding_backend()` factory keyed on `EMBEDDINGS_BASE_URL` (empty ⇒
+local — the `parser_base_url` pattern); (4) the server itself is ops-side (stub
+README in `local-llm-setup/`). Accept: unset URL → byte-identical behavior, all
+existing tests untouched; HTTP backend wire-validated; `DocumentContext`
+interchangeable on a fixture. Tests: `test_embeddings_http.py` with httpx
+MockTransport, mirroring `test_mineru.py`. Do not deprecate the in-process
+backend or change `DocumentContext`.
+
+**R11 — background job queue (procrastinate).** Postgres-native (LISTEN/NOTIFY
+on the existing engine — no new infra; principle 7). Realizes the §6 concurrency
+contract: one ingest worker per document; one investigation's graph writes
+serialize through one queue. (1) add `procrastinate[psycopg]`; (2)
+`src/iknos/jobs/app.py`: app bound to `DATABASE_URL`; task
+`ingest_document_bytes_job(document_id, content_b64|storage_ref, title, box)`
+wrapping `core/ingest.ingest_document_bytes` in a session/transaction; retry max
+3, exponential backoff, transport-class errors only — validation errors
+(`DocumentTooLongError`, `DocumentResegmentationError`, parse validation) are
+terminal; (3) queue `ingest:<box_id>` with per-queue concurrency 1 +
+`queueing_lock` on document id (no two jobs for one document concurrently);
+(4) procrastinate schema via a migration embedding its DDL, or a documented
+one-shot `uv run procrastinate schema --apply` in `MIGRATIONS.md` — choose one,
+write it down; (5) `api/main.py`: `POST /documents` (multipart, enqueues, returns
+job id) + `GET /jobs/{id}`; no auth yet (Phase 6 entry criterion); (6)
+`compose.yaml`: a `worker` service (same image, `uv run procrastinate worker`) —
+**compose changes are reviewed, not run** (host policy: no `docker compose up`
+without approval). Accept: enqueue→worker→committed spans + Actions + `succeeded`;
+validation error → `failed`, no retry; transport error → ≤3 retries; same-document
+lock holds; direct synchronous callers unchanged. Tests: pure
+retry-classification unit test; enqueue→run integration via
+`procrastinate.testing.InMemoryConnector` (no live worker container).
 
 ## Sequencing & gating summary
 

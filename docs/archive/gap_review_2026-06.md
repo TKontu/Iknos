@@ -44,26 +44,35 @@ landing each task.
 
 ## Status / sequencing
 
+> **Reconciled 2026-06-11** (third review,
+> `review_2026-06-11_post_phase4_review.md` H1): the table had gone stale —
+> several items shipped under different IDs without being ticked here, which
+> misdirected at least one audit pass. ✅ rows below are **done — do not
+> re-implement**; the pointer names the shipping work. The open set is
+> R4, R8–R13.
+
 | Task | Title | Severity | Gate | Status |
 |------|-------|----------|------|--------|
-| R1 | Truncation guard + zero-vector discrimination | Critical | merge ASAP | ☐ |
-| R2 | Windowed late chunking (long documents) | Critical | merge ASAP (after R1) | ☐ |
-| R3 | Cypher dollar-quote hardening | Critical | merge ASAP | ☐ |
-| R4 | HNSW indexes + distance-operator standardization | High | Phase 2 entry | ☐ |
-| R5 | AGE property-id expression indexes | High | Phase 2 entry | ☐ |
-| R6 | Explicit LLM client timeouts | Medium | merge ASAP | ☐ |
-| R7 | `model_version` on embedding tables | Medium | Phase 2 entry | ☐ |
-| R8 | `provisional` → `provisional_reasons` | Medium | before Phase 2 edge work | ☐ |
-| R9 | G1.6 quarantine gate function | Medium | before Phase 2 edge work | ☐ |
-| R10 | Embeddings served out-of-process | Medium | Phase 2 entry | ☐ |
-| R11 | Background job queue (procrastinate) | Medium | Phase 2 entry | ☐ |
-| R12 | Action metrics (observability floor) | Medium | opportunistic | ☐ |
-| R13 | Phase 2 prerequisite design docs | High | Phase 2 entry | ☐ |
+| R1 | Truncation guard + zero-vector discrimination | Critical | merge ASAP | ✅ shipped as G1.13 slice 1 / G1.17 (PR #43) — `DocumentTooLongError`, zero-vector discrimination |
+| R2 | Windowed late chunking (long documents) | Critical | merge ASAP (after R1) | ✅ shipped as G1.13 slice 2 (PR #43) — `core/embeddings.py` macro-windows + interior-window pooling |
+| R3 | Cypher dollar-quote hardening | Critical | merge ASAP | ✅ shipped with G1.17 (PR #43) — `db/age.py::_dollar_quote_tag` |
+| R4 | HNSW indexes + distance-operator standardization | High | **before gate trials** (was: Phase 2 entry) | ☐ open — note the migration numbering in the task body is stale; next free revision ≥ 0013. Consumed by V9 (`gap_review_2026-06-11.md`) |
+| R5 | AGE property-id expression indexes | High | Phase 2 entry | ✅ shipped as G0.R2 (PR #42, migration `0007`) — **as GIN on `properties`, not btree expression**: EXPLAIN showed plans use `@>` containment, which GIN serves and the proposed btree never would (see the migration docstring) |
+| R6 | Explicit LLM client timeouts | Medium | merge ASAP | ✅ shipped with G1.17 R5 (PR #43) — `core/llm.py` 180 s deadline |
+| R7 | `model_version` on embedding tables | Medium | Phase 2 entry | ✅ shipped as G1.16 + migration `0008` — `model TEXT NOT NULL` on both tables + vector-space identity guard |
+| R8 | `provisional` → `provisional_reasons` | Medium | **before G4.5** (the edge-creation site now exists — trigger fired) | ☐ open — precedes R9 → V7 |
+| R9 | G1.6 quarantine gate function | Medium | **before G4.5** | ☐ open — wired into the edge producer by V7 (`gap_review_2026-06-11.md`) |
+| R10 | Embeddings served out-of-process | Medium | **before gate trials run on the V1 corpus** | ☐ open |
+| R11 | Background job queue (procrastinate) | Medium | **before gate trials run on the V1 corpus** | ☐ open |
+| R12 | Action metrics (observability floor) | Medium | opportunistic | ☐ open |
+| R13 | Phase 2 prerequisite design docs | High | superseded in part — Phase 2 shipped thin slices with decisions recorded in `gap_phase_2_graph_construction.md`; before *hardening* those subsystems, check which of R13a–c still adds value over the shipped records | ☐ open (re-scoped) |
 
-R1+R3+R6 are independent and can run in parallel. R2 depends on R1 (it replaces
-R1's hard failure with real support). R8 precedes R9. R4/R5/R7 are independent
-migrations (coordinate revision ids: each task must set `down_revision` to the
-current head at the time it lands — check `alembic heads` first).
+Open-task sequencing: **R8 → R9 → V7 → V8** is one work stream (the F2
+quarantine/ensemble lockdown — see `gap_review_2026-06-11.md`); **R4 → V9**
+is another; **R10/R11** land before the gate trials ingest the V1 corpus.
+Each migration task must set `down_revision` to the current head at the time
+it lands — check `alembic heads` first; the revision numbers written inside
+the task bodies below predate migrations 0007–0012 and are stale.
 
 ---
 

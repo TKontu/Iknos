@@ -9,10 +9,10 @@ organized into boxes/tiers, each traceable to source and logged.
 
 ## Entry criteria (do not start node extraction before these)
 
-*Added by the 2026-06 review (`review_2026-06_architecture_plan.md`); each exists
+*Added by the 2026-06 review (`archive/review_2026-06_architecture_plan.md`); each exists
 because Phase 2 is where its absence turns from latent to expensive.*
 
-- [x] **AGE property indexes merged (G0.R2, `gap_phase_0_residual.md`).** Entity
+- [x] **AGE property indexes merged (G0.R2, `archive/gap_phase_0_residual.md`).** Entity
       resolution runs continuous per-mention MERGE/MATCH lookups; without indexes every
       one is a label-table seq scan. **Done** — migration `0007_age_label_indexes`:
       GIN on `properties` per vertex label (the `@>` containment filter behind id +
@@ -259,3 +259,57 @@ because Phase 2 is where its absence turns from latent to expensive.*
   more expert review, not silent guessing (§14).
 - Cross-domain entity ambiguity (a "valve" in plumbing vs the heart) is disambiguated
   by the active pack scope — verify dedup respects pack boundaries.
+
+## Build record & deferred seams *(merged from `archive/gap_phase_2_graph_construction.md`, 2026-06-11; full decision records in `docs/archive/`)*
+
+All increments G2.1–G2.8 shipped as thin slices with the seams below deliberately
+deferred. Each seam names its owner; none is forgotten work — when its owning phase
+starts, transplant it into that phase's checklist.
+
+- **G2.1 boxes** — working-box lifecycle (mutable, one-per-investigation, gated
+  promotion) → Phase 6; `update_box` metadata editing → Phase 7 soft override.
+  Known limits: `interest_stake`/`sensitivity_compartments` persist as JSON-string
+  properties (not natively queryable by membership — revisit if a stake containment
+  query appears); `deprecate_box` is deliberately not idempotent.
+- **G2.2 extract** — judgement-proposition routing consumption → Phase 3/4 + G2.6;
+  re-extraction under a changed entity pipeline (cascade) → with G1.7's cascade item.
+- **G2.3 entity resolution** — embedding-neighbourhood blocking (needs an
+  entity-embedding store); merge/split as belief revision (re-run Layer A/B over the
+  affected component) → Phase 3; contradiction→split-review loop + hysteresis (§5.2)
+  → needs `find-contradiction` (Phase 4/G4.5); cross-box `SAME_AS` (working box, §9)
+  → Phase 6; expert-triage of `candidate` merges → Phase 7.
+- **G2.4 reference binding** — pronoun/local-discourse-antecedent stage (dedicated
+  coreference model, §3.1; the slice detects and leaves unresolved → provisional —
+  correct conservative behavior; trigger: A5 finds binding accuracy binding);
+  relational tie-break via `resolve.score_pair`; multi-sample/verify binding
+  confidence; re-binding as belief revision → Phase 3; triage of open bindings →
+  Phase 7. **Note:** the §3.1 taxonomy-anchor stage shipped with **G2.8 slice 2**
+  (the entity-linking fold), not as a G2.4 deferral — the cascade is complete except
+  the pronoun stage.
+- **G2.5 part-whole** — relative ordering (last resort, §14 step 3); continuous
+  level via intrinsic IC + box-embedding/ConE (never cosine, never concreteness);
+  belief-revision/retraction of induced edges + stale-`partOf` cleanup → Phase 3;
+  cross-pack taxonomy conflict resolution → with anchoring hardening.
+- **G2.6 credibility** — the per-claim interest-alignment judging pass (LLM/expert
+  flagged against pack patterns; `interest_alignment` is `None` until it runs, read
+  coerces to `UNKNOWN` = modifier 1.0); track-record revision after a refuted claim
+  → Phase 3/4; independence-aware corroboration composes *around* credibility in
+  Phase 4; `DERIVED_FROM` sensitivity propagation → Phase 3/5. `significance` is an
+  edge property — landed with Phase 4 edges (`significance = tier_weight ×
+  effective_credibility`, see §10).
+- **G2.7 provenance** — the universal per-node/edge audit crawler (beyond Fact
+  reach-back) is the deferred seam → Phase 7 point-auditability.
+- **G2.8 anchoring** — investigation-scoped pack activation (`pack_box_ids` is the
+  seam where the Phase-6 `ACTIVATES` scope plugs in); belief-revision of stale
+  anchors → Phase 3; embedding-neighbourhood blocking as in G2.3.
+
+### Before hardening Phase 2 subsystems *(re-scoped from the June review's R13)*
+
+The R13 design docs (`design_entity_linking.md`, `design_meronymy_induction.md`,
+`design_credibility_derivation.md`) were planned before the thin slices shipped;
+the slices made the core decisions and recorded them (see archive). **Before
+hardening** entity resolution / meronymy induction / credibility past the thin
+slices, check what each R13 doc would still add over the shipped records — write
+the doc only where a real undecided design question remains (e.g. the coreference
+model choice for G2.4's pronoun stage; the `f(interest_alignment, epistemic_class)`
+multiplier table for G2.6). Gating trials: A4/A6 thresholds in `todo_trials.md`.

@@ -21,7 +21,7 @@ HTTP client** (`MinerUParser` over our own versioned text+offsets wire schema +
 service** that emits the wire schema (ops/AGPL-side adapter) and **table/figure interpretation**
 (Phase 2). Open: MinerU service standup, quarantine enforcement (G1.6), multi-level/RAPTOR
 (G1.10), box scoping (G1.11), cross-document cache reuse (G1.7b). The **2026-06 review**
-(`review_2026-06_architecture_plan.md`) added **G1.13–G1.19** — two critical correctness
+(`archive/review_2026-06_architecture_plan.md`) added **G1.13–G1.19** — two critical correctness
 fixes (long-document truncation G1.13, polarity-blind agreement G1.14) plus staleness,
 robustness, table-contract, and rank-fusion work. **G1.13 slice 1** (truncation guard) and
 **G1.14** (polarity-aware agreement + twin quarantine), **G1.15** (prompt/schema-hash cache
@@ -56,7 +56,7 @@ The **fixture corpus** (exit-criterion seed for the gate corpus / Trial A5) is n
 configurable per-level knob (`default_level_policy()`, default 2 levels) producing `Span`s at
 multiple granularities from the one cached embedding pass, persisted with per-level idempotency
 and purely additive to level 0; **Part B (RAPTOR summaries)** is deferred per the §2 cost
-decision. See `gap_phase_1_ingest.md` for the gap-plan IDs.
+decision. See `archive/gap_phase_1_ingest.md` for the gap-plan IDs.
 *(Granular state below; not every box maps 1:1 to a gap ID.)*
 
 ## Document parsing — front-end (§1, Stage 0) — 🟡 contract + MinerU client shipped (G1.0/G1.0b)
@@ -355,3 +355,72 @@ decision. See `gap_phase_1_ingest.md` for the gap-plan IDs.
   research goal (§8) — don't over-engineer it.
 - Summary-based coarse levels add LLM cost at ingest; confirm it's worth it for the
   pruning benefit before scaling.
+
+## Build record *(merged from `archive/gap_phase_1_ingest.md`, 2026-06-11; full per-item rationale in `docs/archive/`)*
+
+Shipped, one line per item (PRs #18–#48): **G1.0/G1.0b** parse contract + null parser +
+MinerU HTTP client over our own versioned wire schema (AGPL stops at the service edge);
+**G1.1/G1.2** structured epistemic fields + observation/judgement routing; **G1.3**
+multi-sample extraction (`core/consistency.py`, agreement folds multiplicatively into
+faithfulness); **G1.4/G1.5** extract-then-verify (independent verifier seam) + derived
+faithfulness; **G1.7** version-aware content-addressed cache
+(`(span_id, content_hash)`, `StaleExtractionError`); **G1.7b** cross-doc "extract once"
+replay (`core/reuse.py`); **G1.8** reference-corpus amortization (sealed read-only
+boxes, `ReferenceSealError`, re-ingest skips embed/segment/persist entirely); **G1.9**
+span persistence (deterministic `uuid5` ids, immutability guard); **G1.10 Part A**
+multi-level offset spans (one embedding pass, per-level content hash, coarse levels
+purely additive); **G1.13** windowed late chunking (overlapping macro-windows,
+most-interior-window pooling, policy folds into `span_content_hash`); **G1.14**
+polarity-partitioned agreement clustering + polarity-twin quarantine + degenerate-
+sampling guard; **G1.15** prompt/schema-SHA cache keys (no hand-bumped constant);
+**G1.16** embedding-model identity column + mismatch guards + `scripts/reembed.py`;
+**G1.17** robustness batch (per-span isolation, verifier degradation, `pool_span`→
+`None`, action indexes, per-call deadline, substrate lifecycle, `cypher_map` fuzzing —
+which caught and fixed the `$$` dollar-quote SQL injection, now `_dollar_quote_tag`);
+**G1.18** structured table payload in the wire contract (element-relative cell offsets,
+rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
+(`tests/fixtures/corpus/`, quote-anchored manifest, model-free loader).
+
+## Open work — carried from the gap plan *(specs preserved; execute as written)*
+
+- [ ] **G1.0 remainder — stand up the live MinerU service** *(ops, not code)*: the
+      service-side adapter that speaks our wire schema (`core/mineru.py` client is
+      done). Tracked in the deployment runbook entry criterion
+      (`todo_phase_6_investigation_runtime.md`).
+- [ ] **G1.0 remainder — tables → observation propositions** *(Phase 2 consumer)*:
+      cells → propositions with column semantics, observation-class (§3.1); the 2-D
+      structure already survives Stage 0 (G1.18). Figures: located now
+      (`ParseKind.FIGURE`/`CAPTION` reserved), interpreted by a Phase-2 vision
+      `extract` operator, provisional.
+- [ ] **G1.0 remainder — parse quality → faithfulness input**: `SourceQuality` is
+      carried per element/region; consume it in the faithfulness derivation
+      (lower-quality parse → lower faithfulness → provisional → triage).
+- [ ] **G1.5 remainder — Trial A5 faithfulness-gate metric**: the decomposed verify
+      verdicts are persisted in `actions.outputs` ready for the metric; computing it
+      on the labeled gate corpus is harness work (V3 in `todo_trials.md`).
+- [ ] **G1.7 remainder — cascade re-extraction**: on a stale span
+      (`StaleExtractionError`), purge its old propositions/edges/index rows and
+      recreate (pairs with the resegmentation-cascade deferral in `ingest.py`).
+- [ ] **G1.10 Part B — RAPTOR summary levels** *(deferred; trigger in `todo.md`)*:
+      coarse levels as summaries (RAPTOR-style upward tree), not just longer windows —
+      needed so §5.1 coarse-to-fine pruning has crisp parents. Adds ingest-time LLM
+      cost; gated on the §2 "confirm it's worth the pruning benefit" decision. Note:
+      no production ingest entrypoint constructs the multi-level segmenter yet (tests
+      inject it); wire it to `default_level_policy()` when that entrypoint lands.
+- [ ] **G1.11 — `box` on the dense/sparse indexes** *(trigger: first hybrid-retrieval
+      consumer)*: add `box` to `proposition_embeddings`/`proposition_lexical_index` so
+      retrieval scopes to the active working set (§4). Blocked on an architectural
+      decision: propositions are indexed in Phase 1 *before* any box is assigned at
+      Phase-2 extract time — decide how a box threads through ingest first.
+- [ ] **G1.12 — multi-span provenance** *(optional)*: add `EVIDENCED_BY` to the
+      context spans a proposition drew on (today: target span only; context ids live
+      in `Action.inputs`).
+- [ ] **G1.19 — hybrid-retrieval rank fusion** *(trigger: same consumer as G1.11)*:
+      fuse dense + sparse by **Reciprocal Rank Fusion** over the two result lists —
+      never a weighted sum (cosine and `ts_rank` are incomparable; `ts_rank` is
+      neither TF-IDF nor BM25). Re-evaluate only if Trial A1 shows under-recall on
+      lexical candidates; the upgrade path (ParadeDB `pg_search` / VectorChord-BM25)
+      is **AGPL** → MinerU-style service-edge isolation, flag for the licensing track.
+- [ ] **G1.6 — quarantine enforcement**: moved to the Phase 4 safety lockdown
+      (R8 → R9 → V7) now that the `REFUTES` creation site exists — see
+      `todo_phase_4_linking_adjudication.md`.

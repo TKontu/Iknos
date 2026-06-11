@@ -440,13 +440,19 @@ pgvector**.
 - **AGE property indexes are mandatory, not an optimization.** AGE stores
   properties in an `agtype` column; without explicit indexes every
   `MERGE`/`MATCH` on `id` or `box` is a **sequential scan of the label table**.
-  Every vertex/edge label carries a btree expression index on its `id` property
-  access (and on `box` where box-scoped queries run), plus GIN on `properties`
-  for ad-hoc filters; bitemporal as-of queries need expression indexes on
-  `valid_from`/`valid_to` for the labels that use them. Index *use* must be
-  verified with `EXPLAIN` through the actual query path (the `cypher()` SQL
-  wrapping has sharp edges) — existence is not use. This ships before Phase 2's
-  continuous entity-resolution lookups, not after they hit the cliff (Trial C3).
+  *Implemented (migration `0007`, G0.R2), shaped by what the planner actually
+  emits:* a property-map filter (`{id: 'x'}`, `{box: 'b'}`) compiles to the
+  **agtype containment operator** `properties @> …`, so each vertex label carries
+  one **GIN index on `properties`** (backing id-lookup, box-scoped MATCH, and
+  ad-hoc filters at once) — the originally-specified btree expression index on
+  the `id` access would exist and never be chosen. Edges join on their graphid
+  endpoint columns, so each edge label carries **btree on `start_id`/`end_id`**.
+  Bitemporal as-of range indexes are deferred to their Phase 5 consumer (no as-of
+  query shape exists yet to verify against). Index *use* must be verified with
+  `EXPLAIN` through the actual query path (the `cypher()` SQL wrapping has sharp
+  edges) — existence is not use; the verification test asserts the index appears
+  in the plan (`tests/integration/test_age_label_indexes.py`). Shipped before
+  Phase 2's continuous entity-resolution lookups (Trial C3 pairs with it).
 - **PostgreSQL** (same instance) holds source text, span offsets, auth, and
   metadata as relational tables; `pgvector` holds the dense embedding index.
   Provenance resolution (Span → text) is therefore a local join, not a cross-engine
@@ -577,8 +583,11 @@ propagation depth, or the incremental-Datalog machinery from (a).
 - **Confidence pipeline.** Do not feed raw verbalized LLM confidence as edge weight.
   (1) Elicit by multi-sample consistency, not single-shot verbalization; (2)
   recalibrate per model; (3) encode each judgment as a subjective-logic opinion with
-  source-reliability discounting; (4) fuse correlated/conflicting evidence with
-  cumulative or averaging fusion — never raw Dempster's rule under conflict.
+  source-reliability discounting (routing note, decided G4.3: source credibility is
+  routed into edge `significance` per §9/§10, not applied inside the judge — the
+  judge runs at identity reliability so the three quantities stay separate); (4)
+  fuse correlated/conflicting evidence with cumulative or averaging fusion — never
+  raw Dempster's rule under conflict.
 - **Edge-judgment disciplines (LLMs are poor, biased edge judges).** The connection
   `strength` is the hardest value to get right, so the protocol is hardened against
   known LLM failure modes:
@@ -925,6 +934,11 @@ unless explicitly overridden (e.g., a promoted node).
     number.
   - **`significance`** — weight of the evidence if true, in [0, 1]: largely inherited
     from the evidence node's source/tier (§9), so it barely depends on LLM judgment.
+    Concretely (decided G4.3): `significance = tier_weight(tier) ×
+    effective_credibility` (§9.1); the §8 judge runs at identity source-reliability
+    so `strength` stays the pure connection judgment — credibility enters here,
+    never the strength discount. `tier_weight` is uniform 1.0 until the §8
+    experiment calibrates it.
 - **`confidence`** (edge `DERIVED_FROM`, and Layer-B node confidence) — strength in
   [0, 1], a calibrated value (§8); the propagated, double-counting-free value from
   §12, **not** a raw LLM number.

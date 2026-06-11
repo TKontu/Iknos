@@ -65,7 +65,19 @@ model-identity guard enforced). Coarse-to-fine (stage 3) + keyword co-occurrence
 seams. The remaining edge-judgment refinement (§8, G4.3 — per-model recalibration, identity until
 G4.6) and the tier-differentiated significance weighting are open seams; the `corroborate` /
 `find-contradiction` operators + ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6)
-are the next increments. See `gap_phase_4_linking_adjudication.md` for the build plan.
+are the next increments. Full per-slice decision records: `docs/archive/gap_phase_4_linking_adjudication.md`.
+
+**Sequencing override (2026-06-11 review, F1/F2).** Before the remaining G4.5
+slices (channel producers, operators): the **safety lockdown must land** —
+R8 → R9 → V7 (quarantine enforcement in the edge producer) → V8 (the
+`persist_verdicts` ensemble filter, i.e. the "consumer-filter" slice of G4.5,
+wired to the slice-1 `authorise` and holding un-authorised flips as a
+`pending_refutation` finding) — because the REFUTES creation site exists with
+§3.1 quarantine unenforced, and `persist_verdicts` still writes whatever state
+it is given. And before G4.6 can run at all: the **gate assets** V1 (planted
+corpus), V2 (gold labels — longest lead, start the annotator recruitment now),
+V3 (metrics harness), plus the E1 baselines V4–V6 — specs in `todo_trials.md`.
+The lockdown specs are in *Open task specs* below.
 
 ## Candidate generation (§5.1) — which pairs to assess
 
@@ -149,6 +161,12 @@ are the next increments. See `gap_phase_4_linking_adjudication.md` for the build
       per-model recalibration (the fitted consistency→correctness curve, identity until G4.6) and
       tier-differentiated significance (the `SignificancePolicy` is uniform until G4.6 calibrates
       it).)*
+- [ ] **Quarantine enforcement at the edge-creation site (V7, needs R8+R9):** a
+      provisional-sourced `REFUTES` (or sole-support `SUPPORTS`) is dropped from the
+      plan and recorded on the `Action` as `quarantined` — never persisted, never a
+      silent skip (§3.1). The judge still sees the evidence; quarantine gates the
+      *write*. *Must land before the remaining G4.5 slices.*
+      (spec in *Open task specs* below.)
 - [ ] `corroborate` operator: hypothesis → gather supporting/refuting evidence.
 - [~] `find-contradiction` operator + **ensemble gate** (multi-sample LLM + symbolic +
       temporal agreement) required before any `REFUTES` (§7.2). *(G4.5 slice 1 —
@@ -203,6 +221,13 @@ are the next increments. See `gap_phase_4_linking_adjudication.md` for the build
 
 ## Validation gate (§8 experiment) — run before hardening anything
 
+> **Work breakdown (2026-06-11):** the gate's assets are granular agent-executable
+> tasks — V1 (corpus), V2 (gold labels + annotators), V3 (metrics harness +
+> bias-controlled scoring), V4–V6 (E1 baseline ladder) in `todo_trials.md`, and
+> V9 (the ANN recall-vs-exact measurement, *Open task specs* below) folded into
+> the gate run. The checkboxes below are satisfied by those tasks landing; do
+> not duplicate work.
+
 - [ ] Build the planted-contradiction corpus (sources with conflicts + a later
       overturning fact); keep as a regression suite.
 - [ ] Measure: retraction propagation (Phase 3); hypothesis-state flip on the
@@ -232,3 +257,140 @@ are the next increments. See `gap_phase_4_linking_adjudication.md` for the build
   suspiciously uniform strengths; record as a known limitation (§13).
 - **Cyclic QBAF convergence** has no general guarantee — the requirement is
   detect/bound/surface, not converge (principle 8, §13).
+
+## Open task specs *(merged from `archive/gap_review_2026-06.md` R4/R8/R9 and `archive/gap_review_2026-06-11.md` V7/V8/V9, 2026-06-11 — execute as written; one task per PR, branch `fix/<id>-<slug>`)*
+
+Work-stream order: **R8 → R9 → V7 → V8** (the safety lockdown — before the remaining
+G4.5 slices), and **R4 → V9** (gate ANN infrastructure — with the gate trials).
+Migrations: set `down_revision` to the actual head (`alembic heads`) — numbering in
+older specs is stale.
+
+### R8 — `provisional` boolean → `provisional_reasons` set
+
+One flag currently carries three meanings; triage (§11.1) needs the reason, the
+quarantine gate (R9) needs non-emptiness. Known reasons now: `low_faithfulness`
+(Phase 1), `unresolved_reference` (Phase 2), `uninferred_budget` (Phase 5).
+
+1. `types/epistemic.py`: add `ProvisionalReason(StrEnum)` with those three values;
+   replace `is_provisional(...)` with
+   `provisional_reasons_for(faithfulness: float | None) -> set[ProvisionalReason]`
+   (`{LOW_FAITHFULNESS}` below threshold, else empty; `None` → empty, the documented
+   verifier-off mode). Migrate callers rather than keeping a bool wrapper.
+2. `types/nodes.py::Proposition`: `provisional: bool | None` →
+   `provisional_reasons: list[str]` (default `[]`; list for stable serialization,
+   set semantics — dedupe on write).
+3. `core/proposition.py`: persist `provisional_reasons` (AGE is schemaless — no
+   migration) **and keep writing the legacy boolean** (`true` iff non-empty) for one
+   transition release with a removal TODO; include reasons in extract `Action`
+   outputs.
+4. `grep -rn "provisional" src/ tests/` and migrate every reader.
+
+Accept: low-faithfulness proposition persists `["low_faithfulness"]` + legacy
+`true`; high-faithfulness persists `[]` + `false`; verifier-off persists `[]` +
+`null`; no production read of the boolean except the legacy write. Tests:
+`test_epistemic.py` (threshold edge), `test_proposition_layer.py` (persisted fields).
+
+### R9 — quarantine gate function (pure)
+
+New module `src/iknos/core/quarantine.py`: `QuarantinedPropositionError`;
+`Stakes(StrEnum)` `LOW`/`HIGH`; `assert_not_quarantined(proposition_reasons:
+Collection[str], stakes: Stakes) -> None` — HIGH + non-empty reasons → raise
+(message lists reasons); LOW always passes. Pure — no DB, no settings. Module
+docstring states the call contract: every path that creates a `REFUTES`, or a
+`SUPPORTS` that is the target's sole support, calls this with `Stakes.HIGH` before
+writing. Tests (`test_quarantine.py`): the three-row truth table; importable
+without `DATABASE_URL`.
+
+### V7 — quarantine enforcement in the edge producer *(needs R8+R9)*
+
+`core/edge_producer.py` is the live `SUPPORTS`/`REFUTES` creation site and never
+consults provisional state. Read the module docstring + `plan_hypothesis` /
+`build_evidence` / `produce` first; design intent is record-and-skip, never abort.
+
+1. **Load reasons:** where the producer resolves each evidence node's `statement` +
+   `effective_credibility`, also resolve its provisional reasons — a
+   Fact/Conclusion inherits the union of `provisional_reasons` over the
+   `Proposition`s it is `EVIDENCED_BY`. An evidence node with no proposition is
+   treated as quarantined with reason `"missing_provenance"` + a warning log.
+2. **Enforce at planning:** in `plan_hypothesis`, after the judge returns, derive
+   stakes per would-be edge — `HIGH` for any `REFUTES` and for a `SUPPORTS` that
+   would be the hypothesis's sole support in this plan; `LOW` otherwise — and call
+   `assert_not_quarantined`. On raise: **drop the edge from the plan** (other
+   hypotheses unaffected) and record it in the Action's `outputs.quarantined`:
+   `{evidence_id, sign, reasons, stakes}` — a triage signal, not an error.
+3. Pure helpers beside `edge_significance`/`build_evidence`; DB read joins the
+   existing load. Extend the module-docstring invariants.
+
+Accept: provisional-sourced REFUTES not persisted + recorded as quarantined; same
+node may still drive a LOW-stakes SUPPORTS; sole-support SUPPORTS quarantined,
+two-supporter case not; a quarantined edge never aborts the batch. Tests: unit
+stakes table + plan-level drop; integration provisional→fact→produce→no REFUTES
+edge + Action carries `quarantined`. Do not: filter at the candidate/judge stage
+(the judge should still see the evidence — quarantine gates the *write*); touch
+`qbaf_adapter.py` (V8).
+
+### V8 — `persist_verdicts` ensemble filter *(the G4.5 consumer-filter slice)*
+
+G4.5 slice 1 shipped the gate's pure core (`core/ensemble_gate.py::authorise`,
+unanimity-of-required + dissent veto, `DEFAULT_GATE` safe-by-default while the
+symbolic channel ABSTAINs). `core/qbaf_adapter.py::persist_verdicts` still writes
+whatever state it is given. Make the §7.2 invariant structural in the writer:
+
+1. `persist_verdicts` gains `gate_decisions: Mapping[str, GateDecision]` (hypothesis
+   id → slice-1 `authorise` result; default empty). For a verdict whose computed
+   state is `refuted`: authorising decision → persist as today; otherwise → persist
+   `acceptability` as computed, persist `state` as the hypothesis's **previous**
+   state (read in the same query; none → `unsupported`), set
+   `pending_refutation: true` on the vertex. Clear `pending_refutation` whenever a
+   later verdict persists non-refuted or authorised-refuted.
+2. Record the hold per the adapter's existing audit behavior (held-back ids +
+   `reason: "ensemble_gate_pending"`); reuse the gate's `is_finding` notion — a
+   withheld flip is a §13 finding, surfaced not smoothed.
+3. Docstrings: "`refuted` is unreachable through this writer without an authorising
+   `GateDecision`; `ensemble_gate.authorise` is the only intended producer." Plus
+   the one-line §7.2 backport to `architecture.md` (see that file's §7.2).
+
+Accept: no decision → acceptability persisted, state held, `pending_refutation`
+set; authorising decision → today's behavior; later non-refuted verdict clears the
+flag; no other code path writes `Hypothesis.state` (grep + assert in PR body).
+Tests: unit hold/authorise/clear table (build `GateDecision`s through the real
+`authorise` — don't mock the gate); integration evaluate→persist with and without
+authorisation. Do not: modify `ensemble_gate.py`; build the symbolic/temporal
+producers (later G4.5 slices); change `classify_state`.
+
+### R4 — HNSW indexes on both pgvector tables + distance-operator standardization
+
+No ANN index exists on `document_embeddings`/`proposition_embeddings`. New
+migration (next free revision): `CREATE INDEX ... USING hnsw (embedding
+vector_cosine_ops) WITH (m = 16, ef_construction = 64)` on both; downgrade drops
+both; `op.execute` (no native alembic hnsw). Standardize on **cosine** (`<=>`)
+— vectors are L2-normalized so cosine ≡ inner product; cosine chosen for
+robustness if normalization drifts. Comment both ORM columns: "k-NN must use `<=>`
+to hit the index." Accept: upgrade on fresh + populated DB; `EXPLAIN ... ORDER BY
+embedding <=> $1 LIMIT 10` shows the hnsw index (`SET enable_seqscan = off` on
+tiny tables); downgrade clean. Test: integration, mirroring the migration-test
+style. Do not: change the 1024 dimension; add IVFFlat.
+
+### V9 — pgvector k-NN push-down + recall-vs-exact measurement *(needs R4)*
+
+`core/candidates.py::embedding_knn_candidates` is exact in-memory cosine — the
+documented recall ceiling and the seam for the `<=>` push-down. Build the other
+side of the seam:
+
+1. DB-backed alternative in the adapter (the SQL lives with the other DB reads):
+   per hypothesis `SELECT proposition_id FROM proposition_embeddings WHERE model =
+   :model ORDER BY embedding <=> :vec LIMIT :k`, then map proposition → reasoning
+   node via the same `EVIDENCED_BY` read. Same contract, same
+   `CandidateSource.EMBEDDING_KNN`, no similarity floor, same deterministic
+   tie-break; the `WHERE model =` clause is the G1.16 vector-space guard — never
+   drop it.
+2. Setting `CANDIDATES_KNN_PUSHDOWN: bool = False` (`config.py` + `.env.example`).
+   **Default stays in-memory exact** — flipping it is a G4.6 decision.
+3. The measurement: integration test with ≥200 synthetic normalized vectors —
+   push-down ⊆ exact ranking at equal k, and EXPLAIN contains `hnsw`. The recall@k
+   number on the real gate corpus is a one-line addition to the G4.6 run.
+4. Comment on the query: "`<=>` must match the R4 opclass (`vector_cosine_ops`) or
+   the index is unused."
+
+Do not: flip the default; remove the in-memory path (it is the oracle); touch
+`funnel` or the structural stage.

@@ -8,6 +8,33 @@ answers.
 **Architecture refs:** §11 (investigation loop), §6 (orchestrator/streaming, igraph
 analysis), §9 (working set assembly), principle 8.
 
+## Entry criteria *(added by the 2026-06-11 review, M3/M4 — design decisions, not code; each is a short decision doc in `docs/`, written in the style of the existing design docs: decisive, one recommendation, alternatives dismissed with reasons)*
+
+- [ ] **`docs/design_api.md` — the API contract.** Enumerate every endpoint Phases
+      6–7 need before implementing any: documents/ingest + job status (exists as
+      stubs), search/retrieval, investigations (create/activate boxes/Task CRUD +
+      decomposition edits), hypotheses (seed/list/state), overrides
+      (create/release/reconcile), audit (per-node provenance drill-down, action
+      log), review queue (next-N by VoI), graph export. For each: route, verb,
+      request/response models (pydantic), and which phase lands it. The event-stream
+      transport for operator results (SSE vs WebSocket) is decided here.
+- [ ] **`docs/design_authnz.md` — identity before clearance.** §9.1's
+      clearance-filtered projection presupposes an authenticated identity carrying
+      clearance + compartment claims; nothing establishes one. Decide: OIDC via a
+      self-hosted IdP (Authentik/Keycloak — principle 7 compliant), clearance and
+      compartments as token claims, FastAPI dependency enforcing them; service
+      identities for workers. MVP scope may be "single-operator token auth", but the
+      *decision* and the seam must exist before any Phase 7 view ships.
+- [ ] **`docs/runbook_deployment.md` — running it for real.** Where the LLM,
+      embedding server (R10), MinerU, and the procrastinate worker (R11) run in
+      production (extend the Portainer/compose model in
+      `project_iknos_deploy`-style docs); the alembic upgrade procedure on deploy;
+      domain-pack activation per investigation; and a **restore drill**: actually
+      restore a `pg_backup` dump into a scratch instance and verify graph +
+      relational + vector data integrity — the backup service exists, restore has
+      never been exercised. Record the drill's steps and its last-run date in the
+      runbook.
+
 ## Orchestration (§6)
 
 - [ ] Enricher-orchestrator skeleton (flowsint-style): select node → run async operator
