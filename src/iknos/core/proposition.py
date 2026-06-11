@@ -140,10 +140,25 @@ class StaleExtractionError(Exception):
     The idempotency key is ``(span_id, content_hash)``, where the hash covers the extractor
     model, prompt/schema version, sampling regime, verifier signature and context (core/cache.py).
     An identical re-run is a true no-op; a span whose stored hash differs from the current one
-    means the model/prompt/regime/verifier changed since it was extracted. Re-extracting in place
-    would leave the old propositions orphaned alongside the new ones, so until cascade
-    re-extraction lands (G1.7b) this fails loud — mirrors
+    means the model/prompt/regime/verifier changed since it was extracted. With
+    ``cascade_reextract=True`` (the G1.7r default) such a span is **re-extracted** — its
+    superseded propositions purged first; this error is raised only when cascade is **disabled**
+    (the conservative refuse-to-overwrite mode) — mirrors
     ``core/ingest.py::DocumentResegmentationError``.
+    """
+
+
+class CascadeDependentsError(StaleExtractionError):
+    """A stale span's propositions already feed downstream nodes; cascade refuses (G1.7r).
+
+    Cascade re-extraction (``cascade_reextract=True``) purges a span's superseded **Phase-1**
+    perception output (the propositions + their ``EVIDENCED_BY`` edges + dense/lexical index
+    rows). A proposition that some later node already derives from has an edge **beyond** its lone
+    ``EVIDENCED_BY`` → ``Span``; ``DETACH DELETE``-ing it would silently orphan that consumer. The
+    full downstream cascade (purge-and-re-derive the dependents too) is the deferred
+    resegmentation-cascade work (``core/ingest.py``), so until it lands this **fails loud** rather
+    than corrupt the graph. A subclass of :class:`StaleExtractionError` so existing
+    whole-document fail-loud handlers still treat it as fatal.
     """
 
 
@@ -275,6 +290,7 @@ class Propositionizer:
         n_samples: int = 1,
         agreement_threshold: float = DEFAULT_AGREEMENT_THRESHOLD,
         reuse_extractions: bool = True,
+        cascade_reextract: bool = True,
     ) -> None:
         self.llm = llm
         self.substrate = substrate
@@ -288,6 +304,15 @@ class Propositionizer:
         # re-extracting without a code change. Each replayed span still records its own extract
         # Action, so the per-span idempotency key is preserved.
         self.reuse_extractions = reuse_extractions
+        # Cascade re-extraction (G1.7r): when a span's stored pipeline hash differs (a model/
+        # prompt/regime/verifier change), purge its superseded propositions + their edges/index
+        # rows and re-extract, instead of the G1.7 fail-loud StaleExtractionError. On by default
+        # — a pipeline change *should* re-derive — but a flag so a deploy can restore the
+        # conservative refuse-to-overwrite behaviour. The purge is bounded to Phase-1 perception
+        # output: a span whose propositions already feed downstream (Phase-2) nodes raises
+        # CascadeDependentsError rather than silently orphaning them (the full downstream cascade
+        # is the deferred resegmentation-cascade work).
+        self.cascade_reextract = cascade_reextract
         # Optional independent verifier (G1.4). Absent → faithfulness/provisional stay null
         # (the documented G1.1 state); production wires it from settings when configured.
         self.verifier = verifier
@@ -489,6 +514,73 @@ class Propositionizer:
         )
         return row.scalar_one_or_none()
 
+    async def _has_proposition_dependents(self, session: AsyncSession, span_id: uuid.UUID) -> bool:
+        """Whether any of a span's propositions has a graph edge **beyond** its ``EVIDENCED_BY`` →
+        ``Span`` — i.e. a downstream (Phase-2+) node already derives from it (G1.7r).
+
+        A clean Phase-1 ``Proposition`` has exactly one edge (its lone ``EVIDENCED_BY`` to the
+        source span), so undirected **degree > 1** means an extra edge = a downstream consumer.
+        Counting degree (not matching a specific edge type/direction) is robust to whatever
+        relationship a later phase introduces. Used to refuse a cascade purge that would orphan
+        such a consumer (:class:`CascadeDependentsError`) — the deferred full-cascade boundary.
+        """
+        from iknos.db.age import cypher_map, execute_cypher
+
+        rows = await execute_cypher(
+            session,
+            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(s:Span {cypher_map({'id': str(span_id)})}) "
+            "OPTIONAL MATCH (p)-[r]-() "
+            "WITH p, count(r) AS degree "
+            "WHERE degree > 1 "
+            "RETURN count(p)",
+            returns="dependents agtype",
+        )
+        return bool(rows) and int(str(rows[0][0])) > 0
+
+    async def _purge_span_propositions(
+        self, session: AsyncSession, span_id: uuid.UUID
+    ) -> list[str]:
+        """Delete a span's existing propositions + their edges and index rows (cascade, G1.7r).
+
+        No commit: runs in the **same transaction** as the re-persist that follows, so the
+        purge and the re-write are atomic (a failure rolls back both, never half-purges a span).
+
+        Removes the superseded **Phase-1** output across all three stores a proposition lands in
+        (:meth:`_write_propositions`): the ``proposition_embeddings`` + lexical-index Postgres
+        rows (by proposition id) and the ``Proposition`` vertices + their
+        ``EVIDENCED_BY`` edges (AGE ``DETACH DELETE``). Caller guarantees the propositions have no
+        downstream dependents (:meth:`_has_proposition_dependents`), so ``DETACH DELETE`` removes
+        only the lone ``EVIDENCED_BY`` edge. Returns the purged proposition ids (for the
+        re-extraction ``Action``'s audit trail — what was superseded).
+        """
+        from iknos.db.age import cypher_map, execute_cypher, unquote_agtype
+
+        span_match = f"(s:Span {cypher_map({'id': str(span_id)})})"
+        rows = await execute_cypher(
+            session,
+            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->{span_match} RETURN p.id",
+            returns="pid agtype",
+        )
+        purged = [unquote_agtype(r[0]) for r in rows]
+        if not purged:
+            return []
+        prop_uuids = [uuid.UUID(pid) for pid in purged]
+        # Postgres index rows first (no FK to the AGE graph, so order is for clarity not safety).
+        await session.execute(
+            text("DELETE FROM proposition_embeddings WHERE proposition_id = ANY(:ids)"),
+            {"ids": prop_uuids},
+        )
+        await session.execute(
+            text("DELETE FROM proposition_lexical_index WHERE proposition_id = ANY(:ids)"),
+            {"ids": prop_uuids},
+        )
+        # The AGE vertices + their EVIDENCED_BY edges (DETACH DELETE drops the edge with the node).
+        await execute_cypher(
+            session,
+            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->{span_match} DETACH DELETE p",
+        )
+        return purged
+
     async def _guard_embedding_model(self, session: AsyncSession, document_id: uuid.UUID) -> None:
         """Refuse proposition vectors in a different embedding space than existing rows (G1.16).
 
@@ -629,6 +721,7 @@ class Propositionizer:
         content_hash: str,
         results: list[PropositionResult],
         reusable: ReusableExtraction,
+        purge_existing: bool = False,
     ) -> uuid.UUID:
         """Persist a *replayed* span's propositions + edges + indexes + extract Action (G1.7b).
 
@@ -638,8 +731,12 @@ class Propositionizer:
         ``faithfulness``/``provisional`` were already verified on the source proposition (the
         verifier signature is in ``content_hash``), and the pointer keeps that original verify
         ``Action`` one hop away. ``content_hash`` is still stored, so the *next* run sees this span
-        as already-extracted (a true no-op), exactly like a fresh extraction. Returns the Action id.
+        as already-extracted (a true no-op), exactly like a fresh extraction. When
+        ``purge_existing`` is set, the span's superseded propositions are purged in this txn first
+        (cascade re-extraction whose replacement happens to be a reuse-replay, G1.7r). Returns the
+        Action id.
         """
+        superseded = await self._purge_span_propositions(session, span_id) if purge_existing else []
         prop_ids, edge_ids = await self._write_propositions(session, document_id, results)
 
         # Same sampling regime the cached extraction ran under (it is part of content_hash, so it
@@ -648,6 +745,9 @@ class Propositionizer:
         if self.n_samples > 1:
             extract_sampling["n_samples"] = self.n_samples
 
+        replay_outputs: dict[str, object] = {"propositions": prop_ids, "edges": edge_ids}
+        if superseded:
+            replay_outputs["superseded"] = superseded  # G1.7r cascade audit (as in _persist)
         action_id = await record_action(
             session,
             actor="propositionizer",
@@ -666,7 +766,7 @@ class Propositionizer:
                     "action": str(reusable.source_action_id),
                 },
             },
-            outputs={"propositions": prop_ids, "edges": edge_ids},
+            outputs=replay_outputs,
             model=self.llm.model,
             sampling=extract_sampling,
         )
@@ -683,19 +783,27 @@ class Propositionizer:
         results: list[PropositionResult],
         verdicts: "list[_VerifyOut | None] | None" = None,
         twins: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
+        purge_existing: bool = False,
     ) -> uuid.UUID:
         """Persist one span's propositions + edges + indexes + Action in a single transaction.
 
-        When verify verdicts are supplied (G1.4), a second Action (actor ``verifier``) records
-        them in the *same* transaction — so a committed proposition's faithfulness always has
-        an auditable verdict behind it. Returns the extract Action id.
+        When ``purge_existing`` is set (a cascade re-extraction, G1.7r), the span's superseded
+        propositions are deleted **in this same transaction** before the new ones are written, so
+        the swap is atomic. When verify verdicts are supplied (G1.4), a second Action (actor
+        ``verifier``) records them in the *same* transaction — so a committed proposition's
+        faithfulness always has an auditable verdict behind it. Returns the extract Action id.
         """
+        superseded = await self._purge_span_propositions(session, span_id) if purge_existing else []
         prop_ids, edge_ids = await self._write_propositions(session, document_id, results)
 
         # Multi-sample audit (G1.3): record N in the sampling regime and the per-proposition
         # agreement, so the consistency signal is replayable and feeds Trial A5 straight from
         # actions.outputs. Single-pass (N=1) keeps the Action byte-identical to pre-G1.3.
         extract_outputs: dict[str, object] = {"propositions": prop_ids, "edges": edge_ids}
+        # Cascade audit (G1.7r): the ids of the superseded propositions this re-extraction purged,
+        # so "what replaced what" is reconstructable from the append-only Action log alone.
+        if superseded:
+            extract_outputs["superseded"] = superseded
         extract_sampling: dict[str, object] = dict(self.sampling)
         if self.n_samples > 1:
             extract_sampling["n_samples"] = self.n_samples
@@ -837,6 +945,7 @@ class Propositionizer:
         pending: list[int] = []
         to_replay: list[tuple[int, ReusableExtraction]] = []
         hash_by_index: dict[int, str] = {}
+        stale: set[int] = set()  # indices whose superseded propositions must be purged (G1.7r)
         for i, s in enumerate(spans):
             chash = self._pipeline_hash(spans, i, raw_text, verifier_sig)
             hash_by_index[i] = chash
@@ -844,12 +953,25 @@ class Propositionizer:
             if stored == chash:
                 continue  # already extracted with this exact pipeline: a true no-op.
             if stored is not None:
-                raise StaleExtractionError(
-                    f"span {s.id} was extracted under a different pipeline "
-                    f"(stored {stored[:12]}…, now {chash[:12]}…); cascade re-extraction is not "
-                    f"yet supported."
-                )
-            # Never extracted (stored is None). G1.7b: if an identical-pipeline extraction exists
+                # A different pipeline than last time. G1.7r: cascade re-extract — purge the
+                # superseded propositions and re-derive — unless cascade is disabled (fail loud) or
+                # the span's propositions already feed downstream nodes (refuse — the deferred full
+                # cascade). Once cleared, a stale span is handled exactly like a never-extracted one
+                # (reuse-or-infer below); only the purge-before-persist differs.
+                if not self.cascade_reextract:
+                    raise StaleExtractionError(
+                        f"span {s.id} was extracted under a different pipeline "
+                        f"(stored {stored[:12]}…, now {chash[:12]}…) and cascade re-extraction is "
+                        f"disabled."
+                    )
+                if await self._has_proposition_dependents(session, s.id):
+                    raise CascadeDependentsError(
+                        f"span {s.id}'s propositions feed downstream nodes; cascade re-extraction "
+                        f"would orphan them (the full downstream cascade is deferred)."
+                    )
+                stale.add(i)
+            # Never extracted (or a cleared-to-cascade stale span). G1.7b: if an identical-pipeline
+            # extraction exists
             # anywhere (same content_hash — same target text, context, model, prompt/schema, regime,
             # verifier), replay its propositions into this span instead of paying the LLM again.
             # Each replayed span still records its own extract Action, so the per-span idempotency
@@ -956,6 +1078,7 @@ class Propositionizer:
                         results,
                         verdicts,
                         twins_by_index.get(i),
+                        purge_existing=i in stale,  # G1.7r cascade: purge superseded props first
                     )
                 )
             except Exception as exc:  # noqa: BLE001 — isolate; roll back this span and continue
@@ -981,6 +1104,7 @@ class Propositionizer:
                         hash_by_index[i],
                         results,
                         reusable,
+                        purge_existing=i in stale,  # G1.7r cascade: purge superseded props first
                     )
                 )
             except Exception as exc:  # noqa: BLE001 — isolate; roll back this span and continue

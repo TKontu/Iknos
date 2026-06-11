@@ -245,7 +245,12 @@ decision. See `archive/gap_phase_1_ingest.md` for the gap-plan IDs.
       committed extraction anywhere replays its propositions (re-embedded, new nodes, copied
       faithfulness, `reused_from` audit pointer) instead of re-running the LLM (`core/reuse.py`,
       migration 0012); on by default, gated behind the `stored is None` branch so a no-op re-run
-      pays nothing extra. Still open: cascade re-extraction on a stale span — purge + recreate.)*
+      pays nothing extra. **G1.7r — shipped:** cascade re-extraction on a stale span — a span
+      re-run under a changed pipeline now purges its superseded propositions (+ `EVIDENCED_BY`
+      edges + dense/lexical index rows) and re-extracts in one transaction, instead of the
+      fail-loud `StaleExtractionError`; refuses (`CascadeDependentsError`) if the propositions
+      already feed downstream nodes (the deferred full cascade), and `cascade_reextract=False`
+      restores the conservative fail-loud mode.)*
 - [x] **Hash the real prompt + schema into the cache key (G1.15):** `prompt_sha`/`schema_sha`
       (extractor *and* verifier) now feed `extraction_content_hash`, so a prompt edit
       re-extracts even without a hand-bumped `EXTRACT_SCHEMA_VERSION`; the version stays a
@@ -398,9 +403,15 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
 - [ ] **G1.5 remainder — Trial A5 faithfulness-gate metric**: the decomposed verify
       verdicts are persisted in `actions.outputs` ready for the metric; computing it
       on the labeled gate corpus is harness work (V3 in `todo_trials.md`).
-- [ ] **G1.7 remainder — cascade re-extraction**: on a stale span
-      (`StaleExtractionError`), purge its old propositions/edges/index rows and
-      recreate (pairs with the resegmentation-cascade deferral in `ingest.py`).
+- [x] **G1.7 remainder — cascade re-extraction** *(G1.7r — shipped)*: a stale span (changed
+      pipeline) now purges its superseded propositions + `EVIDENCED_BY` edges + dense/lexical
+      index rows and re-extracts **in one transaction** (`Propositionizer._purge_span_propositions`
+      / `_persist(purge_existing=…)`), recording a `superseded` audit pointer — instead of the
+      fail-loud `StaleExtractionError`. **On by default** (`cascade_reextract=True`); `False`
+      restores fail-loud. **Bounded to Phase-1 output:** a span whose propositions already feed
+      downstream (Phase-2+) nodes raises `CascadeDependentsError` rather than orphaning them — the
+      full downstream cascade stays the deferred resegmentation-cascade work (`ingest.py`).
+      Verified on live AGE (`tests/integration/test_extraction_cache.py`).
 - [ ] **G1.10 Part B — RAPTOR summary levels** *(deferred; trigger in `todo.md`)*:
       coarse levels as summaries (RAPTOR-style upward tree), not just longer windows —
       needed so §5.1 coarse-to-fine pruning has crisp parents. Adds ingest-time LLM
