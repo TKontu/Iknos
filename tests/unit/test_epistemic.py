@@ -150,6 +150,26 @@ def test_combine_rejects_out_of_range(bad: float) -> None:
         combine_faithfulness(bad, 1.0)
     with pytest.raises(ValueError, match=r"\[0, 1\]"):
         combine_faithfulness(1.0, bad)
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        combine_faithfulness(1.0, 1.0, bad)
+
+
+def test_combine_parse_quality_defaults_to_identity() -> None:
+    # The third factor defaults to 1.0, so every existing two-arg call is unchanged (G1.0r).
+    assert combine_faithfulness(0.8, 1.0) == pytest.approx(combine_faithfulness(0.8, 1.0, 1.0))
+
+
+def test_combine_parse_quality_is_a_third_multiplicative_factor() -> None:
+    # A scanned source discounts a fully-verified, stable proposition (G1.0/§3.1).
+    assert combine_faithfulness(1.0, 1.0, 0.6) == pytest.approx(0.6)
+    assert combine_faithfulness(1.0, 0.5, 0.6) == pytest.approx(0.3)
+
+
+def test_combine_bad_parse_quality_cannot_be_rescued() -> None:
+    # A verified-but-badly-parsed atom is pulled below the provisional threshold despite the
+    # verifier passing it — parse quality is an independent defect (cf. agreement instability).
+    score = combine_faithfulness(1.0, 1.0, 0.4)
+    assert is_provisional(score) is True
 
 
 # --- enum value strings are exactly the spec strings (guards silent drift) ---

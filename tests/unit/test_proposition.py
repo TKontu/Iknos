@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import iknos.core.proposition as proposition_mod
+from iknos.core.parse import SourceQuality
 from iknos.core.proposition import (
     EXTRACTION_SCHEMA,
     Propositionizer,
@@ -313,6 +314,29 @@ async def test_verify_all_folds_in_agreement() -> None:
     results = verified[0][1]
     assert results[0].faithfulness == pytest.approx(1 / 3)
     assert results[0].provisional is True
+
+
+@pytest.mark.asyncio
+async def test_verify_all_folds_in_parse_quality() -> None:
+    # A proposition read off a handwritten-OCR span is discounted at the source (G1.0/§3.1):
+    # the verifier passes it (component 1.0, full agreement) but the parse-quality factor
+    # (HANDWRITTEN → 0.60) pulls faithfulness down. The factor lives on the source Span's layout.
+    doc = uuid.uuid4()
+    raw = "The logbook entry records a bearing failure."
+    scanned = Span(
+        id=uuid.uuid4(),
+        document_id=doc,
+        start=0,
+        end=len(raw),
+        layout={"regions": [{"source_quality": SourceQuality.HANDWRITTEN.value}]},
+    )
+    p = _propositionizer_with_verifier(_verdict())
+    r = _result("A bearing failure is recorded.", scanned.id, doc)
+
+    verified = await p._verify_all(asyncio.Semaphore(2), [scanned], raw, [(0, [r])])
+
+    results = verified[0][1]
+    assert results[0].faithfulness == pytest.approx(0.60)  # 1.0 verify × 1.0 agreement × 0.60
 
 
 @pytest.mark.asyncio

@@ -34,6 +34,7 @@ from iknos.core.consistency import (
 )
 from iknos.core.embeddings import EmbeddingModelMismatchError, EmbeddingSubstrate
 from iknos.core.llm import LLMClient
+from iknos.core.parse import parse_quality_factor, worst_source_quality
 from iknos.core.prompts import vocab
 from iknos.core.reuse import ReusableExtraction, find_reusable_extraction
 from iknos.db.orm import PropositionEmbedding
@@ -432,7 +433,7 @@ class Propositionizer:
         assert verifier is not None  # only called when a verifier is configured
 
         async def verify_one(
-            source: str, r: PropositionResult
+            source: str, r: PropositionResult, parse_quality: float
         ) -> tuple[PropositionResult, "_VerifyOut | None"]:
             try:
                 async with sem:
@@ -451,10 +452,11 @@ class Propositionizer:
             verify_component = faithfulness_from_verdict(
                 verdict.entailment, verdict.polarity_preserved, verdict.modality_preserved
             )
-            # Fold in the multi-sample agreement signal (G1.3). None ⇒ single-pass (N=1) ⇒
-            # factor 1.0 ⇒ faithfulness == the verify component (unchanged from G1.4/G1.5).
+            # Fold in the multi-sample agreement signal (G1.3) and the source parse-quality
+            # penalty (G1.0). Both default to the 1.0 identity (single-pass N=1; digital/unknown
+            # parse), so the common clean-text path is unchanged from G1.4/G1.5.
             agreement = r.agreement if r.agreement is not None else 1.0
-            faith = combine_faithfulness(verify_component, agreement)
+            faith = combine_faithfulness(verify_component, agreement, parse_quality)
             # OR-fold: a polarity-unstable proposition (G1.14) stays provisional even if the
             # verifier finds it faithful — the instability is an independent quarantine reason.
             provisional = is_provisional(faith) or bool(r.provisional)
@@ -466,7 +468,10 @@ class Propositionizer:
             i: int, results: list[PropositionResult]
         ) -> tuple[int, list[PropositionResult], list["_VerifyOut | None"]]:
             source = span_text(raw_text, spans[i])
-            pairs = await asyncio.gather(*(verify_one(source, r) for r in results))
+            # The source span's parse-quality penalty (G1.0) — per span, shared by its
+            # propositions; the worst region the span draws on governs (worst_source_quality).
+            parse_quality = parse_quality_factor(worst_source_quality(spans[i].layout))
+            pairs = await asyncio.gather(*(verify_one(source, r, parse_quality) for r in results))
             return i, [scored for scored, _ in pairs], [verdict for _, verdict in pairs]
 
         return list(await asyncio.gather(*(verify_group(i, results) for i, results in inferred)))

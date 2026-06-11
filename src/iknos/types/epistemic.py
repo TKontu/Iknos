@@ -189,24 +189,40 @@ def faithfulness_from_verdict(
     return score
 
 
-def combine_faithfulness(verify: float, agreement: float) -> float:
-    """Combine the verify component (:func:`faithfulness_from_verdict`) with the multi-sample
-    agreement signal (G1.3, :func:`~iknos.core.consistency.agreement_of`) into the final
-    faithfulness ∈ [0, 1] (§3.1: "confidence comes from consistency *and* verification").
+def combine_faithfulness(verify: float, agreement: float, parse_quality: float = 1.0) -> float:
+    """Combine the **three** independent faithfulness signals into the final score ∈ [0, 1]
+    (§3.1: "confidence comes from consistency *and* verification"; §1: "parse quality =
+    faithfulness input").
+
+    The three signals are independent *defects*, each a factor in [0, 1]:
+
+    - ``verify`` — the verify component (:func:`faithfulness_from_verdict`): does the span
+      support the proposition with its operators?
+    - ``agreement`` — the multi-sample agreement signal (G1.3,
+      :func:`~iknos.core.consistency.agreement_of`): did the extractor reliably re-produce it?
+    - ``parse_quality`` — the parse-provenance penalty (G1.0,
+      :func:`~iknos.core.parse.parse_quality_factor`): a proposition read off a scanned/
+      handwritten region is less trustworthy *at the source*, before any verification (§1, §3.1
+      "mark scanned/handwritten/complex-table parses lower-faithfulness → provisional → triage").
 
     **Multiplicative**, mirroring the operator penalties in :func:`faithfulness_from_verdict`:
-    the two signals are independent faithfulness defects, so a verified-but-*unstable*
-    proposition (e.g. emitted in only 1 of 3 samples → agreement ≈ 0.33) is pulled below the
-    provisional threshold even though the verifier passed it — instability is a real defect, not
-    forgiven by content support. Degenerate: agreement 1.0 (single-sample / N=1 mode) → identity,
-    so this reduces exactly to the verify component. Both inputs are defined on [0, 1]; an
+    a defect on any axis pulls the score down and **cannot be rescued** by the others — a
+    verified-but-*unstable* proposition (agreement ≈ 0.33) or a verified-but-*badly-parsed* one
+    (a handwritten source) is pulled below the provisional threshold even though the verifier
+    passed it. Degenerate identities: ``agreement = 1.0`` (single-sample / N=1) and
+    ``parse_quality = 1.0`` (digital / unknown parse) are both no-ops, so this reduces exactly to
+    the verify component for the common clean-text path. All inputs are defined on [0, 1]; an
     out-of-range value is a caller bug, surfaced rather than silently clamped.
 
     **Calibration seam:** the raw product is the pre-calibration default. Trial A3 fits a
-    per-model consistency-vs-correctness map that swaps in here without a contract change.
+    per-model consistency-vs-correctness map (and the parse-quality factor's per-quality penalty
+    is its own calibration target, :func:`~iknos.core.parse.parse_quality_factor`) that swaps in
+    here without a contract change.
     """
     if not 0.0 <= verify <= 1.0:
         raise ValueError(f"verify must be in [0, 1], got {verify!r}")
     if not 0.0 <= agreement <= 1.0:
         raise ValueError(f"agreement must be in [0, 1], got {agreement!r}")
-    return verify * agreement
+    if not 0.0 <= parse_quality <= 1.0:
+        raise ValueError(f"parse_quality must be in [0, 1], got {parse_quality!r}")
+    return verify * agreement * parse_quality

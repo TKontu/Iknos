@@ -24,6 +24,8 @@ from iknos.core.parse import (
     TableCell,
     layouts_for_spans,
     parse_content_hash,
+    parse_quality_factor,
+    worst_source_quality,
 )
 
 
@@ -609,3 +611,72 @@ def test_layout_table_without_geometry_still_persisted() -> None:
     [region] = layout["regions"]
     assert region["page"] is None and region["bbox"] is None  # no geometry...
     assert region["table"]["n_rows"] == 2  # ...but the structure survives
+
+
+# --- parse quality → faithfulness (G1.0r): parse_quality_factor + worst_source_quality ---
+
+
+def test_parse_quality_factor_mapping() -> None:
+    """Each quality maps to its penalty; None (unknown parse) is the identity (no penalty)."""
+    assert parse_quality_factor(None) == 1.0
+    assert parse_quality_factor(SourceQuality.DIGITAL) == 1.0
+    assert parse_quality_factor(SourceQuality.OCR) == pytest.approx(0.85)
+    assert parse_quality_factor(SourceQuality.HANDWRITTEN) == pytest.approx(0.60)
+    # Ordered by severity — every penalty is in (0, 1] and worse quality penalises more.
+    assert (
+        parse_quality_factor(SourceQuality.HANDWRITTEN)
+        < parse_quality_factor(SourceQuality.OCR)
+        < parse_quality_factor(SourceQuality.DIGITAL)
+    )
+
+
+def test_worst_source_quality_none_layout() -> None:
+    """A text-only / null-parser span (no layout) is unknown quality → None (unpenalised)."""
+    assert worst_source_quality(None) is None
+    assert worst_source_quality({}) is None
+
+
+def test_worst_source_quality_single_region() -> None:
+    """A span over one region reports that region's quality (read via the real writer)."""
+    for q in (SourceQuality.DIGITAL, SourceQuality.OCR, SourceQuality.HANDWRITTEN):
+        r = ParseResult(
+            elements=(_located("hello world", page=1, bbox=(0, 0, 1, 1), source_quality=q),),
+            parser_name="x",
+            parser_version="1",
+        )
+        [layout] = layouts_for_spans([(0, 11)], r)
+        assert worst_source_quality(layout) is q
+
+
+def test_worst_source_quality_picks_worst_across_regions() -> None:
+    """A span straddling a clean and a scanned region takes the *worst* — the conservative read."""
+    r = ParseResult(
+        elements=(
+            _located("hello", page=1, bbox=(0, 0, 1, 1), source_quality=SourceQuality.DIGITAL),
+            _located("world", page=1, bbox=(0, 0, 1, 1), source_quality=SourceQuality.HANDWRITTEN),
+        ),
+        parser_name="x",
+        parser_version="1",
+    )
+    [layout] = layouts_for_spans([(0, 12)], r)  # spans both elements (join is 2 chars)
+    assert worst_source_quality(layout) is SourceQuality.HANDWRITTEN
+
+
+def test_worst_source_quality_region_without_quality_is_none() -> None:
+    """A geometry-only region with no asserted source_quality → unknown (None)."""
+    r = ParseResult(
+        elements=(_located("hello world", page=1, bbox=(0, 0, 1, 1)),),  # no source_quality
+        parser_name="x",
+        parser_version="1",
+    )
+    [layout] = layouts_for_spans([(0, 11)], r)
+    assert worst_source_quality(layout) is None
+
+
+def test_worst_source_quality_tolerates_unknown_quality_string() -> None:
+    """A region under a newer quality vocabulary is skipped, never raises (version-tolerant)."""
+    layout = {
+        "layout_schema_version": LAYOUT_SCHEMA_VERSION,
+        "regions": [{"source_quality": "scanned-v2"}],
+    }
+    assert worst_source_quality(layout) is None
