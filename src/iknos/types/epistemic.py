@@ -15,10 +15,12 @@ Two things deliberately live here and **not** as model-emitted fields:
   faithfulness signal."* It is the calibrated output of multi-sample extraction
   (G1.3) + the extract-then-verify NLI pass (G1.4), so it is owned by those
   increments — null until then.
-- ``provisional`` is a **system** gate, not a model judgement: §10 sets it "when
-  faithfulness or a binding is below the stakes-dependent threshold". Both inputs
-  are absent in this increment, so :func:`is_provisional` is landed here (single
-  tunable threshold) but **not yet called** — G1.4/G1.5/G1.6 plug into it.
+- ``provisional_reasons`` is a **system** gate, not a model judgement: §10 sets it "when
+  faithfulness or a binding is below the stakes-dependent threshold". The faithfulness
+  reason is computed by :func:`provisional_reasons_for` (single tunable threshold); the
+  binder (Phase 2) and budget walker (Phase 5) OR-fold their own
+  :class:`ProvisionalReason` members. R8 replaced the one boolean with this reason set so
+  triage (§11.1) can route by cause and the quarantine gate keys on non-emptiness.
 
 All enums are ``StrEnum`` so they serialize to plain strings for the AGE layer
 (``db/age.py:cypher_map``), exactly like ``Tier`` / ``SensitivityLevel``. (For
@@ -119,29 +121,57 @@ def route_for(epistemic_class: EpistemicClass) -> Routing:
     return _ROUTING[epistemic_class]
 
 
-# Placeholder, stakes-dependent calibration is G1.6. Single source of truth for the
-# provisional gate — the *only* place the threshold is encoded.
+class ProvisionalReason(StrEnum):
+    """Why a proposition is quarantined from high-stakes moves (§3.1, §11.1) — R8.
+
+    One ``provisional`` boolean used to carry three meanings at once; triage (§11.1) needs
+    the *reason* and the quarantine gate (:mod:`iknos.core.quarantine`) needs only
+    non-emptiness. Each member names the layer that raises it, so the expert-triage queue
+    can route by cause and a reader can tell *why* an atom may not drive a ``REFUTES``:
+
+    - ``LOW_FAITHFULNESS`` (Phase 1) — multi-sample/verify put the proposition below the
+      faithfulness threshold, *or* the extractor wavered on its polarity (a G1.14 twin —
+      a consistency defect on the same faithfulness axis, §3.1).
+    - ``UNRESOLVED_REFERENCE`` (Phase 2) — a mention the proposition rests on is unresolved
+      or only candidate-bound; the §3.1 binder leaves the binding open (`core/reference.py`).
+    - ``UNINFERRED_BUDGET`` (Phase 5) — a conclusion derived under a budget cap rather than
+      to fixpoint (the "good-enough on a budget" provisional, §6). Not yet raised.
+
+    The set is open in the same sense as ``Routing`` — adding a member is additive (a
+    stored string, no migration).
+    """
+
+    LOW_FAITHFULNESS = "low_faithfulness"
+    UNRESOLVED_REFERENCE = "unresolved_reference"
+    UNINFERRED_BUDGET = "uninferred_budget"
+
+
+# Placeholder, stakes-dependent calibration is G1.6/G4.6. Single source of truth for the
+# faithfulness provisional gate — the *only* place the threshold is encoded.
 _FAITHFULNESS_PROVISIONAL_THRESHOLD: float = 0.5
 
 
-def is_provisional(
-    faithfulness: float, *, threshold: float = _FAITHFULNESS_PROVISIONAL_THRESHOLD
-) -> bool:
-    """Whether a proposition is provisional given its faithfulness (§3.1, §10).
+def provisional_reasons_for(
+    faithfulness: float | None, *, threshold: float = _FAITHFULNESS_PROVISIONAL_THRESHOLD
+) -> set[ProvisionalReason]:
+    """The faithfulness-derived provisional reasons (§3.1, §10) — the Phase-1 gate (R8).
 
-    A proposition below the threshold is quarantined from high-stakes moves (a
-    ``REFUTES`` that overturns a hypothesis) until confirmed. Boundary is half-open
-    (``< threshold`` → provisional), mirroring :func:`intentional.band`. Raises for an
-    out-of-range value — faithfulness is defined only on ``[0, 1]``, so an out-of-range
-    value is a caller bug, surfaced rather than silently clamped.
+    Returns ``{LOW_FAITHFULNESS}`` when faithfulness is below the threshold, else the empty
+    set. ``None`` (no verifier configured / single-pass degraded mode, G1.1) → empty: there
+    is nothing to gate on, *not* a positive provisional signal. Boundary is half-open
+    (``< threshold``), mirroring :func:`intentional.band`. Raises for an out-of-range value —
+    faithfulness is defined only on ``[0, 1]``, so an out-of-range value is a caller bug,
+    surfaced rather than silently clamped.
 
-    **Not called in this increment (G1.1):** faithfulness (G1.4/G1.5) and binding
-    confidence (G1.7) do not exist yet, so there is nothing to gate on — the threshold
-    is landed here for those increments to call; until then ``provisional`` is null.
+    This is the **Phase-1 reason only**; the binder (Phase 2) OR-folds ``UNRESOLVED_REFERENCE``
+    and the budget walker (Phase 5) ``UNINFERRED_BUDGET`` onto the persisted reason set —
+    each layer adds its cause, none clears another's (the §3.1 OR-fold discipline).
     """
+    if faithfulness is None:
+        return set()
     if not 0.0 <= faithfulness <= 1.0:
         raise ValueError(f"faithfulness must be in [0, 1], got {faithfulness!r}")
-    return faithfulness < threshold
+    return {ProvisionalReason.LOW_FAITHFULNESS} if faithfulness < threshold else set()
 
 
 # Single source of truth for the verify-derived faithfulness score (§3.1, G1.4/G1.5).

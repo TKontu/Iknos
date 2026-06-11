@@ -79,6 +79,7 @@ from iknos.core.prompts import vocab
 from iknos.core.resolve import normalize_label
 from iknos.provenance.action_log import record_action
 from iknos.types.edges import BindingState
+from iknos.types.epistemic import ProvisionalReason
 
 if TYPE_CHECKING:
     # Type-only import: ``core/anchor`` imports ``Referent``/``group_referents`` from this
@@ -90,6 +91,44 @@ if TYPE_CHECKING:
 # Note: iknos.db.age (and iknos.core.anchor) is imported lazily inside the ReferenceBinder DB
 # methods (see module docstring), so importing this module stays DB-free for the unit tests of
 # the cascade.
+
+
+async def _add_provisional_reason(
+    session: object, proposition_id: uuid.UUID, reason: ProvisionalReason
+) -> None:
+    """Union ``reason`` onto a persisted Proposition's ``provisional_reasons`` (§3.1, R8).
+
+    Read-modify-write: read the current reasons (a JSON-string list — pre-R8/absent reads as
+    empty), add ``reason``, and write the JSON list back plus the legacy ``provisional = true``
+    transition boolean (the set is now non-empty). The OR-fold discipline — a binder never clears
+    a Phase-1 reason, only adds its own — so this unions rather than overwrites.
+    """
+    import json
+
+    from iknos.db.age import execute_cypher, parse_agtype_map
+
+    rows = await execute_cypher(
+        session,  # type: ignore[arg-type]
+        f"MATCH (p:Proposition {{id: '{proposition_id}'}}) RETURN properties(p)",
+        returns="props agtype",
+    )
+    existing: list[str] = []
+    if rows:
+        raw = parse_agtype_map(rows[0][0]).get("provisional_reasons")
+        if isinstance(raw, str):
+            existing = [str(x) for x in json.loads(raw)]
+        elif isinstance(raw, list):
+            existing = [str(x) for x in raw]
+    merged = sorted(set(existing) | {reason.value})
+    # The reason vocabulary is a controlled enum (no quotes/backslashes), so the JSON list embeds
+    # in a single-quoted Cypher literal directly; escape defensively all the same.
+    literal = json.dumps(merged).replace("\\", "\\\\").replace("'", "\\'")
+    await execute_cypher(
+        session,  # type: ignore[arg-type]
+        f"MATCH (p:Proposition {{id: '{proposition_id}'}}) "
+        f"SET p.provisional_reasons = '{literal}', p.provisional = true",
+    )
+
 
 # Bump on any change to the binding pipeline (the cascade weights/bars, the blocking or
 # scoring logic, the detection prompt/schema). Stored on each bind Action so a REFERS_TO
@@ -726,7 +765,7 @@ class ReferenceBinder:
         the proposition-layer discipline) when any of its mentions is unresolved or only
         candidate-bound.
         """
-        from iknos.db.age import execute_cypher, merge_edge, merge_vertex
+        from iknos.db.age import merge_edge, merge_vertex
 
         now = datetime.now(UTC)
         bound: list[BoundMention] = []
@@ -771,11 +810,11 @@ class ReferenceBinder:
                 any_open = True
 
         if any_open:
-            # OR-fold the system gate (§3.1): a proposition resting on an unresolved or merely
-            # candidate-bound mention is provisional. Never cleared here (the G1.6 discipline).
-            await execute_cypher(
-                session,
-                f"MATCH (p:Proposition {{id: '{item.proposition_id}'}}) SET p.provisional = true",
+            # OR-fold the system gate (§3.1, R8): a proposition resting on an unresolved or merely
+            # candidate-bound mention gains the UNRESOLVED_REFERENCE reason — unioned onto any
+            # existing reason (e.g. Phase-1 LOW_FAITHFULNESS), never cleared (the G1.6 discipline).
+            await _add_provisional_reason(
+                session, item.proposition_id, ProvisionalReason.UNRESOLVED_REFERENCE
             )
 
         action_id = await record_action(

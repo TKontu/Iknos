@@ -84,10 +84,15 @@ class Proposition(BaseModel):
 
     Structured epistemic fields (§3.1, G1.1) are kept distinct, never flattened into
     ``text`` (see `types/epistemic.py`). Like ``Tier``, they are AGE property strings,
-    so adding them needs no data migration. Two are **schema-contract placeholders**
-    here: ``faithfulness`` (calibrated — owned by the multi-sample/verify increments
-    G1.4/G1.5) and ``provisional`` (the system gate, G1.6) are ``None`` until those
-    land — never a self-reported value (§3.1: confidence is not verbalized self-report).
+    so adding them needs no data migration. ``faithfulness`` (calibrated — owned by the
+    multi-sample/verify increments G1.4/G1.5) is ``None`` until those land — never a
+    self-reported value (§3.1: confidence is not verbalized self-report).
+    ``provisional_reasons`` (R8) is the system quarantine gate (§3.1, §10): the set of
+    :class:`~iknos.types.epistemic.ProvisionalReason` causes (faithfulness below threshold,
+    unresolved reference, budget-capped inference) — empty when none apply. A list (not a
+    set) for stable serialization; set semantics on write (deduped). The legacy
+    ``provisional`` boolean is still **written** (``true`` iff the set is non-empty) for one
+    transition release — production code reads the reasons, never the boolean.
     ``routing`` is a cached derivation of ``epistemic_class`` (invariant
     ``routing == route_for(epistemic_class)``), never set independently.
     """
@@ -103,7 +108,7 @@ class Proposition(BaseModel):
     epistemic_class: EpistemicClass = EpistemicClass.OBSERVATION
     routing: Routing = Routing.FACT
     faithfulness: float | None = None
-    provisional: bool | None = None
+    provisional_reasons: list[str] = Field(default_factory=list)
 
 
 class Box(BaseModel):

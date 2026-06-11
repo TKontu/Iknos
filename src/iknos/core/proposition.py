@@ -19,7 +19,7 @@ concurrently; each span's writes commit in their own short transaction.
 import asyncio
 import logging
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
@@ -43,10 +43,11 @@ from iknos.types.epistemic import (
     EpistemicClass,
     Modality,
     Polarity,
+    ProvisionalReason,
     Routing,
     combine_faithfulness,
     faithfulness_from_verdict,
-    is_provisional,
+    provisional_reasons_for,
     route_for,
 )
 from iknos.types.nodes import Span
@@ -151,9 +152,12 @@ class StaleExtractionError(Exception):
 class PropositionResult:
     """One extracted proposition with its provenance, epistemic fields, and vector.
 
-    ``routing`` is derived from ``epistemic_class`` (G1.2). ``faithfulness``/``provisional`` are
-    set by the verify fan-out (G1.4/G1.5) — null when no verifier is configured. ``agreement`` is
-    the multi-sample consistency signal (G1.3): the fraction of the N samples that produced this
+    ``routing`` is derived from ``epistemic_class`` (G1.2). ``faithfulness`` is set by the verify
+    fan-out (G1.4/G1.5) — null when no verifier is configured. ``provisional_reasons`` (R8) is the
+    set of :class:`~iknos.types.epistemic.ProvisionalReason` causes (here: ``LOW_FAITHFULNESS``,
+    from a sub-threshold verify score or a G1.14 polarity-unstable twin; the Phase-2 binder OR-folds
+    ``UNRESOLVED_REFERENCE`` at its own write) — empty when none apply. ``agreement`` is the
+    multi-sample consistency signal (G1.3): the fraction of the N samples that produced this
     proposition; ``None`` in single-sample mode (N=1), where it would be a trivial 1.0. It is
     persisted on the node regardless of the verifier; when a verifier *is* present it also folds
     into ``faithfulness`` via :func:`~iknos.types.epistemic.combine_faithfulness`.
@@ -171,8 +175,25 @@ class PropositionResult:
     epistemic_class: EpistemicClass
     routing: Routing
     faithfulness: float | None = None
-    provisional: bool | None = None
+    provisional_reasons: list[str] = field(default_factory=list)
     agreement: float | None = None
+
+
+def _legacy_provisional(faithfulness: float | None, reasons: list[str]) -> bool | None:
+    """The transition-shim legacy ``provisional`` boolean (R8) — removed next release.
+
+    Three states preserved so a not-yet-migrated external reader behaves exactly as before:
+    ``None`` when the proposition was never assessed (no verifier, single-pass, and no
+    reason), ``True`` iff the reason set is non-empty, ``False`` for an assessed-clean
+    proposition. Production code reads ``provisional_reasons``; this only keeps the old
+    boolean truthful for one release.
+
+    **TODO(R8 cleanup):** drop this and the ``provisional`` property write once no external
+    consumer reads the boolean.
+    """
+    if not reasons and faithfulness is None:
+        return None
+    return bool(reasons)
 
 
 @dataclass(frozen=True)
@@ -369,7 +390,7 @@ class Propositionizer:
         ]
 
         def _to_result(
-            canonical: Candidate, agreement: float | None, *, provisional: bool | None
+            canonical: Candidate, agreement: float | None, *, provisional_reasons: list[str]
         ) -> PropositionResult:
             return PropositionResult(
                 id=uuid.uuid4(),
@@ -383,17 +404,18 @@ class Propositionizer:
                 scope=canonical.scope,
                 epistemic_class=canonical.epistemic_class,
                 # routing derived now (G1.2); faithfulness set by the verify pass (G1.4).
-                # provisional is set here only for polarity-unstable twins (G1.14) — the
-                # verify pass OR-folds its own is_provisional() onto it, never clearing it.
+                # provisional_reasons carries LOW_FAITHFULNESS for a polarity-unstable twin (G1.14)
+                # here — the verify pass OR-folds its own provisional_reasons_for() onto it (R8),
+                # never clearing it.
                 routing=route_for(canonical.epistemic_class),
                 agreement=agreement,
-                provisional=provisional,
+                provisional_reasons=provisional_reasons,
             )
 
         # Single-pass: no clustering — each extraction is its own proposition (agreement null, no
         # polarity twins possible), exactly as before G1.3.
         if self.n_samples == 1:
-            results = [_to_result(c, None, provisional=None) for c in candidates]
+            results = [_to_result(c, None, provisional_reasons=[]) for c in candidates]
             return results, []
 
         # Multi-sample: polarity-aware consolidation + twin detection (G1.14).
@@ -401,7 +423,14 @@ class Propositionizer:
             candidates, n_samples=self.n_samples, threshold=self.agreement_threshold
         )
         results = [
-            _to_result(c.canonical, c.agreement, provisional=True if c.polarity_unstable else None)
+            _to_result(
+                c.canonical,
+                c.agreement,
+                # A polarity-unstable twin is a consistency defect on the faithfulness axis (§3.1).
+                provisional_reasons=(
+                    [ProvisionalReason.LOW_FAITHFULNESS.value] if c.polarity_unstable else []
+                ),
+            )
             for c in consolidated
         ]
         twin_pairs = [(results[i].id, results[j].id) for i, j in twin_idx]
@@ -455,11 +484,12 @@ class Propositionizer:
             # factor 1.0 ⇒ faithfulness == the verify component (unchanged from G1.4/G1.5).
             agreement = r.agreement if r.agreement is not None else 1.0
             faith = combine_faithfulness(verify_component, agreement)
-            # OR-fold: a polarity-unstable proposition (G1.14) stays provisional even if the
-            # verifier finds it faithful — the instability is an independent quarantine reason.
-            provisional = is_provisional(faith) or bool(r.provisional)
+            # OR-fold (R8): the verify-derived reason (LOW_FAITHFULNESS below threshold) unions with
+            # any reason already on the result — a polarity-unstable twin (G1.14) stays provisional
+            # even if the verifier finds it faithful, the instability being an independent cause.
+            reasons = set(r.provisional_reasons) | {x.value for x in provisional_reasons_for(faith)}
             # PropositionResult is frozen — rebuild with the scored fields, never mutate.
-            scored = replace(r, faithfulness=faith, provisional=provisional)
+            scored = replace(r, faithfulness=faith, provisional_reasons=sorted(reasons))
             return scored, verdict
 
         async def verify_group(
@@ -531,8 +561,11 @@ class Propositionizer:
         edge_ids: list[str] = []
         for r in results:
             # Epistemic fields (§3.1) as vertex properties: StrEnums serialize to
-            # plain strings, None -> null (faithfulness/provisional are placeholders
-            # owned by G1.4/G1.5/G1.6). routing is the derived fact/judgement tag (G1.2).
+            # plain strings, None -> null (faithfulness is a placeholder owned by G1.4/G1.5).
+            # routing is the derived fact/judgement tag (G1.2). provisional_reasons (R8) is a
+            # JSON-string list (cypher_map json-encodes lists); the legacy boolean is still
+            # written (true iff the set is non-empty, null when unassessed) for one transition
+            # release — production reads the reasons, never the boolean.
             prop_props = {
                 "id": str(r.id),
                 "text": r.text,
@@ -543,7 +576,8 @@ class Propositionizer:
                 "epistemic_class": r.epistemic_class,
                 "routing": r.routing,
                 "faithfulness": r.faithfulness,
-                "provisional": r.provisional,
+                "provisional_reasons": r.provisional_reasons,
+                "provisional": _legacy_provisional(r.faithfulness, r.provisional_reasons),
                 # Multi-sample consistency (G1.3): null in single-pass mode, so this serializes
                 # exactly as before until LLM_EXTRACT_SAMPLES is raised.
                 "agreement": r.agreement,
@@ -614,7 +648,7 @@ class Propositionizer:
                 epistemic_class=c.epistemic_class,
                 routing=c.routing,
                 faithfulness=c.faithfulness,
-                provisional=c.provisional,
+                provisional_reasons=c.provisional_reasons,
                 agreement=c.agreement,
             )
             for c, v in zip(reusable.propositions, vectors, strict=True)
@@ -742,7 +776,7 @@ class Propositionizer:
                             "proposition": str(r.id),
                             "verifier_unavailable": True,
                             "faithfulness": r.faithfulness,
-                            "provisional": r.provisional,
+                            "provisional_reasons": r.provisional_reasons,
                         }
                     )
                 else:
@@ -754,7 +788,7 @@ class Propositionizer:
                             "modality_preserved": v.modality_preserved,
                             "attribution_preserved": v.attribution_preserved,
                             "faithfulness": r.faithfulness,
-                            "provisional": r.provisional,
+                            "provisional_reasons": r.provisional_reasons,
                         }
                     )
             await record_action(

@@ -32,6 +32,7 @@ extraction that legitimately produced *zero* propositions (an empty span) is a v
 replays as zero propositions plus an empty extract ``Action``, still skipping the LLM.
 """
 
+import json
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -55,10 +56,10 @@ class CachedProposition:
 
     The full set of fields a fresh extraction would have produced, *except* the per-span identity
     (a new id and a fresh embedding are minted at replay time, never copied — see the module
-    docstring on why the vector is re-derived rather than reused). ``faithfulness``/
-    ``provisional``/``agreement`` are ``None`` exactly when the source proposition carried no such
-    value (no verifier configured, or single-sample mode), so a replay reproduces the source's
-    epistemic state verbatim.
+    docstring on why the vector is re-derived rather than reused). ``faithfulness``/``agreement``
+    are ``None`` exactly when the source proposition carried no such value (no verifier configured,
+    or single-sample mode), and ``provisional_reasons`` (R8) is the source's reason set (empty when
+    none), so a replay reproduces the source's epistemic state verbatim.
     """
 
     text: str
@@ -69,7 +70,7 @@ class CachedProposition:
     epistemic_class: EpistemicClass
     routing: Routing
     faithfulness: float | None
-    provisional: bool | None
+    provisional_reasons: list[str]
     agreement: float | None
 
 
@@ -91,8 +92,11 @@ def _cached_proposition_from_props(props: dict[str, Any]) -> CachedProposition:
     """Rebuild a :class:`CachedProposition` from an AGE ``properties(p)`` map.
 
     Enum fields persist as plain strings (``StrEnum``) and rebuild through their constructors;
-    ``faithfulness``/``provisional``/``agreement`` come back as JSON number/bool or ``null`` →
-    ``None``. Mirrors how ``core/proposition.py::_persist`` wrote them (``prop_props``).
+    ``faithfulness``/``agreement`` come back as JSON number or ``null`` → ``None``.
+    ``provisional_reasons`` (R8) is a JSON-string list (``cypher_map`` json-encodes lists), so it
+    is decoded a second time — an absent/``null`` property (a pre-R8 node) replays as the empty set.
+    The legacy ``provisional`` boolean is deliberately **not** read (R8: production reads the
+    reasons). Mirrors how ``core/proposition.py::_persist`` wrote them (``prop_props``).
     """
     return CachedProposition(
         text=props["text"],
@@ -103,9 +107,22 @@ def _cached_proposition_from_props(props: dict[str, Any]) -> CachedProposition:
         epistemic_class=EpistemicClass(props["epistemic_class"]),
         routing=Routing(props["routing"]),
         faithfulness=props.get("faithfulness"),
-        provisional=props.get("provisional"),
+        provisional_reasons=_decode_reasons(props.get("provisional_reasons")),
         agreement=props.get("agreement"),
     )
+
+
+def _decode_reasons(raw: Any) -> list[str]:
+    """Decode the ``provisional_reasons`` property — a JSON-string list — into ``list[str]`` (R8).
+
+    ``cypher_map`` json-encodes a list property to a string, so the read returns that string (or a
+    pre-R8 ``None``/absent, replayed as empty). Defensive against an already-decoded list."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    decoded = json.loads(raw)
+    return [str(x) for x in decoded]
 
 
 async def find_reusable_extraction(

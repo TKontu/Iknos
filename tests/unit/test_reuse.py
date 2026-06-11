@@ -2,8 +2,9 @@
 
 The DB lookup (``find_reusable_extraction``) is exercised live in
 ``tests/integration/test_extraction_reuse.py``; here we pin the pure half: an AGE ``properties(p)``
-map round-trips back into a :class:`CachedProposition` with its enums rebuilt and its
-faithfulness/agreement (which may be null) preserved exactly. This is the seam where a drift between
+map round-trips back into a :class:`CachedProposition` with its enums rebuilt, its
+faithfulness/agreement (which may be null) preserved exactly, and its ``provisional_reasons`` (R8 —
+a JSON-string list property) decoded back to a ``list[str]``. This is the seam where a drift between
 how ``_persist`` *writes* a proposition vertex and how reuse *reads* it back would corrupt a replay.
 """
 
@@ -29,6 +30,9 @@ def test_reconstructs_full_proposition_from_props() -> None:
         "epistemic_class": "judgement",
         "routing": "judgement",
         "faithfulness": 0.4,
+        # provisional_reasons persists as a JSON-string list (cypher_map json-encodes lists);
+        # the legacy boolean is still present but deliberately not read (R8).
+        "provisional_reasons": '["low_faithfulness", "unresolved_reference"]',
         "provisional": True,
         "agreement": 1 / 3,
     }
@@ -42,7 +46,7 @@ def test_reconstructs_full_proposition_from_props() -> None:
         epistemic_class=EpistemicClass.JUDGEMENT,
         routing=Routing.JUDGEMENT,
         faithfulness=0.4,
-        provisional=True,
+        provisional_reasons=["low_faithfulness", "unresolved_reference"],
         agreement=1 / 3,
     )
     # Enums are real enum members, not bare strings — a replay persists them identically.
@@ -63,11 +67,11 @@ def test_null_faithfulness_and_agreement_preserved() -> None:
         "epistemic_class": "observation",
         "routing": "fact",
         "faithfulness": None,
-        "provisional": None,
+        # An un-provisional / pre-R8 vertex: the reasons property is absent → empty set.
         "agreement": None,
     }
     cached = _cached_proposition_from_props(props)
     assert cached.faithfulness is None
-    assert cached.provisional is None
+    assert cached.provisional_reasons == []
     assert cached.agreement is None
     assert cached.routing is Routing.FACT

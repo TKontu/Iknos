@@ -194,8 +194,8 @@ async def test_infer_span_populates_epistemic_fields_and_routing():
     # The bare-text proposition defaults to observation → routes to fact.
     assert observation.epistemic_class is EpistemicClass.OBSERVATION
     assert observation.routing is Routing.FACT
-    # faithfulness/provisional are not self-reported — null until G1.4/G1.5/G1.6.
-    assert all(r.faithfulness is None and r.provisional is None for r in results)
+    # faithfulness is not self-reported — null until G1.4/G1.5; no reasons until assessed (R8).
+    assert all(r.faithfulness is None and r.provisional_reasons == [] for r in results)
 
 
 # --- extract-then-verify wiring (G1.4/G1.5) ---
@@ -259,7 +259,7 @@ async def test_verify_all_sets_faithfulness_and_provisional() -> None:
     (i, results, verdicts) = verified[0]
     assert i == 0
     assert results[0].faithfulness == pytest.approx(1.0)
-    assert results[0].provisional is False
+    assert results[0].provisional_reasons == []
     assert verdicts[0].entailment is Entailment.ENTAILED
     # The verifier was handed the source span's text, not the proposition text.
     p.verifier.verify_proposition.assert_awaited_once()
@@ -278,7 +278,7 @@ async def test_verify_all_contradicted_marks_provisional() -> None:
 
     results = verified[0][1]
     assert results[0].faithfulness == pytest.approx(0.0)
-    assert results[0].provisional is True
+    assert results[0].provisional_reasons == ["low_faithfulness"]
 
 
 @pytest.mark.asyncio
@@ -293,7 +293,7 @@ async def test_verify_all_modality_flatten_stays_above_threshold() -> None:
 
     results = verified[0][1]
     assert results[0].faithfulness == pytest.approx(0.70)
-    assert results[0].provisional is False
+    assert results[0].provisional_reasons == []
 
 
 @pytest.mark.asyncio
@@ -312,7 +312,7 @@ async def test_verify_all_folds_in_agreement() -> None:
 
     results = verified[0][1]
     assert results[0].faithfulness == pytest.approx(1 / 3)
-    assert results[0].provisional is True
+    assert results[0].provisional_reasons == ["low_faithfulness"]
 
 
 @pytest.mark.asyncio
@@ -331,7 +331,7 @@ async def test_verify_all_degrades_on_verifier_failure() -> None:
 
     (i, results, verdicts) = verified[0]
     assert results[0].faithfulness is None
-    assert results[0].provisional is None
+    assert results[0].provisional_reasons == []
     assert verdicts == [None]
 
 
@@ -344,12 +344,14 @@ async def test_verify_all_failure_preserves_twin_provisional() -> None:
     spans = [_span(doc, 0, len(raw))]
     p = _propositionizer_with_verifier(_verdict())
     p.verifier.verify_proposition = AsyncMock(side_effect=RuntimeError("boom"))
-    twin = replace(_result("The bearing failed.", spans[0].id, doc), provisional=True)
+    twin = replace(
+        _result("The bearing failed.", spans[0].id, doc), provisional_reasons=["low_faithfulness"]
+    )
 
     verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, [(0, [twin])])
 
     results = verified[0][1]
-    assert results[0].provisional is True
+    assert results[0].provisional_reasons == ["low_faithfulness"]
     assert results[0].faithfulness is None
 
 
@@ -423,7 +425,7 @@ async def test_multi_sample_polarity_twin_quarantines_both_sides() -> None:
 
     assert len(results) == 2
     assert sorted(r.agreement for r in results) == pytest.approx([0.4, 0.6])  # never 1.0
-    assert all(r.provisional is True for r in results)  # both quarantined
+    assert all(r.provisional_reasons == ["low_faithfulness"] for r in results)  # both quarantined
     assert len(twins) == 1
     assert set(twins[0]) == {r.id for r in results}  # the pair links the two propositions
 
