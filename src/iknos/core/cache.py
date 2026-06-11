@@ -17,11 +17,35 @@ Unlike ``span_content_hash`` the schema version is **passed in** rather than rea
 constant: ``EXTRACT_SCHEMA_VERSION`` lives next to the prompt it versions in ``core/proposition.py``
 and importing it here would be circular (``proposition`` already imports this module). Keeping the
 version a parameter leaves ``cache.py`` a dependency-free leaf.
+
+G1.15 (review A4): invalidation no longer rides on the hand-bumped ``schema_version`` alone — the
+*actual* rendered prompt (``prompt_sha``) and guided-decode schema (``schema_sha``) are hashed into
+the key, so a prompt edit that forgot the bump still re-extracts. ``cache.py`` stays the
+dependency-free hashing leaf: the SHAs are computed by the prompt's owners (``proposition.py`` /
+``verify.py``) and passed in, exactly like ``schema_version``. The two pure helpers below
+(:func:`sha256_hex`, :func:`canonical_json_sha256`) are the shared primitives those owners use, so
+the canonicalization rule lives in one place.
 """
 
 import hashlib
 import json
 from typing import Any
+
+
+def sha256_hex(data: str) -> str:
+    """SHA-256 hex digest of a UTF-8 string — the project's one hashing primitive."""
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def canonical_json_sha256(obj: Any) -> str:
+    """SHA-256 of an object's **canonical** JSON (sorted keys, compact separators).
+
+    Order-insensitive by construction: ``{"a":1,"b":2}`` and ``{"b":2,"a":1}`` hash identically,
+    so re-ordering schema keys never spuriously invalidates the cache (a G1.15 requirement). The
+    same canonicalization the content-hash payloads use, factored out so prompt/schema digests and
+    the cache key agree on the rule.
+    """
+    return sha256_hex(json.dumps(obj, sort_keys=True, separators=(",", ":")))
 
 
 def extraction_content_hash(
@@ -30,6 +54,8 @@ def extraction_content_hash(
     context_text: str,
     model: str,
     schema_version: int,
+    prompt_sha: str,
+    schema_sha: str,
     sampling: dict[str, Any],
     verifier: dict[str, Any] | None,
 ) -> str:
@@ -40,12 +66,21 @@ def extraction_content_hash(
         context_text: the preceding-window text shown to the model for reference resolution;
             included because changing the window changes the prompt and so can change the output.
         model: the extractor model id (``LLMClient.model``); recorded on ``Action.model`` too.
-        schema_version: ``EXTRACT_SCHEMA_VERSION`` — bumped on any prompt / schema / enum change.
+        schema_version: ``EXTRACT_SCHEMA_VERSION`` — a *semantic* version of the output shape.
+            Since G1.15 it no longer carries invalidation alone (``prompt_sha``/``schema_sha`` do);
+            it stays in the key so a deliberate shape bump still re-extracts even if the rendered
+            strings happen to collide.
+        prompt_sha: SHA-256 of the *rendered* extractor prompt scaffold (``proposition.py``). The
+            G1.15 closure: a reworded prompt moves this digest, so a forgotten ``schema_version``
+            bump can no longer silently serve a stale extraction.
+        schema_sha: SHA-256 of the canonical guided-decode schema (``proposition.py``); a changed
+            output schema invalidates even without a version bump. Key-order-insensitive.
         sampling: the decoding regime (temperature, top_p, ``n_samples`` …); a different regime
             yields a different extraction and a different agreement signal, so it is in the key.
         verifier: ``None`` when no verifier is configured, else
-            ``{"model": ..., "schema_version": ...}``; toggling or changing the verifier changes
-            the derived ``faithfulness``, so it must invalidate the cache.
+            ``{"model", "schema_version", "prompt_sha", "schema_sha"}``; toggling or changing the
+            verifier (model, prompt, or schema) changes the derived ``faithfulness``, so it must
+            invalidate the cache. The dict is opaque here — its SHAs are computed by ``verify.py``.
 
     Inputs only — never the derived propositions/embeddings (cf. ``span_content_hash``,
     ``DomainPack.content_hash``): non-deterministic float drift must not change the digest.
@@ -55,8 +90,9 @@ def extraction_content_hash(
         "context_text": context_text,
         "model": model,
         "schema_version": schema_version,
+        "prompt_sha": prompt_sha,
+        "schema_sha": schema_sha,
         "sampling": sampling,
         "verifier": verifier,
     }
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return canonical_json_sha256(payload)

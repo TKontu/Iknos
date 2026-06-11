@@ -28,6 +28,7 @@ def _mock_propositionizer(llm_return: dict, n_vectors: int) -> Propositionizer:
     llm.model = "test-model"
     llm.guided_complete = AsyncMock(return_value=llm_return)
     substrate = MagicMock()
+    substrate.model_name = "BAAI/bge-m3"  # vector-space identity written on each row (G1.16)
     substrate.embed_passages = MagicMock(
         return_value=[[0.1 * (i + 1)] * 1024 for i in range(n_vectors)]
     )
@@ -49,6 +50,7 @@ def _multi_sample_propositionizer(
     llm.model = "test-model"
     llm.guided_complete = AsyncMock(side_effect=side_effect)
     substrate = MagicMock()
+    substrate.model_name = "BAAI/bge-m3"  # vector-space identity (G1.16)
     substrate.embed_passages = MagicMock(return_value=embed_return)
     return Propositionizer(
         llm,

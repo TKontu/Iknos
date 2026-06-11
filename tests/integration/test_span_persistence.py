@@ -284,6 +284,7 @@ def _mock_propositionizer(texts: list[str]) -> Propositionizer:
     llm.model = _MODEL
     llm.guided_complete = AsyncMock(return_value={"propositions": [{"text": t} for t in texts]})
     substrate = MagicMock()
+    substrate.model_name = _MODEL  # vector-space identity written on each proposition row (G1.16)
     substrate.embed_passages = MagicMock(return_value=[[0.2] * 1024 for _ in texts])
     return Propositionizer(llm, substrate, context_window=8, concurrency=2)
 

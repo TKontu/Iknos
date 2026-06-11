@@ -5,13 +5,19 @@ extraction output changes. So every input dimension is pinned to independently m
 (determinism + sensitivity), exactly like ``test_ingest.py`` does for ``span_content_hash``.
 """
 
-from iknos.core.cache import extraction_content_hash
+from iknos.core.cache import (
+    canonical_json_sha256,
+    extraction_content_hash,
+    sha256_hex,
+)
 
 _BASE = {
     "target_text": "The bearing failed under load.",
     "context_text": "The pump ran for 9000 hours.",
     "model": "BAAI/extractor-v1",
     "schema_version": 1,
+    "prompt_sha": "a" * 64,
+    "schema_sha": "b" * 64,
     "sampling": {"temperature": 0.0, "n_samples": 1},
     "verifier": None,
 }
@@ -58,8 +64,19 @@ def test_model_changes_hash() -> None:
 
 
 def test_schema_version_changes_hash() -> None:
-    # Bumping EXTRACT_SCHEMA_VERSION (reworded prompt / changed schema) invalidates the cache.
+    # A deliberate output-shape bump still invalidates (it stays in the key alongside the SHAs).
     assert _hash(schema_version=2) != _hash()
+
+
+def test_prompt_sha_changes_hash() -> None:
+    # G1.15: the rendered prompt is in the key, so a reworded prompt re-extracts even if
+    # EXTRACT_SCHEMA_VERSION was not bumped — the silent-staleness hole this closes.
+    assert _hash(prompt_sha="c" * 64) != _hash()
+
+
+def test_schema_sha_changes_hash() -> None:
+    # G1.15: a changed guided-decode schema invalidates without a manual version bump.
+    assert _hash(schema_sha="d" * 64) != _hash()
 
 
 def test_sampling_regime_changes_hash() -> None:
@@ -89,3 +106,30 @@ def test_verifier_schema_version_changes_hash() -> None:
     assert _hash(verifier={"model": "verifier-v1", "schema_version": 2}) != _hash(
         verifier={"model": "verifier-v1", "schema_version": 1}
     )
+
+
+def test_verifier_prompt_sha_changes_hash() -> None:
+    # G1.15: a reworded verifier prompt re-derives faithfulness → must invalidate.
+    base_v = {"model": "verifier-v1", "schema_version": 1, "prompt_sha": "a" * 64}
+    assert _hash(verifier={**base_v, "prompt_sha": "z" * 64}) != _hash(verifier=base_v)
+
+
+# --- shared hashing helpers (the G1.15 canonicalization primitives) ---
+
+
+def test_sha256_hex_shape_and_determinism() -> None:
+    h = sha256_hex("the rendered prompt")
+    assert len(h) == 64 and all(c in "0123456789abcdef" for c in h)
+    assert h == sha256_hex("the rendered prompt")
+    assert h != sha256_hex("the rendered prompt.")  # one char moves it
+
+
+def test_canonical_json_sha_is_key_order_insensitive() -> None:
+    # The property the G1.15 test calls for: re-ordering schema keys must NOT change the digest.
+    assert canonical_json_sha256({"a": 1, "b": [2, 3]}) == canonical_json_sha256(
+        {"b": [2, 3], "a": 1}
+    )
+
+
+def test_canonical_json_sha_is_value_sensitive() -> None:
+    assert canonical_json_sha256({"a": 1}) != canonical_json_sha256({"a": 2})

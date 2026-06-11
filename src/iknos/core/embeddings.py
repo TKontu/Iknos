@@ -18,6 +18,18 @@ class DocumentTooLongError(Exception):
     """
 
 
+class EmbeddingModelMismatchError(Exception):
+    """Dense rows for one document/proposition-set already exist under a *different* model (G1.16).
+
+    Cosine similarity across two embedding spaces is meaningless, so a single ANN index must hold
+    vectors from exactly one model. Swapping or upgrading the embedding model and re-ingesting in
+    place would silently mix spaces — undetectable, since both models may share a dimension. This
+    refuses that write loudly; the migration path is ``scripts/reembed.py`` (re-embed every row to
+    the target model first). Mirrors the fail-loud placement of
+    ``core/ingest.py::DocumentResegmentationError`` (review A5).
+    """
+
+
 def _raise_if_truncated(seq_len: int, *, max_tokens: int = MAX_MODEL_TOKENS) -> None:
     """Refuse a document whose token length would be truncated by the embedding model.
 

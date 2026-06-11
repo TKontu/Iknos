@@ -41,7 +41,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from iknos.core.embeddings import EmbeddingSubstrate
+from iknos.core.embeddings import EmbeddingModelMismatchError, EmbeddingSubstrate
 from iknos.core.parse import (
     NullParser,
     Parser,
@@ -181,6 +181,22 @@ async def _segmented_hash(session: AsyncSession, document_id: uuid.UUID) -> str 
     return row.scalar_one_or_none()
 
 
+async def _existing_embedding_model(session: AsyncSession, document_id: uuid.UUID) -> str | None:
+    """The embedding model of this document's existing dense span rows, or ``None`` if none exist.
+
+    A document's dense span index is single-space by construction (one model per ingest run), so
+    one row's model is the whole document's. Lets :func:`persist_spans` refuse a model swap with a
+    precise :class:`~iknos.core.embeddings.EmbeddingModelMismatchError` (G1.16) rather than the
+    generic resegmentation guard (the model is also in ``span_content_hash``, so a swap trips that
+    too — but the specific error names the fix: ``scripts/reembed.py``).
+    """
+    row = await session.execute(
+        text("SELECT model FROM document_embeddings WHERE document_id = :did LIMIT 1"),
+        {"did": document_id},
+    )
+    return row.scalar_one_or_none()
+
+
 async def _parsed_hash(session: AsyncSession, document_id: uuid.UUID) -> str | None:
     """The ``content_hash`` of this document's most recent parse, or ``None``.
 
@@ -207,20 +223,34 @@ async def persist_spans(
     *,
     content_hash: str,
     segmenter_params: dict[str, Any],
-    model: str | None = None,
+    model: str,
     level: int = 0,
     layouts: list[dict[str, Any] | None] | None = None,
 ) -> SpanPersistResult:
     """Persist segmented spans (Span vertices + dense rows) idempotently.
 
     Torch-free: ``embeddings`` are precomputed and positionally aligned to
-    ``char_spans``. ``layouts`` (optional, same alignment) carries the parse
-    front-end's ``{page, bbox}`` visual-provenance handle per span (G1.0); ``None``
-    — the whole arg or any element — means plain-text ingest with no layout.
-    Caller-owned transaction — does **not** commit. See module docstring for the
-    immutability / atomicity model.
+    ``char_spans``. ``model`` is the embedding model that produced them — required, because
+    it is the dense rows' **vector-space identity** (G1.16): it is written on every
+    ``document_embeddings`` row and guards against silently mixing two embedding spaces.
+    ``layouts`` (optional, same alignment) carries the parse front-end's ``{page, bbox}``
+    visual-provenance handle per span (G1.0); ``None`` — the whole arg or any element —
+    means plain-text ingest with no layout. Caller-owned transaction — does **not** commit.
+    See module docstring for the immutability / atomicity model.
     """
     from iknos.db.age import cypher_map, execute_cypher
+
+    # G1.16: refuse a model swap before any write. The model is also in span_content_hash, so a
+    # swap trips the resegmentation guard below too — but this fires first with the specific error
+    # and the actionable fix (reembed), and it is the load-bearing check for any caller whose
+    # content_hash does not couple in the model.
+    existing_model = await _existing_embedding_model(session, document_id)
+    if existing_model is not None and existing_model != model:
+        raise EmbeddingModelMismatchError(
+            f"document {document_id} already has dense span rows under embedding model "
+            f"{existing_model!r}, cannot mix in {model!r} (cosine across embedding spaces is "
+            f"meaningless). Re-embed with scripts/reembed.py to migrate the index first."
+        )
 
     prior = await _segmented_hash(session, document_id)
     if prior is not None and prior != content_hash:
@@ -289,6 +319,7 @@ async def persist_spans(
             span_end=end,
             level=level,
             embedding=emb,
+            model=model,  # vector-space identity (G1.16)
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=["span_id"],
@@ -298,6 +329,7 @@ async def persist_spans(
                 "span_end": end,
                 "level": level,
                 "embedding": emb,
+                "model": model,
             },
         )
         await session.execute(stmt)

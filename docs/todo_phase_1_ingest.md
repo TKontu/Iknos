@@ -24,9 +24,11 @@ service** that emits the wire schema (ops/AGPL-side adapter) and **table/figure 
 (`review_2026-06_architecture_plan.md`) added **G1.13–G1.19** — two critical correctness
 fixes (long-document truncation G1.13, polarity-blind agreement G1.14) plus staleness,
 robustness, table-contract, and rank-fusion work. **G1.13 slice 1** (truncation guard) and
-**G1.14** (polarity-aware agreement + twin quarantine) are now shipped — the two critical
-correctness fixes that stopped silent data loss/inflated confidence; G1.15 (prompt-hash
-cache key) + G1.16 (embedding-model column) are the new front of the queue. See
+**G1.14** (polarity-aware agreement + twin quarantine), **G1.15** (prompt/schema-hash cache
+key) and **G1.16** (embedding-model identity column + ingest guards + `reembed` reindex path)
+are now shipped — the two critical correctness fixes plus the two silent-staleness closures.
+G1.18 (table payload in the wire contract) and G1.13 slice 2 (windowed embedding) are the new
+front of the queue. See
 `gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state below; not every box maps
 1:1 to a gap ID.)*
 
@@ -166,11 +168,12 @@ cache key) + G1.16 (embedding-model column) are the new front of the queue. See
       under-ranking, and only service-isolated like MinerU.
 - [ ] Both indexes carry `box` id so retrieval can be scoped to the active working set.
       *(G1.11 — gated on Phase 2 boxing.)*
-- [ ] **Embedding-model identity (G1.16):** `model` column on
-      `document_embeddings`/`proposition_embeddings` + mismatch guard
-      (`EmbeddingModelMismatchError`) + `scripts/reembed.py` migration path — a
-      same-dimension model swap must be refused, not silently mixed into one ANN
-      space. *(Review A5.)*
+- [x] **Embedding-model identity (G1.16):** `model TEXT NOT NULL` column on
+      `document_embeddings`/`proposition_embeddings` (migration `0008`) + mismatch guard
+      (`EmbeddingModelMismatchError`, raised in `ingest.persist_spans` for spans and
+      `proposition._guard_embedding_model` for propositions) + `scripts/reembed.py`
+      (over `core/reembed.py`) migration path — a same-dimension model swap is now
+      refused and migrated, not silently mixed into one ANN space. *(Review A5.)*
 - [ ] (Keyword/entity index feeds graph nodes in Phase 2 and candidate generation in
       Phase 4 — keep keyworders in the lexical layer, not the graph.)
 
@@ -182,10 +185,11 @@ cache key) + G1.16 (embedding-model column) are the new front of the queue. See
       content_hash)` over the extractor model/prompt/regime/verifier (`core/cache.py`).
       Unchanged content no-ops; a changed pipeline re-extracts (or fails loud). Cross-document
       output reuse — "extract once" across docs/re-segmentation — is the remaining G1.7b.)*
-- [ ] **Hash the real prompt + schema into the cache key (G1.15):** today invalidation
-      rides on a hand-bumped `EXTRACT_SCHEMA_VERSION`; a prompt edit without the bump
-      silently serves stale extractions. Add `prompt_sha`/`schema_sha` (extractor and
-      verifier) to `extraction_content_hash`. One-time loud re-extraction when it lands.
+- [x] **Hash the real prompt + schema into the cache key (G1.15):** `prompt_sha`/`schema_sha`
+      (extractor *and* verifier) now feed `extraction_content_hash`, so a prompt edit
+      re-extracts even without a hand-bumped `EXTRACT_SCHEMA_VERSION`; the version stays a
+      *semantic* output-shape marker. `schema_sha` is key-order-insensitive
+      (`cache.canonical_json_sha256`). One-time loud full re-extraction on first deploy.
       *(Review A4.)*
 - [ ] **Amortize reference processing:** reference-corpus / domain-pack boxes are ingested
       **once** and persisted read-only for reuse across investigations; only case
@@ -220,7 +224,7 @@ cache key) + G1.16 (embedding-model column) are the new front of the queue. See
       coverage — no silent truncation, no zero vectors in pgvector (G1.13).
 - [x] Mixed-polarity extractions never report full agreement; polarity-unstable
       spans yield `provisional` propositions (G1.14).
-- [ ] A prompt-template edit alone invalidates the extraction cache (G1.15); an
+- [x] A prompt-template edit alone invalidates the extraction cache (G1.15); an
       embedding-model swap is refused, not silently mixed (G1.16).
 - [ ] Maintain a small fixture corpus exercising this path (seed for the gate corpus).
       Include at least one document longer than one embedding window and one span
