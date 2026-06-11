@@ -26,6 +26,7 @@ from iknos.core.edge_judge import (
 )
 from iknos.core.edge_producer import (
     DEFAULT_SIGNIFICANCE,
+    MISSING_PROVENANCE,
     PRODUCER_ACTION_TYPE,
     PRODUCER_ACTOR,
     EdgeProducer,
@@ -35,9 +36,11 @@ from iknos.core.edge_producer import (
     SignificancePolicy,
     build_evidence,
     edge_significance,
+    edge_stakes,
     evidential_edge_props,
     plan_hypothesis,
 )
+from iknos.core.quarantine import Stakes
 from iknos.core.subjective_logic import Opinion
 from iknos.types.edges import EdgeSign
 from iknos.types.nodes import Tier
@@ -198,11 +201,17 @@ def test_build_evidence_drops_nodes_without_resolved_text() -> None:
 # --- per-hypothesis plan ----------------------------------------------------------------------
 
 
-def _plan(judgment: HypothesisJudgment, meta: dict[str, NodeMeta], cred: dict[str, float | None]):
+def _plan(
+    judgment: HypothesisJudgment,
+    meta: dict[str, NodeMeta],
+    cred: dict[str, float | None],
+    provisional_reasons: dict[str, list[str]] | None = None,
+):
     return plan_hypothesis(
         judgment,
         node_meta=meta,
         credibility=cred,
+        provisional_reasons=provisional_reasons or {},
         policy=DEFAULT_SIGNIFICANCE,
         now=NOW,
         model="judge-model",
@@ -286,6 +295,62 @@ def test_plan_hypothesis_action_records_provenance_and_drops() -> None:
     }
 
 
+# --- quarantine gate (V7, §3.1) ---------------------------------------------------------------
+
+
+def test_edge_stakes_refutes_is_high_supports_depends_on_sole_support() -> None:
+    assert edge_stakes(EdgeSign.REFUTES, support_count_in_plan=5) is Stakes.HIGH
+    # A SUPPORTS that is the hypothesis's sole support is high-stakes; among others it is low.
+    assert edge_stakes(EdgeSign.SUPPORTS, support_count_in_plan=1) is Stakes.HIGH
+    assert edge_stakes(EdgeSign.SUPPORTS, support_count_in_plan=2) is Stakes.LOW
+
+
+def test_plan_quarantines_provisional_refutes_but_keeps_clean_refutes() -> None:
+    judgment = HypothesisJudgment(
+        hypothesis="h1",
+        judgments=(
+            _judgment("prov", "h1", sign=EdgeSign.REFUTES, strength=0.7),
+            _judgment("solid", "h1", sign=EdgeSign.REFUTES, strength=0.9),
+        ),
+    )
+    meta = {"h1": _meta("hyp"), "prov": _meta("shaky"), "solid": _meta("firm")}
+    plan = _plan(judgment, meta, {}, provisional_reasons={"prov": ["low_faithfulness"]})
+
+    # The provisional source's REFUTES is dropped from the plan; the clean one survives.
+    assert [(e.src_id, e.label) for e in plan.edges] == [("solid", "REFUTES")]
+    (q,) = plan.quarantined
+    assert q.evidence == "prov" and q.sign is EdgeSign.REFUTES and q.stakes is Stakes.HIGH
+    assert q.reasons == ("low_faithfulness",)
+    # The drop is recorded on the Action as a triage signal, never a silent skip.
+    assert plan.action.outputs["quarantined"] == [
+        {"evidence": "prov", "sign": "refutes", "reasons": ["low_faithfulness"], "stakes": "high"}
+    ]
+
+
+def test_plan_quarantines_sole_support_but_not_corroborating_support() -> None:
+    # A lone provisional supporter (sole support) is high-stakes → dropped.
+    sole = HypothesisJudgment(
+        hypothesis="h1",
+        judgments=(_judgment("prov", "h1", sign=EdgeSign.SUPPORTS, strength=0.6),),
+    )
+    meta = {"h1": _meta("hyp"), "prov": _meta("shaky"), "other": _meta("ok")}
+    plan = _plan(sole, meta, {}, provisional_reasons={"prov": ["unresolved_reference"]})
+    assert plan.edges == ()
+    assert plan.quarantined[0].stakes is Stakes.HIGH
+
+    # With a second supporter the provisional one is corroboration (LOW) → it survives.
+    corroborating = HypothesisJudgment(
+        hypothesis="h1",
+        judgments=(
+            _judgment("prov", "h1", sign=EdgeSign.SUPPORTS, strength=0.6),
+            _judgment("other", "h1", sign=EdgeSign.SUPPORTS, strength=0.7),
+        ),
+    )
+    plan2 = _plan(corroborating, meta, {}, provisional_reasons={"prov": ["unresolved_reference"]})
+    assert {e.src_id for e in plan2.edges} == {"prov", "other"}
+    assert plan2.quarantined == ()
+
+
 # --- result helpers ---------------------------------------------------------------------------
 
 
@@ -334,18 +399,22 @@ class _FakeSession:
 
 
 class _StubProducer(EdgeProducer):
-    """Overrides the two metadata reads so ``produce`` runs without a graph."""
+    """Overrides the metadata reads so ``produce`` runs without a graph."""
 
-    def __init__(self, *args, node_meta, credibility, **kwargs) -> None:  # noqa: ANN002
+    def __init__(self, *args, node_meta, credibility, provisional_reasons=None, **kwargs) -> None:  # noqa: ANN002
         super().__init__(*args, **kwargs)
         self._node_meta = node_meta
         self._credibility = credibility
+        self._provisional_reasons = provisional_reasons or {}
 
     async def _load_node_meta(self, session):  # noqa: ANN001
         return self._node_meta
 
     async def _load_credibility(self, session, evidence_ids):  # noqa: ANN001
         return {e: self._credibility.get(e) for e in evidence_ids}
+
+    async def _load_provisional_reasons(self, session, evidence_ids):  # noqa: ANN001
+        return {e: list(self._provisional_reasons.get(e, [])) for e in evidence_ids}
 
 
 @pytest.mark.asyncio
@@ -448,3 +517,55 @@ async def test_produce_drops_irrelevant_and_writes_nothing_for_empty_pool(monkey
     assert writes == [] and actions == []
     assert result.edges == ()
     assert result.dropped == (("e1", "h1"),)
+
+
+@pytest.mark.asyncio
+async def test_produce_quarantines_provisional_refutes_end_to_end(monkeypatch) -> None:  # noqa: ANN001
+    # V7: a provisional-sourced REFUTES is judged (the panel still sees it) but dropped at the
+    # write — no edge persisted, surfaced on the result + recorded on the Action.
+    writes: list[dict] = []
+    actions: list[dict] = []
+
+    async def fake_merge_edge(session, *, src_id, dst_id, label, props):  # noqa: ANN001
+        writes.append({"src": src_id, "dst": dst_id, "label": label, "props": props})
+
+    async def fake_record_action(session, **kw):  # noqa: ANN001
+        actions.append(kw)
+        return uuid.uuid4()
+
+    monkeypatch.setattr("iknos.db.age.merge_edge", fake_merge_edge)
+    monkeypatch.setattr("iknos.provenance.action_log.record_action", fake_record_action)
+
+    pool = CandidatePool(
+        candidates=(
+            Candidate(
+                evidence="e1", hypothesis="h1", sources=frozenset({CandidateSource.EMBEDDING_KNN})
+            ),
+        )
+    )
+    meta = {"h1": _meta("the hypothesis"), "e1": _meta("shaky contradicting evidence")}
+    judge = EdgeJudge(_FakeLLM({"shaky contradicting evidence": JudgedSign.REFUTES}), n_samples=3)
+    producer = _StubProducer(
+        judge,
+        candidates=_FakeCandidateAdapter(pool),
+        node_meta=meta,
+        credibility={"e1": 0.6},
+        provisional_reasons={"e1": ["low_faithfulness"]},
+    )
+
+    result = await producer.produce(_FakeSession())
+
+    # No REFUTES edge written; the quarantine is surfaced on the result and on the Action.
+    assert writes == []
+    assert result.edges == ()
+    (q,) = result.quarantined
+    assert q.evidence == "e1" and q.sign is EdgeSign.REFUTES and q.stakes is Stakes.HIGH
+    assert q.reasons == ("low_faithfulness",)
+    assert actions[0]["outputs"]["quarantined"] == [
+        {"evidence": "e1", "sign": "refutes", "reasons": ["low_faithfulness"], "stakes": "high"}
+    ]
+
+
+def test_missing_provenance_is_a_quarantine_reason_constant() -> None:
+    # The producer-local reason for an evidence node with no EVIDENCED_BY Proposition (V7).
+    assert MISSING_PROVENANCE == "missing_provenance"
