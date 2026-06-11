@@ -8,7 +8,8 @@ off-the-shelf system packages this — it is the substance of the project.
 **Architecture refs:** §12 (two-layer model), §8 (decisions, staged build 1–2), §7.1
 (edge confidence), §6 (`deduce`, `induce`).
 
-**Status — 🟡 G3.1 + G3.2 shipped (Layer A, in-memory).** Well-founded support is
+**Status — 🟡 G3.1 + G3.2 shipped (Layer A, in-memory); G3.5 shipped (Layer B semiring
+decision).** Well-founded support is
 implemented as the **definitional least-fixpoint** (`well_founded_support`, exposed as
 `RecomputeOracle`) over an abstract derivation graph — pure, in-memory, correct on
 acyclic *and* cyclic graphs — in `core/truth_maintenance.py`, with the §12 must-pass
@@ -22,8 +23,10 @@ sequences (1000 snapshots), exactly as planned. What remains of Layer A (**G3.3*
 **clingo/ASP** path for **non-monotonic / stratified-negation** rules, SCC-scoped DRed as
 a performance refinement, and the *persisted* (`WITH RECURSIVE` / DBSP) path — all of
 which need the **Phase 2 adapter** (active-subgraph selection + AGE/UUID→`DerivationGraph`
-mapping), still open. Also open: Layer B confidence (semiring decision + Viterbi/Gödel
-fixpoint), the `deduce`/`induce` operators, and `SAME_AS`-component aggregation. See
+mapping), still open. Also open: Layer B confidence — the
+semiring is **decided (G3.5: Gödel `max-min` default, `core/confidence.py`)**; the
+**valuation least-fixpoint** over it (G3.6) is the open engine — plus the `deduce`/`induce`
+operators and `SAME_AS`-component aggregation. See
 `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
 
 ## Layer A — truth maintenance over a commutative group (owns retraction)
@@ -64,7 +67,7 @@ fixpoint), the `deduce`/`induce` operators, and `SAME_AS`-component aggregation.
 
 ## Layer B — confidence valuation over an absorptive semiring (owns strength)
 
-- [ ] **Semiring decision first (Phase-3-entry, before any Layer B code; §12, review
+- [x] **Semiring decision first (Phase-3-entry, before any Layer B code; §12, review
       A6).** Viterbi `max-·` has a structural **depth bias**: confidence decays
       geometrically with derivation depth (five 0.9 steps → 0.59 regardless of
       evidence quality), so deep derivations are punished and acceptability-band
@@ -74,7 +77,12 @@ fixpoint), the `deduce`/`induce` operators, and `SAME_AS`-component aggregation.
       both semirings over it, and decide with eyes open. If Viterbi is chosen, the
       §11.2 banding must be made depth-aware (note the extra machinery in the
       decision record). Both are absorptive/ω-continuous, so cycle convergence is
-      unaffected either way.
+      unaffected either way. *(G3.5 — **decided: Gödel `max-min` is the Layer B
+      default** (depth-neutral → no depth-aware banding needed). `core/confidence.py`
+      ships the `Semiring` algebra + `VITERBI`/`GODEL`/`DEFAULT_SEMIRING`; the
+      depth-bias fixture + semiring laws are in `tests/unit/test_confidence_semiring.py`.
+      Viterbi retained as a value for future probability-like boxes. The valuation
+      **engine** is G3.6.)*
 - [ ] Confidence as a **least fixpoint** over the chosen semiring — Viterbi
       `([0,1], max, ·, 0, 1)`: multiply along a rule body, max across alternative
       derivations (best-derivation confidence); or Gödel `max-min` (ordinal,
