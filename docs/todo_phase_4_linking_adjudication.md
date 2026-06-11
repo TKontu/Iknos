@@ -14,8 +14,12 @@ disciplines, confidence pipeline, experiment), §7.2 (ensemble gate, hypothesis 
 complete across both cheap stages (G4.2 slice 1 structural + slice 2 embedding k-NN); the
 edge-judgment pipeline now runs end-to-end (G4.3 slice 1 subjective-logic algebra + slice 2
 blind/randomized judge + slice 3 AGE producer that persists the judged `SUPPORTS`/`REFUTES`
-edges) — funnel → judge → calibrated edge → QBAF is a closed loop; `corroborate`/
-`find-contradiction` operators + ensemble gate (G4.5) and the validation gate (G4.6) open.**
+edges) — funnel → judge → calibrated edge → QBAF is a closed loop; the **§7.2 ensemble gate's
+refuted-flip authoriser landed (G4.5 slice 1, `core/ensemble_gate.py`)** — the pure decision
+algebra over the LLM/symbolic/temporal channels that authorises a persisted `refuted` flip
+(unanimity-of-required + universal dissent veto, `DEFAULT_GATE` decided by a fixture);
+`corroborate`/`find-contradiction` operators + the gate's channel producers/consumer-filter
+(rest of G4.5) and the validation gate (G4.6) open.**
 G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
 the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
 conservative default, both retained at the seam), the `solve` bounded fixpoint (acyclic-exact,
@@ -146,8 +150,22 @@ are the next increments. See `gap_phase_4_linking_adjudication.md` for the build
       tier-differentiated significance (the `SignificancePolicy` is uniform until G4.6 calibrates
       it).)*
 - [ ] `corroborate` operator: hypothesis → gather supporting/refuting evidence.
-- [ ] `find-contradiction` operator + **ensemble gate** (multi-sample LLM + symbolic +
-      temporal agreement) required before any `REFUTES` (§7.2).
+- [~] `find-contradiction` operator + **ensemble gate** (multi-sample LLM + symbolic +
+      temporal agreement) required before any `REFUTES` (§7.2). *(G4.5 slice 1 —
+      `core/ensemble_gate.py`: the **refuted-flip authoriser**, the pure decision algebra over the
+      three channels. `authorise(signals, gate)` authorises a persisted `refuted` flip **iff every
+      required channel AFFIRMs and no channel DISSENTs** (a dissent vetoes under every policy — a
+      §13 finding, never out-voted); the gate policy is a **value decided by a fixture**
+      (`DEFAULT_GATE` = `{LLM, SYMBOLIC}` required, `TEMPORAL` conditional — the conservative,
+      cannot-inflate choice; `STRICT_GATE`/`LLM_ONLY_GATE` retained at the seam). `llm_channel`
+      bridges the G4.3 panel (stable `REFUTES` → AFFIRM; sign-unstable / no-refuter → ABSTAIN — the
+      `sign_stable=False` finding the gate "must clear"). A withheld flip is `is_finding` — surfaced
+      for expert review, not auto-persisted; with `SYMBOLIC` required but unwired the default gate is
+      **safe-by-default** (no automated flip until the producer lands). **Open (later G4.5 slices):**
+      the symbolic (clingo/ASP) + temporal (bitemporal) channel **producers** — ABSTAIN seams today —
+      the `persist_verdicts` **filter** that drops un-authorised flips, and `corroborate` /
+      `find-contradiction` feeding the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize`
+      driver.)*
 
 ## Adjudication (QBAF)
 
@@ -170,8 +188,12 @@ are the next increments. See `gap_phase_4_linking_adjudication.md` for the build
       supported/refuted/unsupported and `intentional.band` the §11.2 verdict, both **computed,
       never hand-set**. **G4.4** — `QbafAdapter.evaluate` runs this over real AGE and
       `persist_verdicts` writes `acceptability`/`state` back to the `Hypothesis` node (partial
-      `SET`; band derived-not-stored). **Open:** the flip *to* `refuted` requires the ensemble
-      gate (§7.2, G4.5) — `persist_verdicts` writes what it's given, the caller filters.)*
+      `SET`; band derived-not-stored). **G4.5 slice 1** — the flip *to* `refuted` is now authorised
+      by the **ensemble gate** (`core/ensemble_gate.py`): `classify_state`'s structural `REFUTED` is
+      the gate's *input*, not a licence; `authorise` clears it only on required-channel agreement
+      with no dissent. **Open:** wiring the gate as the `persist_verdicts` **filter** (so un-authorised
+      flips are surfaced, not written) is the rest of G4.5 — `persist_verdicts` still writes what
+      it's given.)*
 - [x] Bound iteration + detect oscillation on cyclic argument graphs; surface
       unresolved regions rather than forcing convergence (principle 8, §13). *(G4.1 — `solve`
       bounds the fixpoint iteration and, on hitting the bound, returns `converged=False` with

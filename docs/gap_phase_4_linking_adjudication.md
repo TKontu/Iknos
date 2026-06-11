@@ -27,7 +27,7 @@ until the gate passes").
 | G4.2 | **Candidate generation** (§5.1) — the cheap→expensive funnel: structural priors (shared `INVOLVES`, co-occurrence), embedding k-NN over pgvector, coarse-to-fine over §2 levels; tuned for recall early | Phase 1 embeddings, Phase 2 graph | **slices 1–2 shipped** (`core/candidates.py`): the recall-first funnel core + the structural-entity prior (slice 1) and the embedding k-NN workhorse over `proposition_embeddings` (slice 2); coarse-to-fine + keyword co-occurrence planned |
 | G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | **slices 1–3 shipped** (slice 1 the subjective-logic confidence-scoring core, `core/subjective_logic.py`; slice 2 the blind/randomized/multi-sample LLM edge judge, `core/edge_judge.py`; slice 3 the AGE producer that persists the judged edges + provenance, `core/edge_producer.py`); per-model recalibration planned (identity until G4.6) |
 | **G4.4** | **QBAF persistence adapter** — load the active `SUPPORTS`/`REFUTES` subgraph + hypothesis base scores (Layer B) from AGE → `BAF`; write the computed `acceptability` / `state` back to the `Hypothesis` node. The Phase-4 analogue of G3.4 | G4.1, Phase 2/3 adapters | **shipped (this increment)** |
-| G4.5 | **`corroborate` / `find-contradiction` operators + ensemble gate** (§7.2) — gather supporting/refuting evidence; `find-contradiction` as a first-class refuter generator; the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement) that authorises a persisted `refuted` flip; wires the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize` driver | G4.3, G4.4, G3.9 | planned |
+| G4.5 | **`corroborate` / `find-contradiction` operators + ensemble gate** (§7.2) — gather supporting/refuting evidence; `find-contradiction` as a first-class refuter generator; the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement) that authorises a persisted `refuted` flip; wires the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize` driver | G4.3, G4.4, G3.9 | **slice 1 shipped** (`core/ensemble_gate.py`): the refuted-flip authoriser — the pure decision algebra over the three channels + the LLM-channel bridge + the `DEFAULT_GATE` fixture; the symbolic/temporal channel producers, the `persist_verdicts` filter, and the `corroborate`/`find-contradiction` operators + `stabilize` wiring are the remaining slices |
 | G4.6 | **Validation gate** (§8 experiment) — planted-contradiction corpus (regression suite); measure retraction propagation, hypothesis-state flip, consistency-vs-verbalized confidence, ensemble-vs-single, candidate/refuter recall, level-attachment accuracy; bias-controlled scoring, not LLM-as-judge | G4.2–G4.5 | planned |
 
 Cross-cutting: the stored edge `strength` is **never** the raw LLM number (§8, §10) — it is the
@@ -562,8 +562,89 @@ mypy(`src/iknos`) clean (only the pre-existing `resolve.py` error remains); 538 
   adapter *consumes* them; the contract is exercised here with hand-built fixtures (as G3.4 defined
   the `DERIVED_FROM` contract before G3.8 wrote it).
 - **The ensemble gate (§7.2)** — `persist_verdicts` writes every verdict it is given; gating a flip
-  *to* `refuted` on ensemble agreement is the caller's filter (G4.5), kept out of the dumb writer.
+  *to* `refuted` on ensemble agreement is the caller's filter, kept out of the dumb writer. The
+  gate's decision core now exists (`core/ensemble_gate.py`, G4.5 slice 1); wiring it as that filter
+  is the rest of G4.5.
 - **Incremental / `SAME_AS`-canonicalized loads** — full current-state read over raw nodes (§13).
+
+## G4.5 — Ensemble gate, slice 1: the §7.2 refuted-flip authoriser (this increment)
+
+**What shipped.** `core/ensemble_gate.py` — the pure decision core of the §7.2 ensemble gate, the
+Phase-4 analogue of how `core/qbaf.py` is the pure adjudication core and `core/subjective_logic.py`
+the pure scoring core (no DB, no AGE, no LLM, no migration; a value algebra unit-testable in
+isolation). §7.2 is emphatic that the QBAF's *structural* `refuted` (`classify_state`, G4.1) is
+**not by itself a licence to persist a flip**: "a flip to `refuted` requires the **ensemble gate**
+(multi-sample LLM + symbolic + temporal agreement), never a single judgment." This slice is that
+authoriser — the **decision algebra** over the three channels — built before its channel producers
+and its consumer-filter, exactly as G4.1 fixed the adjudication core before G4.4 wired it to AGE.
+
+**1. The three channels (§6, §8 staged-build step 6).** `find-contradiction` "requires agreement
+across multi-sample LLM judgment, a symbolic consistency check, and (where time matters) a temporal
+check." Each is a `GateChannel` (`LLM` / `SYMBOLIC` / `TEMPORAL`); each reports a **three-way**
+`ChannelStance` — `AFFIRM` (agrees the refutation holds), `DISSENT` (positive signal *against* it),
+or `ABSTAIN` (no applicable/sufficient signal). The three-way stance is what makes the gate correct:
+a channel that *cannot speak* (the temporal check when time is irrelevant, or any producer not yet
+wired) must be distinguishable from one that *speaks against* — collapsing the two would let an
+inapplicable channel either block everything or rubber-stamp it.
+
+**2. The gate policy (the G3.5/G4.1-style fixture, decided before the engine).** Two policies are in
+tension — a **majority vote** across channels vs **unanimity-of-required with a universal dissent
+veto**. **Decision, recorded eyes-open: `DEFAULT_GATE` = unanimity-of-required, dissent-vetoing**,
+with `{LLM, SYMBOLIC}` required and `TEMPORAL` conditional. Refutation is irreversible-in-spirit (it
+retracts downstream conclusions, §7.3) and the standing §13 risk is **correlated LLM error the
+disciplines do not remove** — so the gate must not let a confident-but-wrong LLM channel carry a flip
+past a dissenting symbolic/temporal check, exactly the failure a majority vote permits (the fixture
+`test_decision_fixture_dissent_vetoes_where_majority_would_authorise` shows 2-affirm/1-dissent: a
+majority flips, the conservative gate withholds). This parallels every Phase-4 choice (Gödel over
+Viterbi, DF-QuAD over Quadratic Energy, averaging over cumulative): **default to the policy that
+cannot inflate certainty; retain the looser one at the seam** — `STRICT_GATE` (all three required)
+and `LLM_ONLY_GATE` (an MVP sub-domain acting on the LLM channel alone) are the retained values, so
+the choice stays reversible. `authorise(signals, gate)` is written once, generic over the gate.
+
+**3. The LLM-channel bridge.** `llm_channel(judgments)` derives the LLM channel's stance from the
+shipped G4.3 panel — the one channel computable today: a **stable** `REFUTES` `EdgeJudgment`
+(`sign_stable=True`) → `AFFIRM`; refuters present but **all sign-unstable** (the panel split
+direction) → `ABSTAIN` — precisely the `sign_stable=False` finding the producer surfaces and "the
+gate must clear before a `refuted` flip", never silently averaged into an affirmation; no refuter →
+`ABSTAIN` (absence is not dissent). `symbolic_channel` / `temporal_channel` are present-but-ABSTAIN
+**seams** until their producers land. `authorise_from_panel` / `authorised_hypotheses` assemble the
+channels and gate in one call — the shape the `persist_verdicts` filter / `find-contradiction`
+operator (later slices) call per structurally-refuted hypothesis.
+
+**Safe-by-default while the ensemble is incomplete.** Because `SYMBOLIC` is *required* but its
+producer does not exist yet (ABSTAINs), `DEFAULT_GATE` **withholds every automated `refuted` flip
+until that producer lands** — the correct reading of §7.2 + principle 6 ("symbolic state
+authoritative; LLM proposes, engine disposes"): a structural refutation is **surfaced as a finding
+for expert review** (`GateDecision.is_finding`, the analogue of the QBAF surfacing non-convergence),
+never auto-persisted, until the full ensemble can speak. A deployment that wants to act on the LLM
+channel alone first swaps in `LLM_ONLY_GATE`, eyes-open.
+
+**Tests** (`tests/unit/test_ensemble_gate.py`, 26, DB-free). The decision fixture (dissent-vetoes-
+where-majority-authorises); the algebra (all-required-affirm authorises; any dissent vetoes incl. a
+non-required channel; required abstain / missing-required withholds; non-required abstain ignored;
+duplicate-channel raises; deterministic channel ordering); the gate variants (`LLM_ONLY_GATE`
+authorises on the panel alone but is still dissent-vetoed; `STRICT_GATE` requires temporal); the
+`llm_channel` bridge (stable-refuter affirm, all-unstable abstain, no-refuter abstain, one-stable-
+among-unstable affirm, strongest-reported, hypothesis filter); the ABSTAIN seams; and
+`authorise_from_panel` / `authorised_hypotheses` (safe-by-default withhold, explicit-symbolic
+authorise, temporal-dissent veto, per-hypothesis sorted decisions). ruff + `ruff format` clean;
+mypy(`src/iknos`) clean (only the pre-existing `resolve.py:164`).
+
+**Deferred (documented seams, the rest of G4.5):**
+
+- **The channel producers** — wiring **clingo/ASP** for `SYMBOLIC` (the logical-consistency check
+  that the refuting claim and the hypothesis are *actually* inconsistent, distinct from the QBAF
+  gradual adjudication being gated, §8(d)/Tooling) and the **bitemporal** check for `TEMPORAL`
+  (§7.4). Both ABSTAIN today; the gate's contract is what they fill.
+- **The consumer-filter** — wiring the gate into `qbaf_adapter.persist_verdicts` so an un-authorised
+  `refuted` verdict is surfaced (not written), keeping the writer dumb (the verdicts are filtered
+  *before* the call, per G4.4's design).
+- **The operators + composed-loop body** — `corroborate` / `find-contradiction` (the first-class
+  refuter generator, §5.1) feeding the `REFUTES→retract→A→B→QBAF` body into
+  `core/composed_loop.py::stabilize` (G3.9).
+- **A per-channel fusion refinement** — the LLM channel currently affirms on *any* stable refuter;
+  a future refinement may add a `DISSENT` for a strong stable `SUPPORTS` plurality against a
+  structurally-refuted hypothesis, and a strength/consensus floor (a G4.6 calibration target).
 
 ## Phase risks / decisions (carried from §8, §13)
 
