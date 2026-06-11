@@ -16,8 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.boxes.serde import case_box
 from iknos.core.extract import ExtractInput, Extractor
-from iknos.core.reference import ReferenceBinder
+from iknos.core.reference import BindingStage, ReferenceBinder
 from iknos.db.age import bootstrap_session, cypher_map, execute_cypher
+from iknos.domain.loader import load_pack
+from iknos.domain.packs import bundled_pack
 from iknos.types.edges import BindingState
 from iknos.types.nodes import Proposition, Span
 
@@ -236,3 +238,65 @@ async def test_binder_leaves_pronoun_unresolved_and_provisional(session: AsyncSe
         session, f"MATCH (m:Mention {bx}) RETURN count(m)", returns="n agtype"
     )
     assert int(str(mentions[0][0])) == 1
+
+
+async def test_binder_falls_through_to_taxonomy_stage(session: AsyncSession) -> None:
+    """G2.4 cascade tail: a mention the box cannot bind binds to a pack taxonomy node (§3.1)."""
+    await bootstrap_session(session)
+
+    # The pack supplies the taxonomy "Roller" the mention "the roller" exact-matches.
+    pack = bundled_pack("pump_basic")
+    await load_pack(session, pack)
+    await session.commit()
+
+    box = case_box("bind-taxonomy", "1", "test", 0.8)
+    # Only one proposition; its own "roller" entity is excluded from its referent pool (no
+    # self-binding), so the in-graph stage finds nothing and the cascade falls to the taxonomy.
+    extract_table = {
+        "replaced": [{"label": "roller", "type": "component", "kind": "object", "role": "subject"}]
+    }
+    p1 = await _seed_proposition(session, text_="The roller was replaced.")
+    await _extract(session, box, extract_table, [p1])
+
+    binder = _binder(
+        {"replaced": [{"surface": "the roller", "mention_type": "definite", "kind": "object"}]}
+    )
+    result = await binder.bind_box(session, box.id)
+
+    # The mention confirm-binds to the taxonomy node via the taxonomy stage.
+    assert len(result.bound) == 1
+    bound = result.bound[0]
+    assert bound.state is BindingState.CONFIRMED
+    assert bound.stage is BindingStage.TAXONOMY
+    # A confirmed binding (even cross-box to the taxonomy) leaves its proposition non-provisional.
+    assert result.provisional_propositions == []
+    assert await _provisional(session, p1[1]) == "null"
+
+    # The REFERS_TO points cross-box at the pack's "Roller" Object, state CONFIRMED.
+    rows = await execute_cypher(
+        session,
+        f"MATCH (m:Mention {{box: '{box.id}'}})-[r:REFERS_TO]->(t:Object) "
+        "RETURN r.state, t.label, t.box",
+        returns="state agtype, label agtype, tbox agtype",
+    )
+    assert len(rows) == 1
+    state, label, tbox = rows[0]
+    assert str(state).strip('"') == str(BindingState.CONFIRMED)
+    assert str(label).strip('"') == "Roller"
+    assert str(tbox).strip('"') == str(pack.box_id)  # the target lives in the pack box
+
+    # The bind Action records the cascade-tail binding in its `taxonomy` output (§10.1).
+    act = await session.execute(
+        text(
+            "SELECT outputs FROM actions WHERE actor = 'reference-binder' "
+            "AND inputs->>'proposition' = :p"
+        ),
+        {"p": str(p1[1].id)},
+    )
+    outputs = act.one().outputs
+    assert len(outputs["taxonomy"]) == 1
+    assert len(outputs["confirmed"]) == 1
+
+    # Idempotent re-run: the settled proposition is skipped, no new binding.
+    again = await binder.bind_box(session, box.id)
+    assert again.bound == []

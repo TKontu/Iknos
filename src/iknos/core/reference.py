@@ -6,10 +6,17 @@ graph. **Reference binding is a separate, scored decision, not resolved invisibl
 *detecting* that a mention needs a referent is robust, but choosing *which* entity is
 error-prone, so the two steps are split (as sign is split from magnitude in §8). This
 module detects ``Mention``s and binds each to a canonical entity by a defeasible,
-confidence-bearing ``REFERS_TO`` edge through the scoped cascade (§3.1):
+confidence-bearing ``REFERS_TO`` edge through the scoped cascade (§3.1), tried in order and
+**falling through only when a stage leaves the mention unresolved**:
 
     local discourse antecedent → an entity already in the graph for that box →
     an entity in the domain-pack taxonomy → unresolved
+
+The **in-graph-entity** and **domain-pack-taxonomy** stages ship (:func:`resolve_binding`):
+a mention the box's own entities cannot bind falls through to the active pack taxonomy (the
+same ``Object`` nodes ``core/anchor`` links to), binding ``REFERS_TO`` a taxonomy node — the
+§3.1 cascade tail, unblocked by the G2.8 entity-linking subsystem. The leading
+**discourse-antecedent** stage (pronoun anaphora) is still a seam.
 
 The default is **conservative**: a binding is ``CONFIRMED`` only when a single referent
 clears a high bar; otherwise it stays **open** (one or more ``CANDIDATE`` edges) and the
@@ -36,10 +43,11 @@ Scope deliberately left to later slices (documented seams):
   mentions and leaves them **unresolved** (→ proposition ``provisional``), which is the
   correct conservative behaviour, not a silent miss. Binding them needs the discourse-order
   antecedent stage (a dedicated coreference model, §3.1) → a later increment.
-- **Taxonomy-anchor stage.** Binding a mention to a domain-pack taxonomy node needs
-  entity-linking, now shipped (``core/anchor``, G2.8). Unblocked → a later increment adds the
-  ``REFERS_TO``-to-taxonomy cascade stage reusing that linker (G2.8 slice 2 wired the linker
-  into ``resolve``/``partwhole``, not yet into this binder).
+- **Taxonomy stage fires only on an unresolved in-graph result.** When the in-graph stage
+  yields an open ``CANDIDATE`` (the mention plausibly binds in-graph but ambiguously), the
+  cascade stops there rather than *also* piling taxonomy candidates on — that open binding is
+  already recorded and triageable. Using the taxonomy to *break* an in-graph candidate tie is
+  a later enhancement, like the relational disambiguation below.
 - **Relational disambiguation.** When several same-kind referents match a definite
   description equally, this slice keeps them all as ``CANDIDATE`` (ambiguous → open); using
   shared-fact/role context to *break* the tie (the ``resolve.score_pair`` relational signal)
@@ -59,7 +67,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -72,8 +80,16 @@ from iknos.core.resolve import normalize_label
 from iknos.provenance.action_log import record_action
 from iknos.types.edges import BindingState
 
-# Note: iknos.db.age is imported lazily inside the ReferenceBinder DB methods (see module
-# docstring), so importing this module stays DB-free for the unit tests of the cascade.
+if TYPE_CHECKING:
+    # Type-only import: ``core/anchor`` imports ``Referent``/``group_referents`` from this
+    # module, so a runtime ``reference -> anchor`` import would be circular. ``TaxonomyNode`` is
+    # referenced only in string annotations on the taxonomy-stage functions below; the linker
+    # itself is imported lazily inside :meth:`ReferenceBinder.bind_box`.
+    from iknos.core.anchor import TaxonomyNode
+
+# Note: iknos.db.age (and iknos.core.anchor) is imported lazily inside the ReferenceBinder DB
+# methods (see module docstring), so importing this module stays DB-free for the unit tests of
+# the cascade.
 
 # Bump on any change to the binding pipeline (the cascade weights/bars, the blocking or
 # scoring logic, the detection prompt/schema). Stored on each bind Action so a REFERS_TO
@@ -96,6 +112,15 @@ REFER_TIE_MARGIN = 0.05
 _W_CONTAIN = 0.60
 _W_EXACT = 0.25
 _W_KIND = 0.15
+
+# Taxonomy-stage weights. No kind term — the pack taxonomy is single-kind (``Object``, §9/§14),
+# so the detector's actor/object guess never gates or scores a taxonomy binding (a mention
+# mis-guessed ``actor`` can still bind the right taxonomy ``Object``, mirroring ``anchor``).
+# Kind's weight folds into containment; chosen, like the in-graph stage, so an exact label
+# confirms while mere containment in a fuller taxonomy name ("the bearing" ⊂ "Rolling-element
+# bearing") lands in the candidate band.
+_W_TAX_CONTAIN = 0.70
+_W_TAX_EXACT = 0.30
 
 
 class MentionType(StrEnum):
@@ -353,6 +378,135 @@ def decide_binding(mention: Mention, referents: list[Referent]) -> BindingDecisi
     return BindingDecision(state=BindingState.CANDIDATE, targets=top_band)
 
 
+# --- taxonomy stage (the §3.1 cascade tail; reuses the G2.8 pack taxonomy) ----------------
+
+
+def block_taxonomy(mention: Mention, nodes: "list[TaxonomyNode]") -> "list[TaxonomyNode]":
+    """Taxonomy blocking: pack ``Object`` nodes sharing ≥1 normalized token with ``mention``.
+
+    Lexical only, **no kind gate** — the taxonomy is single-kind (§9/§14), so a mention the
+    detector guessed ``actor`` can still bind the right taxonomy ``Object`` (the ``anchor``
+    discipline). A pronoun (no lexical content) shares no token → empty set, correctly
+    un-bindable by this lexical stage.
+    """
+    m_tokens = mention.tokens
+    if not m_tokens:
+        return []
+    return [n for n in nodes if m_tokens & n.tokens]
+
+
+def score_taxonomy_binding(mention: Mention, node: "TaxonomyNode") -> float:
+    """Deterministic mention→taxonomy binding score in [0, 1] (§3.1, lexical only).
+
+    Mirrors :func:`score_binding` without the kind term (taxonomy is single-kind): the
+    fraction of the mention's surface tokens covered by the taxonomy label (containment),
+    plus an exact normalized-label bonus. Weighted so an exact label confirms while mere
+    containment in a fuller taxonomy name lands in the candidate band — partial evidence
+    never auto-confirms.
+    """
+    m_tokens = mention.tokens
+    if not m_tokens:
+        return 0.0
+    containment = len(m_tokens & node.tokens) / len(m_tokens)
+    exact = 1.0 if mention.norm and mention.norm == node.norm else 0.0
+    score = _W_TAX_CONTAIN * containment + _W_TAX_EXACT * exact
+    return max(0.0, min(1.0, score))
+
+
+@dataclass(frozen=True)
+class TaxonomyBindingDecision:
+    """The taxonomy stage's verdict: state + chosen taxonomy targets (cf. ``BindingDecision``)."""
+
+    state: BindingState | None
+    targets: "list[tuple[TaxonomyNode, float]]"
+
+
+def decide_taxonomy_binding(
+    mention: Mention, nodes: "list[TaxonomyNode]"
+) -> TaxonomyBindingDecision:
+    """Score the blocked taxonomy nodes and pick the binding decision (§3.1 conservative default).
+
+    Identical bar/tie discipline to :func:`decide_binding` (``CONFIRMED`` only for a single
+    node clearing the confirm bar with no near-tie; an ambiguous cross-pack homonym stays
+    ``CANDIDATE`` over the tie-band; nothing above the candidate bar is unresolved), broken
+    deterministically by taxonomy-node id.
+    """
+    scored = [(n, score_taxonomy_binding(mention, n)) for n in block_taxonomy(mention, nodes)]
+    viable = [(n, s) for n, s in scored if s >= REFER_CANDIDATE_BAR]
+    if not viable:
+        return TaxonomyBindingDecision(state=None, targets=[])
+
+    best = max(s for _, s in viable)
+    top_band = sorted(
+        (ns for ns in viable if best - ns[1] <= REFER_TIE_MARGIN),
+        key=lambda ns: (-ns[1], str(ns[0].id)),
+    )
+    if len(top_band) == 1 and best >= REFER_CONFIRM_BAR:
+        return TaxonomyBindingDecision(state=BindingState.CONFIRMED, targets=top_band)
+    return TaxonomyBindingDecision(state=BindingState.CANDIDATE, targets=top_band)
+
+
+class BindingStage(StrEnum):
+    """Which cascade stage produced a binding (§3.1) — recorded for audit on the bound mention.
+
+    ``IN_GRAPH`` (bound to a box entity) vs ``TAXONOMY`` (bound to a domain-pack taxonomy node,
+    the fallback). The leading discourse-antecedent stage is a seam, so it never appears yet.
+    """
+
+    IN_GRAPH = "in-graph"
+    TAXONOMY = "taxonomy"
+
+
+@dataclass(frozen=True)
+class CascadeBinding:
+    """The full cascade's verdict for one mention: state + target ids + which stage bound it.
+
+    ``targets`` are the chosen referent/taxonomy **canonical ids** with their strengths (the
+    stage is abstracted away so the persist loop writes ``REFERS_TO`` uniformly). ``stage`` is
+    ``None`` exactly when unresolved. ``resolved`` (CONFIRMED-only) is the single signal the
+    binder uses to keep the dependent proposition non-provisional.
+    """
+
+    state: BindingState | None
+    targets: list[tuple[uuid.UUID, float]]
+    stage: BindingStage | None
+
+    @property
+    def resolved(self) -> bool:
+        return self.state is BindingState.CONFIRMED
+
+
+def resolve_binding(
+    mention: Mention,
+    referents: list[Referent],
+    taxonomy: "list[TaxonomyNode]",
+) -> CascadeBinding:
+    """Run the §3.1 binding cascade: in-graph entity → domain-pack taxonomy → unresolved.
+
+    The in-graph stage (:func:`decide_binding`) is tried first; the taxonomy stage
+    (:func:`decide_taxonomy_binding`) fires **only when it leaves the mention fully
+    unresolved** — an open in-graph ``CANDIDATE`` is already a recorded, triageable binding, so
+    the cascade does not also pile taxonomy candidates onto it (breaking an in-graph tie with
+    the taxonomy is a documented seam). Returns the committed/open state, the target canonical
+    ids with strengths, and the producing stage.
+    """
+    in_graph = decide_binding(mention, referents)
+    if in_graph.state is not None:
+        return CascadeBinding(
+            state=in_graph.state,
+            targets=[(r.canonical, s) for r, s in in_graph.targets],
+            stage=BindingStage.IN_GRAPH,
+        )
+    tax = decide_taxonomy_binding(mention, taxonomy)
+    if tax.state is not None:
+        return CascadeBinding(
+            state=tax.state,
+            targets=[(n.id, s) for n, s in tax.targets],
+            stage=BindingStage.TAXONOMY,
+        )
+    return CascadeBinding(state=None, targets=[], stage=None)
+
+
 def mention_to_props(mention: Mention, box: uuid.UUID) -> dict[str, Any]:
     """Flatten a :class:`Mention` to AGE vertex properties — the canonical write contract.
 
@@ -408,11 +562,16 @@ class BindInput:
 
 @dataclass(frozen=True)
 class BoundMention:
-    """One detected + bound mention, as written/returned by the binder."""
+    """One detected + bound mention, as written/returned by the binder.
+
+    ``stage`` records which cascade stage bound it (``IN_GRAPH``/``TAXONOMY``), ``None`` when
+    unresolved — the audit signal for the §3.1 cascade tail.
+    """
 
     mention: Mention
     state: BindingState | None
     targets: list[uuid.UUID] = field(default_factory=list)
+    stage: BindingStage | None = None
 
 
 @dataclass(frozen=True)
@@ -556,13 +715,16 @@ class ReferenceBinder:
         box: uuid.UUID,
         mentions: list[Mention],
         referents: list[Referent],
+        taxonomy: "list[TaxonomyNode]",
     ) -> tuple[uuid.UUID, list[BoundMention], bool]:
         """Persist one proposition's Mentions + REFERS_TO + provisional flag + Action.
 
         Returns ``(action_id, bound_mentions, proposition_made_provisional)``. One short
-        transaction per proposition (the extractor's ``_persist`` discipline). A proposition
-        is marked ``provisional`` (OR-folded, never cleared — the proposition-layer discipline)
-        when any of its mentions is unresolved or only candidate-bound (§3.1).
+        transaction per proposition (the extractor's ``_persist`` discipline). Each mention
+        runs the full §3.1 cascade (:func:`resolve_binding`) over the box ``referents`` then the
+        active ``taxonomy``; a proposition is marked ``provisional`` (OR-folded, never cleared —
+        the proposition-layer discipline) when any of its mentions is unresolved or only
+        candidate-bound.
         """
         from iknos.db.age import execute_cypher, merge_edge, merge_vertex
 
@@ -582,24 +744,30 @@ class ReferenceBinder:
                     props={"box": str(box)},
                 )
 
-            decision = decide_binding(mention, referents)
+            binding = resolve_binding(mention, referents, taxonomy)
             targets: list[uuid.UUID] = []
             # targets is non-empty iff state is CONFIRMED/CANDIDATE (never None — unresolved
-            # carries no targets), so the binding state is committed here.
-            for referent, strength in decision.targets:
-                assert decision.state is not None
+            # carries no targets), so the binding state is committed here. The dst is a box
+            # entity (in-graph stage) or a cross-box taxonomy node (taxonomy stage); REFERS_TO
+            # is written uniformly to the chosen canonical id either way.
+            for target_id, strength in binding.targets:
+                assert binding.state is not None
                 await merge_edge(
                     session,
                     src_id=mention.id,
-                    dst_id=referent.canonical,
+                    dst_id=target_id,
                     label="REFERS_TO",
                     props=refers_to_to_props(
-                        box=box, state=decision.state, strength=strength, now=now
+                        box=box, state=binding.state, strength=strength, now=now
                     ),
                 )
-                targets.append(referent.canonical)
-            bound.append(BoundMention(mention=mention, state=decision.state, targets=targets))
-            if not decision.resolved:
+                targets.append(target_id)
+            bound.append(
+                BoundMention(
+                    mention=mention, state=binding.state, targets=targets, stage=binding.stage
+                )
+            )
+            if not binding.resolved:
                 any_open = True
 
         if any_open:
@@ -636,6 +804,13 @@ class ReferenceBinder:
                     for t in m.targets
                 ],
                 "unresolved": [str(m.mention.id) for m in bound if m.state is None],
+                # The §3.1 cascade tail: which bindings fell through to the taxonomy stage.
+                "taxonomy": [
+                    f"{m.mention.id}->{t}"
+                    for m in bound
+                    if m.stage is BindingStage.TAXONOMY
+                    for t in m.targets
+                ],
                 "provisional": any_open,
             },
             model=self.llm.model,
@@ -650,14 +825,20 @@ class ReferenceBinder:
         The §6 operator shape, box-scoped. Loads the box's entity pool once, then for each
         not-yet-bound proposition detects its mentions (concurrent, DB-free) and binds them
         against the referents **other than that proposition's own** entities (no self-binding),
-        marking provisional where the binding stays open. Emits one ``bind`` Action per
-        proposition (``actor="reference-binder"``); idempotent on settled propositions. Call
-        **after** extraction has populated the box (and, ideally, after resolution — binding to
-        canonical components is cleaner — though grouping referents by label makes this slice
-        robust to running before resolve).
+        marking provisional where the binding stays open. A mention the box's own entities
+        cannot bind falls through to the active domain-pack taxonomy (the §3.1 cascade tail).
+        Emits one ``bind`` Action per proposition (``actor="reference-binder"``); idempotent on
+        settled propositions. Call **after** extraction has populated the box (and, ideally,
+        after resolution — binding to canonical components is cleaner — though grouping
+        referents by label makes this slice robust to running before resolve).
         """
+        from iknos.core.anchor import EntityLinker
+
         entities, by_prop = await self._load_entities(session, box)
         items = await self._load_propositions(session, box)
+        # The cascade-tail target pool: the active packs' taxonomy nodes (lazy import avoids the
+        # reference <-> anchor module cycle). Loaded once, like the in-graph entity pool.
+        taxonomy = await EntityLinker().load_active_taxonomy(session)
 
         # Phase 1: idempotency filter (serial reads on the shared session).
         pending: list[BindInput] = []
@@ -679,7 +860,7 @@ class ReferenceBinder:
                 entities, exclude_ids=frozenset(by_prop.get(item.proposition_id, set()))
             )
             action_id, bound, made_provisional = await self._persist(
-                session, item, box, mentions, referents
+                session, item, box, mentions, referents, taxonomy
             )
             last_action = action_id
             all_bound.extend(bound)

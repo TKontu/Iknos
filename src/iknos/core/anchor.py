@@ -302,6 +302,20 @@ class EntityLinker:
 
         return [uuid.UUID(p["id"]) for p in await list_active_packs(session)]
 
+    async def load_active_taxonomy(
+        self, session: AsyncSession, *, pack_box_ids: list[uuid.UUID] | None = None
+    ) -> list[TaxonomyNode]:
+        """The active packs' taxonomy ``Object`` nodes — the anchor/bind target population (§9).
+
+        The public entry point onto the cascade's candidate pool, reused by the reference
+        binder's taxonomy stage (G2.4) as well as :meth:`anchor_box`. Scoping mirrors
+        ``anchor_box``: ``None`` anchors against all active packs (``list_active_packs``); a
+        ``pack_box_ids`` override is the investigation-activation seam (Phase 6).
+        """
+        if pack_box_ids is None:
+            pack_box_ids = await self._active_pack_box_ids(session)
+        return await self._load_taxonomy(session, pack_box_ids)
+
     async def _load_taxonomy(
         self, session: AsyncSession, pack_box_ids: list[uuid.UUID]
     ) -> list[TaxonomyNode]:
