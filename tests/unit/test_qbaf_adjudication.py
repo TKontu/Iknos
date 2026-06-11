@@ -11,14 +11,12 @@ import pytest
 
 from iknos.core.qbaf import (
     BAF,
-    DEFAULT_BANDS,
     Edge,
-    HypothesisState,
-    Verdict,
-    VerdictBands,
+    aggregate_evidence,
     classify_state,
     solve,
 )
+from iknos.types.intentional import HypothesisState
 
 # --------------------------------------------------------------------------------------------
 # The engine: acyclic exactness, base-only, cyclic convergence, non-convergence surfacing
@@ -134,30 +132,30 @@ def test_acceptability_is_computed_from_evidence_not_the_base_score() -> None:
 
 
 # --------------------------------------------------------------------------------------------
-# Read-off: §11.2 verdict banding and the computed hypothesis state
+# Read-off: aggregate evidence + computed hypothesis state (banding itself lives in
+# types/intentional.py and is tested in test_intentional.py — not duplicated here).
 # --------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("acceptability", "expected"),
-    [
-        (1.0, Verdict.TRUE),
-        (0.75, Verdict.TRUE),  # cut-point inclusive
-        (0.74, Verdict.PLAUSIBLE),
-        (0.5, Verdict.PLAUSIBLE),
-        (0.49, Verdict.IMPLAUSIBLE),
-        (0.25, Verdict.IMPLAUSIBLE),
-        (0.24, Verdict.FALSE),
-        (0.0, Verdict.FALSE),
-    ],
-)
-def test_verdict_banding(acceptability: float, expected: Verdict) -> None:
-    assert DEFAULT_BANDS.band(acceptability) == expected
+def test_aggregate_evidence_recovers_per_node_support_and_attack() -> None:
+    """``aggregate_evidence`` returns the same per-node contributions ``solve`` folds, so
+    ``classify_state`` can be fed the support/attack at a hypothesis (DF-QuAD prob-sum)."""
+    baf = BAF(
+        arguments=frozenset({"h", "p1", "p2", "q"}),
+        supports=(Edge("p1", "h", 1.0), Edge("p2", "h", 1.0)),
+        attacks=(Edge("q", "h", 1.0),),
+    )
+    out = solve(baf, base={"h": 0.3, "p1": 0.5, "p2": 0.5, "q": 0.8})
+    supp, att = aggregate_evidence(baf, out.acceptability)["h"]
+    # supporters contribute 1.0·0.5 each → prob-sum(0.5, 0.5) = 0.75; attacker 1.0·0.8 = 0.8.
+    assert supp == pytest.approx(0.75)
+    assert att == pytest.approx(0.8)
 
 
 def test_classify_state_supported_refuted_unsupported() -> None:
-    """State is computed (§10), distinguishing actively-refuted from merely-unsupported."""
-    # Clears the support bar (default = plausible_min = 0.5) ⇒ supported.
+    """State is computed (§10), distinguishing actively-refuted from merely-unsupported. The
+    support bar is the §11.2 ``plausible`` boundary (single source of truth in intentional.py)."""
+    # Bands to plausible/true (≥ 0.5) ⇒ supported.
     assert (
         classify_state(acceptability=0.8, aggregate_support=0.9, aggregate_attack=0.1)
         is HypothesisState.SUPPORTED
@@ -170,15 +168,5 @@ def test_classify_state_supported_refuted_unsupported() -> None:
     # Below the bar with no net attack ⇒ unsupported (just insufficient support).
     assert (
         classify_state(acceptability=0.3, aggregate_support=0.2, aggregate_attack=0.0)
-        is HypothesisState.UNSUPPORTED
-    )
-
-
-def test_custom_support_bar_is_honoured() -> None:
-    """A stricter support bar (calibration target) re-points what counts as supported, without
-    touching the engine — the bands are data."""
-    strict = VerdictBands(support_min=0.9)
-    assert (
-        classify_state(acceptability=0.8, aggregate_support=0.9, aggregate_attack=0.0, bands=strict)
         is HypothesisState.UNSUPPORTED
     )
