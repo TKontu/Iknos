@@ -57,6 +57,11 @@ def _mock_substrate(vecs: list[list[float]]) -> MagicMock:
     """A substrate whose context yields the given pooled vectors, one per span in order."""
     context = MagicMock()
     context.pool_span = MagicMock(side_effect=list(vecs))
+    # G1.13 slice 2: _ingest_parsed reads the windowing policy (→ span_content_hash) and the
+    # window layout (→ segment Action). Real JSON-serializable dicts, not MagicMocks.
+    _policy = {"overlap": 1024, "model_max_tokens": 8192, "window_token_size": 8190}
+    context.windowing_policy = MagicMock(return_value=_policy)
+    context.window_layout = MagicMock(return_value={**_policy, "count": 1, "boundaries": [[0, 1]]})
     substrate = MagicMock()
     substrate.model_name = _MODEL
     substrate.embed_document = MagicMock(return_value=context)

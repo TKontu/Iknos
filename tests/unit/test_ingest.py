@@ -74,6 +74,24 @@ def test_content_hash_changes_on_parse_hash() -> None:
     assert a != b
 
 
+def test_content_hash_changes_on_windowing_policy() -> None:
+    # G1.13 slice 2: a changed embedding windowing policy yields different span vectors, so it
+    # must re-segment rather than silently reuse spans pooled under the old policy.
+    a = span_content_hash(
+        "hello world",
+        segmenter_params=_PARAMS,
+        model="BAAI/bge-m3",
+        windowing={"overlap": 1024, "model_max_tokens": 8192, "window_token_size": 8190},
+    )
+    b = span_content_hash(
+        "hello world",
+        segmenter_params=_PARAMS,
+        model="BAAI/bge-m3",
+        windowing={"overlap": 512, "model_max_tokens": 8192, "window_token_size": 8190},
+    )
+    assert a != b
+
+
 # --- sentence splitter (offset-preserving) ---
 
 

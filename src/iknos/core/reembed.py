@@ -17,9 +17,9 @@ Properties:
 - **Batched, per-batch transactions.** Span rows commit per document; proposition rows commit
   per ``batch_size`` group — bounded memory and durable progress over a large corpus.
 - **Fails loud, never silently mixes.** A target model with a different vector dimension is
-  rejected by the pgvector column type. A document longer than the model context raises
-  :class:`~iknos.core.embeddings.DocumentTooLongError` (G1.13) rather than re-embedding a
-  truncated prefix.
+  rejected by the pgvector column type. A document longer than the model context is embedded
+  in overlapping macro-windows (G1.13 slice 2, ``embed_document``) — full coverage, no
+  truncated prefix — so re-pooling a long document is as correct as ingesting it was.
 
 The substrate is taken by injection (a :class:`_Substrate`) so the target model is named once
 at the call site and an integration test can supply a deterministic stand-in instead of
@@ -109,7 +109,8 @@ async def _reembed_spans(session: AsyncSession, substrate: _Substrate, target: s
             logger.warning("document %s has dense rows but no document_content; skipping", doc_id)
             continue
 
-        # One late-chunking pass; every span pools from it (DocumentTooLongError surfaces here).
+        # One late-chunking pass (windowed for long documents, G1.13 slice 2); every span
+        # pools from it.
         context = substrate.embed_document(raw)
         rows = (
             await session.execute(

@@ -2,28 +2,110 @@ import pytest
 import torch
 
 from iknos.core.embeddings import (
-    MAX_MODEL_TOKENS,
     DocumentContext,
-    DocumentTooLongError,
-    _raise_if_truncated,
+    _plan_windows,
     mean_pool_normalize,
 )
 
-# --- truncation guard (G1.13 slice 1) ---
+# --- windowing plan (G1.13 slice 2) ---
 
 
-def test_raise_if_truncated_over_limit_refuses() -> None:
-    # A token count past the context window would be silently truncated → spans past the
-    # cutoff get zero vectors → invisible to dense retrieval. Refuse it loudly instead.
-    with pytest.raises(DocumentTooLongError, match="context window"):
-        _raise_if_truncated(MAX_MODEL_TOKENS + 1)
+def test_plan_windows_single_window_when_it_fits() -> None:
+    # A document at or under the window size is one window — the byte-identical path.
+    assert _plan_windows(0, window_size=10, overlap=4) == []
+    assert _plan_windows(1, window_size=10, overlap=4) == [(0, 1)]
+    assert _plan_windows(10, window_size=10, overlap=4) == [(0, 10)]
 
 
-def test_raise_if_truncated_at_and_under_limit_pass() -> None:
-    # Exactly filling the window (special tokens included) is fine; under it is fine.
-    _raise_if_truncated(MAX_MODEL_TOKENS)
-    _raise_if_truncated(MAX_MODEL_TOKENS - 100)
-    _raise_if_truncated(0)
+def test_plan_windows_overlapping_full_coverage() -> None:
+    # window_size 10, overlap 2 → stride 8. Every token index must be covered by some window,
+    # the last window is anchored full-size to the document end, and consecutive windows
+    # overlap by at least `overlap`.
+    plans = _plan_windows(20, window_size=10, overlap=2)
+    assert plans[0] == (0, 10)
+    assert plans[-1][1] == 20  # anchored to the end
+    assert all(e - s == 10 for s, e in plans)  # every window is full-size
+    covered: set[int] = set()
+    for s, e in plans:
+        covered.update(range(s, e))
+    assert covered == set(range(20))  # no gap
+    for (_s0, e0), (s1, _e1) in zip(plans, plans[1:], strict=False):  # pairwise: n vs n-1
+        assert s1 < e0  # consecutive windows overlap
+
+
+def test_plan_windows_rejects_overlap_ge_window() -> None:
+    # An overlap that does not advance the stride would never terminate; refuse it.
+    with pytest.raises(ValueError, match="overlap"):
+        _plan_windows(100, window_size=10, overlap=10)
+
+
+# --- multi-window pooling / interior-window selection (G1.13 slice 2) ---
+
+
+def _window(vec_by_token: list[tuple[int, int, list[float]]]):
+    """Build a (token_embeddings, offset_mapping) window from (start_char, end_char, vec) tuples."""
+    offsets = [(s, e) for s, e, _ in vec_by_token]
+    emb = torch.tensor([[v for _, _, v in vec_by_token]])  # (1, n_tokens, hidden)
+    return emb, offsets
+
+
+def test_pool_span_selects_most_interior_window() -> None:
+    # Two overlapping windows cover the same char range with *different* marker vectors, so we
+    # can see which window a span was pooled from. Window A covers chars [0,40), window B
+    # [20,60). A span at [22,26) overlaps both, but is far more interior to B (min-edge-dist
+    # 22-20=2 vs 40-26=14 → wait that's A) ... pick a span clearly interior to B.
+    win_a = _window([(i * 2, i * 2 + 2, [1.0, 0.0]) for i in range(20)])  # chars 0..40
+    win_b = _window([(20 + i * 2, 20 + i * 2 + 2, [0.0, 1.0]) for i in range(20)])  # chars 20..60
+    ctx = DocumentContext.from_windows([win_a, win_b], windowing={"overlap": 4})
+
+    # A span at [50,54) only exists in window B → pooled to B's marker [0,1].
+    only_b = ctx.pool_span(50, 54)
+    assert only_b == pytest.approx([0.0, 1.0])
+
+    # A span at [4,8) only exists in window A → pooled to A's marker [1,0].
+    only_a = ctx.pool_span(4, 8)
+    assert only_a == pytest.approx([1.0, 0.0])
+
+    # A span at [30,34) is in both windows' overlap. Distance to A's edges: min(30-0, 40-34)=6.
+    # Distance to B's edges: min(30-20, 60-34)=10. B is more interior → B's marker wins.
+    overlap_span = ctx.pool_span(30, 34)
+    assert overlap_span == pytest.approx([0.0, 1.0])
+
+
+def test_pool_span_every_span_gets_a_nonzero_vector_across_windows() -> None:
+    # A document spanning >2 windows: every span that has tokens pools to a non-zero vector
+    # (the silent-truncation failure mode is exactly a zero vector for a late span).
+    windows = [
+        _window([(base + i * 2, base + i * 2 + 2, [1.0, float(w)]) for i in range(10)])
+        for w, base in enumerate((0, 16, 32))
+    ]
+    ctx = DocumentContext.from_windows(windows, windowing={"overlap": 4})
+    for start in range(0, 50, 3):
+        vec = ctx.pool_span(start, start + 2)
+        assert any(c != 0.0 for c in vec), f"span at {start} pooled to a zero vector"
+
+
+def test_pool_span_no_token_overlap_returns_zero_vector() -> None:
+    # A whitespace-only span overlaps no token in any window → zero-vector fallback (the
+    # sentinel ingest skips; G1.17 will replace it with None).
+    win = _window([(0, 5, [1.0, 0.0]), (7, 12, [0.0, 1.0])])
+    ctx = DocumentContext.from_windows([win], windowing={})
+    assert ctx.pool_span(5, 7) == [0.0, 0.0]
+
+
+def test_window_layout_reports_count_and_boundaries() -> None:
+    win_a = _window([(0, 5, [1.0, 0.0])])
+    win_b = _window([(3, 9, [0.0, 1.0])])
+    ctx = DocumentContext.from_windows(
+        [win_a, win_b], windowing={"overlap": 4, "model_max_tokens": 8192}
+    )
+    layout = ctx.window_layout()
+    assert layout["count"] == 2
+    assert layout["boundaries"] == [[0, 5], [3, 9]]
+    assert layout["overlap"] == 4
+    # The policy view excludes the data-dependent count/boundaries.
+    assert "count" not in ctx.windowing_policy()
+    assert "boundaries" not in ctx.windowing_policy()
 
 
 def test_document_context_pool_span():

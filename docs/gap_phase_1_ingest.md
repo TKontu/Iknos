@@ -50,7 +50,12 @@ closures; G1.15 triggers one loud full re-extraction on first deploy. **G1.18 (s
 table payload in the parse wire contract) is now shipped** — a `TABLE` element carries a
 validated `Table`/`TableCell` grid through the wire schema, with element-relative cell
 offsets rebased to document-absolute at persistence; the 2-D structure now survives Stage 0
-(consumer stays Phase 2). Next: G1.13 slice 2 (windowed embedding).
+(consumer stays Phase 2). **G1.13 slice 2 (windowed embedding) is now shipped** — long
+documents are embedded in overlapping macro-windows (each span pooled from the window where
+it is furthest from an edge), so they ingest with full dense coverage instead of slice 1's
+fail-loud refusal (which is now removed); the windowing policy folds into `span_content_hash`
+and the window layout is recorded on the segment Action. Next: G1.6 quarantine enforcement
+(a Phase 2 entry item), then G1.17 robustness batch.
 
 ## Current implementation (baseline)
 
@@ -274,32 +279,47 @@ returns a zero vector; `persist_spans` skips those dense rows; the content is
 "silent false negative" §5.1 warns about. Segmentation similarity past the cutoff is
 likewise undefined. Two slices, shippable independently:
 
-- [x] **Slice 1 — fail-loud guard (do first; tiny).** `embed_document` now tokenizes
-      **without** truncation and raises `DocumentTooLongError` (`core/embeddings.py`,
-      same fail-loud pattern as `DocumentResegmentationError`) when the true token
-      count exceeds `MAX_MODEL_TOKENS` (8192) — before any forward pass, so no partial
-      index is written. The decision is a pure `_raise_if_truncated` (unit-tested over/
-      at/under the limit without loading the model). Silent data loss → loud refusal
-      until Slice 2 lands.
-- [ ] **Slice 2 — overlapping macro-windows ("late chunking over windows").**
-      Embed consecutive max-length windows with a fixed token overlap (start at
-      1024; make it a constant, not config). `DocumentContext` becomes a list of
-      windows, each with its own `token_embeddings` + char-offset mapping;
+- [x] **Slice 1 — fail-loud guard (do first; tiny).** *Superseded by Slice 2 and
+      removed.* The stopgap tokenized **without** truncation and raised
+      `DocumentTooLongError` (pure `_raise_if_truncated`) when the true token count
+      exceeded `MAX_MODEL_TOKENS` — turning silent data loss into a loud refusal "until
+      Slice 2 lands". Slice 2 now covers any length, so the error class and guard are
+      gone; their guarantee (no span silently dropped past the cutoff) is upheld by full
+      windowed coverage.
+- [x] **Slice 2 — overlapping macro-windows ("late chunking over windows").**
+      `embed_document` tokenizes the whole document once **without truncation**
+      (content tokens only) and tiles it into overlapping windows (`_plan_windows`,
+      fixed overlap `WINDOW_OVERLAP_TOKENS` = 1024 — a **constant, not config**), one
+      model forward pass per window, each re-framed with the model's own special tokens
+      (so interior windows are bracketed). `DocumentContext` holds a list of windows,
+      each with its own `token_embeddings` + char-offset mapping;
       `pool_span(start_char, end_char)` selects the window where the span sits
-      **furthest from a window edge** and pools there (never average across
-      windows). Callers (`ingest.py`, `segmentation.py`) keep their current API.
-- [ ] **Provenance + idempotency:** record the window layout (window count,
-      boundaries, overlap, model max length) in the segment `Action.inputs`, and
-      fold it into the `span_content_hash` inputs so a changed windowing policy
-      re-segments instead of silently reusing spans.
-- [ ] **Segmentation across windows:** compute adjacent-window similarities within
-      each macro-window; in overlap zones take the values from the window where both
-      compared positions are interior. Boundary placement must be identical for a
-      document that happens to fit one window.
-- [ ] **Tests:** a synthetic document spanning >2 windows gets a non-zero dense
-      vector for *every* span; a span straddling a window seam pools from the
-      interior window; ingest of the same long document twice is a no-op; the
-      single-window path is byte-identical to today's behaviour.
+      **furthest from a window edge** (maximizes `min(start−win_start, win_end−end)`
+      among windows containing the span's tokens) and pools there — never averaged
+      across windows. Callers (`ingest.py`, `segmentation.py`) keep their current API.
+- [x] **Provenance + idempotency:** the window layout (count, boundaries, overlap,
+      model max, window token size) is recorded on the segment `Action.inputs`
+      (`window_layout`), and the windowing **policy** (overlap / model max / window
+      size — `DocumentContext.windowing_policy`, not the data-dependent boundaries)
+      folds into `span_content_hash`, so a changed windowing policy re-segments instead
+      of silently reusing spans pooled under the old policy. One-time loud
+      resegmentation on first deploy, like G1.15.
+- [x] **Segmentation across windows:** realized through `pool_span`'s per-span
+      interior-window selection rather than a separate code path — each sentence pools
+      from its most-interior window, so two adjacent sentences (tiny relative to the
+      1024-token overlap) select the *same* window and their cosine compares embeddings
+      from one consistent context. A document that fits one window is byte-identical to
+      the pre-windowing path, so boundary placement is unchanged; `segmentation.py` is
+      untouched but for a comment documenting this transparency.
+- [x] **Tests (pure, hand-built windows):** `_plan_windows` covers single-window /
+      overlap-coverage / anchored-final-window / `overlap≥size` rejection; multi-window
+      `pool_span` selects the interior window for an overlap-zone span and the sole
+      window for an edge span; every span across >2 windows pools to a non-zero vector;
+      a no-token span returns the zero-vector fallback; `window_layout`/`windowing_policy`
+      shape; `span_content_hash` moves on a windowing-policy change. The model-backed
+      byte-identical / no-op-twice properties hold by construction (single window = n=1
+      case, pool math unchanged) and are exercised by the existing single-window
+      `pool_span` tests. *(`test_embeddings.py`, `test_ingest.py`.)*
 
 ### G1.14 — Polarity-aware agreement clustering + degenerate-sampling guard (§3.1) *(review C2 — **critical**, inflated confidence on negation flips)*
 
@@ -510,9 +530,11 @@ more work than adding the slot now.
    `Table`/`TableCell` grid through the wire schema; element-relative cell offsets rebased to
    document-absolute at persistence (`LAYOUT_SCHEMA_VERSION` → 2). Landed while the wire schema
    is still on a branch, as planned. Consumer stays Phase 2.
-7. **G1.13 slice 2 (windowed embedding)** — ← **next**: before the MinerU service starts
-   feeding real multi-page PDFs.
-8. **G1.6 quarantine enforcement** — stakes gating (G1.6 flag is set per node;
+7. ~~**G1.13 slice 2 (windowed embedding)**~~ — ✅ long documents embed in overlapping
+   macro-windows with full dense coverage (each span pooled from its most-interior window);
+   windowing policy folds into `span_content_hash`, window layout recorded on the segment
+   Action; slice 1's fail-loud ceiling removed. Single-window path byte-identical.
+8. **G1.6 quarantine enforcement** — ← **next**: stakes gating (G1.6 flag is set per node;
    edge-time enforcement gated on Phase 2 — make it a Phase 2 *entry* item).
 9. **G1.17 robustness batch** — one hardening PR.
 10. **G1.7b cross-doc reuse** + **G1.8 reference amortization** — remaining cost work.
