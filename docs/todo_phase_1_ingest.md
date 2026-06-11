@@ -27,8 +27,9 @@ robustness, table-contract, and rank-fusion work. **G1.13 slice 1** (truncation 
 **G1.14** (polarity-aware agreement + twin quarantine), **G1.15** (prompt/schema-hash cache
 key) and **G1.16** (embedding-model identity column + ingest guards + `reembed` reindex path)
 are now shipped — the two critical correctness fixes plus the two silent-staleness closures.
-G1.18 (table payload in the wire contract) and G1.13 slice 2 (windowed embedding) are the new
-front of the queue. See
+**G1.18** (structured table payload in the parse wire contract) is now shipped too — the
+table 2-D structure survives Stage 0. G1.13 slice 2 (windowed embedding) is the new front of
+the queue. See
 `gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state below; not every box maps
 1:1 to a gap ID.)*
 
@@ -48,12 +49,18 @@ front of the queue. See
 - [ ] **Tables → structured observations:** ingest table rows/cells as propositions with
       column semantics preserved (observation-class, §3.1); do not flatten to prose.
       *(Phase 2; `ParseKind.TABLE` reserved.)*
-- [ ] **Table structure must survive Stage 0 (G1.18 — do now, while the wire schema is
-      on a branch):** add the optional structured `table` payload (cell grid with
-      per-cell `[start, end)` into the same reading-order blob + bbox) to
-      `ParseElement` and the MinerU wire schema. Without it a TABLE element is just a
-      char range — the 2-D structure is destroyed at the trust boundary and the Phase-2
-      consumer has nothing to read. *(Review A1.)*
+- [x] **Table structure survives Stage 0 (G1.18):** `core/parse.py` now carries an
+      optional structured `Table`/`TableCell` payload on a `TABLE` `ParseElement` (and
+      `OffsetSpec`), threaded through the MinerU wire schema (`_WireTable`/`_WireCell`).
+      Cell `[start, end)` offsets are **element-relative** (into the element's own text —
+      keeping `ParseElement` position-independent, the module's anti-drift principle) and
+      rebased to **document-absolute** at persistence in `layouts_for_spans` (into
+      `raw_text`, the coordinate spans live in), so cell provenance resolves to spans and
+      visual provenance still works. Grid consistency (cells fit `n_rows × n_cols`, no two
+      overlap; sparse/merged cells allowed — *not* the strict element-tiling rule) is
+      validated in `Table.__post_init__`; cell-offset-vs-element-text and cell-bbox-needs-
+      element-frame in `ParseElement.__post_init__` — both fail loud at the trust boundary.
+      `LAYOUT_SCHEMA_VERSION` bumped to 2. Consumer stays Phase 2. *(Review A1.)*
 - [ ] **Figures located here, interpreted later:** store figure region + caption + bbox;
       a vision `extract` operator (Phase 2/§3) reads propositions off the figure, flagged
       provisional. *(Phase 2; `ParseKind.FIGURE`/`CAPTION` reserved.)*

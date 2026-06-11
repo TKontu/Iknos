@@ -46,7 +46,10 @@ PARSE_SCHEMA_VERSION = 1
 
 # The persisted ``Span.layout`` dict shape. Stored opaquely (the parser owns its shape)
 # but versioned so the Phase-2 QA-overlay reader and the faithfulness reader can branch.
-LAYOUT_SCHEMA_VERSION = 1
+# v2 (G1.18): a region may carry a ``table`` payload (structured cell grid with
+# document-absolute cell offsets); a region entry may also be geometry-less (all-None
+# page/bbox) when it exists only to carry a table whose element lacked page geometry.
+LAYOUT_SCHEMA_VERSION = 2
 
 # Reading-order join between elements. Part of the contract (so PARSE_SCHEMA_VERSION):
 # changing it re-assigns every char range, which must invalidate downstream parses.
@@ -80,6 +83,94 @@ class SourceQuality(StrEnum):
 
 
 @dataclass(frozen=True)
+class TableCell:
+    """One cell of a parsed table (G1.18, review A1).
+
+    ``[start, end)`` is **element-relative**: it indexes into the parent
+    :class:`ParseElement`'s own ``text`` (``element.text[start:end]`` *is* the cell's text),
+    not the document blob — so a cell is position-independent exactly like its element, and
+    its document-absolute provenance is resolved only at persistence
+    (:func:`layouts_for_spans`), where the element's place in the reading-order text is known.
+
+    ``row``/``col`` are 0-based grid coordinates; ``row_span``/``col_span`` (≥ 1) cover merged
+    cells; ``is_header`` marks a header cell (the column/row semantics the Phase-2 extractor
+    reads to ingest cells as observation-class propositions, §3.1). ``bbox`` is optional
+    per-cell geometry **in the parent element's coordinate frame** — origin/page_size/unit are
+    inherited, a cell never re-declares the frame — so a cell bbox is only meaningful, and only
+    permitted, when the element itself carries a region (enforced by :class:`ParseElement`).
+
+    This type validates only what is text-independent (offset ordering, non-negative grid
+    coords, positive spans); cell-offset-vs-element-text bounds are checked by
+    :class:`ParseElement` (which owns the text) and grid-fit/overlap by :class:`Table` (which
+    owns the grid extent).
+    """
+
+    row: int
+    col: int
+    start: int
+    end: int
+    row_span: int = 1
+    col_span: int = 1
+    is_header: bool = False
+    bbox: tuple[float, float, float, float] | None = None
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.start < self.end:
+            raise ValueError(
+                f"TableCell offsets must satisfy 0 <= start < end (got start={self.start}, "
+                f"end={self.end})"
+            )
+        if self.row < 0 or self.col < 0:
+            raise ValueError(f"TableCell row/col must be >= 0 (got row={self.row}, col={self.col})")
+        if self.row_span < 1 or self.col_span < 1:
+            raise ValueError(
+                f"TableCell row_span/col_span must be >= 1 (got row_span={self.row_span}, "
+                f"col_span={self.col_span})"
+            )
+
+
+@dataclass(frozen=True)
+class Table:
+    """The preserved 2-D structure of a ``ParseKind.TABLE`` element (G1.18, review A1).
+
+    Without this a ``TABLE`` element is a flat char range and the row/column structure is
+    destroyed at the Stage-0 trust boundary — the Phase-2 table extractor would have nothing
+    to read but prose. ``cells`` need **not** tile the grid or the element text: sparse tables,
+    and whitespace/separators between cells, are fine (this is *not* the strict element-tiling
+    rule of :meth:`ParseResult.from_offsets`). They must only be *consistent*: every cell sits
+    inside the ``n_rows × n_cols`` grid and no two cells claim the same grid position once
+    ``row_span``/``col_span`` are expanded. Offset-vs-text validation belongs to the owning
+    :class:`ParseElement`; this type owns only the (text-independent) grid.
+    """
+
+    n_rows: int
+    n_cols: int
+    cells: tuple[TableCell, ...]
+
+    def __post_init__(self) -> None:
+        if self.n_rows < 1 or self.n_cols < 1:
+            raise ValueError(
+                f"Table must have n_rows >= 1 and n_cols >= 1 (got {self.n_rows}x{self.n_cols})"
+            )
+        occupied: set[tuple[int, int]] = set()
+        for i, cell in enumerate(self.cells):
+            if cell.row + cell.row_span > self.n_rows or cell.col + cell.col_span > self.n_cols:
+                raise ValueError(
+                    f"TableCell[{i}] at ({cell.row}, {cell.col}) with span "
+                    f"({cell.row_span}, {cell.col_span}) extends past the "
+                    f"{self.n_rows}x{self.n_cols} grid"
+                )
+            for r in range(cell.row, cell.row + cell.row_span):
+                for c in range(cell.col, cell.col + cell.col_span):
+                    if (r, c) in occupied:
+                        raise ValueError(
+                            f"TableCell[{i}] claims grid position ({r}, {c}) already occupied "
+                            "by another cell"
+                        )
+                    occupied.add((r, c))
+
+
+@dataclass(frozen=True)
 class ParseElement:
     """One reading-order unit from the parser: its text, plus optional page geometry.
 
@@ -98,6 +189,7 @@ class ParseElement:
     page_size: tuple[float, float] | None = None  # (width, height) in ``unit``
     unit: str | None = None  # "px" | "pt"
     source_quality: SourceQuality | None = None
+    table: Table | None = None  # G1.18: 2-D structure, only on a TABLE element
 
     def __post_init__(self) -> None:
         # Empty text would create an ambiguous zero-width char range that no span can
@@ -121,6 +213,29 @@ class ParseElement:
                 "(a bbox is unrenderable without its coordinate frame, which is not "
                 "recoverable later)"
             )
+        # A table payload describes a 2-D grid, which is only meaningful on a TABLE element;
+        # accepting one on a paragraph would silently mislabel structure (G1.18).
+        if self.table is not None:
+            if self.kind is not ParseKind.TABLE:
+                raise ValueError(
+                    f"ParseElement.table is only valid on a TABLE element (kind={self.kind})"
+                )
+            # The element owns its text, so it is the validator for element-relative cell
+            # offsets: a cell ending past this element's text would resolve to a foreign or
+            # out-of-range slice once rebased to document coordinates at persistence.
+            for i, cell in enumerate(self.table.cells):
+                if cell.end > len(self.text):
+                    raise ValueError(
+                        f"TableCell[{i}] end {cell.end} exceeds the element text length "
+                        f"{len(self.text)} — cell offsets are element-relative"
+                    )
+                # A cell bbox lives in the element's coordinate frame; with no element region
+                # there is no frame to inherit, so the bbox would be unrenderable.
+                if cell.bbox is not None and not self.has_region:
+                    raise ValueError(
+                        f"TableCell[{i}] carries a bbox but its element has no region — a cell "
+                        "bbox shares the element's coordinate frame, which is absent"
+                    )
 
     @property
     def has_region(self) -> bool:
@@ -139,6 +254,13 @@ class OffsetSpec:
     blob at these offsets, so the element text and the offsets cannot disagree by construction.
     Geometry mirrors :class:`ParseElement` and is validated identically (all-or-nothing region,
     bbox implies its full coordinate frame).
+
+    ``table`` (G1.18) is the optional structured grid for a ``TABLE`` element. Note the offset
+    origins differ by design: the element's own ``start``/``end`` are **absolute** into the
+    parser's text blob (they have to be, to tile it), whereas the table's cell offsets are
+    **element-relative** (into ``text[start:end]``) — :class:`Table`/:class:`TableCell` are
+    position-independent like :class:`ParseElement`, so :meth:`ParseResult.from_offsets` can
+    attach the table to the sliced element without rebasing.
     """
 
     kind: ParseKind
@@ -150,6 +272,7 @@ class OffsetSpec:
     page_size: tuple[float, float] | None = None
     unit: str | None = None
     source_quality: SourceQuality | None = None
+    table: Table | None = None
 
 
 @dataclass(frozen=True)
@@ -221,7 +344,10 @@ class ParseResult:
         - every inter-element gap (and any head/tail remainder) is **whitespace-only** — a gap
           holding real characters means the parser left text unassigned to any element, which
           would silently vanish from the reading-order text and from every span's provenance;
-        - geometry completeness is enforced by :class:`ParseElement` (a bbox implies its frame).
+        - geometry completeness is enforced by :class:`ParseElement` (a bbox implies its frame);
+        - a ``table`` payload's grid is validated by :class:`Table` (cells fit the grid, none
+          overlap) and its element-relative cell offsets by :class:`ParseElement` (within the
+          sliced element text) — both at construction, so a malformed table fails loud here.
 
         Raises :class:`ValueError` on any violation; the caller (the HTTP client) surfaces it
         as a hard parse failure rather than persisting a subtly-wrong parse.
@@ -255,6 +381,10 @@ class ParseResult:
                     page_size=spec.page_size,
                     unit=spec.unit,
                     source_quality=spec.source_quality,
+                    # Cell offsets are element-relative, so the table attaches to the sliced
+                    # element with no rebasing; ParseElement re-validates them against the
+                    # slice length (the trust-boundary check the gap plan asks for here).
+                    table=spec.table,
                 )
             )
             cursor = spec.end
@@ -364,32 +494,62 @@ def layouts_for_spans(
     For each span, every element whose derived char range has a **non-empty
     intersection** with the span contributes a region, in reading order; a span covering
     a column/page break therefore yields multiple regions. ``None`` when no overlapping
-    element carries geometry — including the entire null-parser case (text-only
-    elements), which reproduces the pre-Stage-0 layout-less behaviour exactly.
+    element carries geometry **or** a table — including the entire null-parser case
+    (text-only elements), which reproduces the pre-Stage-0 layout-less behaviour exactly.
+
+    A ``TABLE`` element also emits its structured ``table`` payload (G1.18). This is the
+    point where cell offsets are rebased from **element-relative** to **document-absolute**
+    (``el_start + cell.start``) — i.e. into ``result.text`` / ``document_content.raw_text``,
+    the same coordinate system spans live in — so the Phase-2 consumer can resolve each cell's
+    text and intersect cell ranges with the span. The whole table is carried on every
+    overlapping span's region (it is bounded); the consumer dedupes by table and clips to the
+    span. Because a table can matter even without page geometry, a table-bearing element
+    contributes a region entry even when ``has_region`` is false (the geometry keys are then
+    null — layout schema v2).
 
     The returned dict is the versioned, opaque-to-the-DB layout shape (see module
-    docstring): ``{layout_schema_version, parser, regions:[{page, bbox, origin,
-    page_size, unit, source_quality}, ...]}``.
+    docstring): ``{layout_schema_version, parser, regions:[{page, bbox, origin, page_size,
+    unit, source_quality, table?}, ...]}``.
     """
     ranges = result.char_ranges()
     out: list[dict[str, Any] | None] = []
     for span_start, span_end in char_spans:
         regions: list[dict[str, Any]] = []
         for el, (el_start, el_end) in zip(result.elements, ranges, strict=True):
-            if not el.has_region:
+            # An element contributes iff it carries geometry or a table (G1.18) — a bare
+            # text element still maps to no region, exactly as before.
+            if not (el.has_region or el.table is not None):
                 continue
             # Non-empty overlap of [span_start, span_end) and [el_start, el_end).
             if max(span_start, el_start) < min(span_end, el_end):
-                regions.append(
-                    {
-                        "page": el.page,
-                        "bbox": list(el.bbox) if el.bbox is not None else None,
-                        "origin": el.origin,
-                        "page_size": list(el.page_size) if el.page_size is not None else None,
-                        "unit": el.unit,
-                        "source_quality": el.source_quality.value if el.source_quality else None,
+                region: dict[str, Any] = {
+                    "page": el.page,
+                    "bbox": list(el.bbox) if el.bbox is not None else None,
+                    "origin": el.origin,
+                    "page_size": list(el.page_size) if el.page_size is not None else None,
+                    "unit": el.unit,
+                    "source_quality": el.source_quality.value if el.source_quality else None,
+                }
+                if el.table is not None:
+                    region["table"] = {
+                        "n_rows": el.table.n_rows,
+                        "n_cols": el.table.n_cols,
+                        "cells": [
+                            {
+                                "row": cell.row,
+                                "col": cell.col,
+                                "row_span": cell.row_span,
+                                "col_span": cell.col_span,
+                                "is_header": cell.is_header,
+                                # Rebased element-relative -> document-absolute (into raw_text).
+                                "start": el_start + cell.start,
+                                "end": el_start + cell.end,
+                                "bbox": list(cell.bbox) if cell.bbox is not None else None,
+                            }
+                            for cell in el.table.cells
+                        ],
                     }
-                )
+                regions.append(region)
         if regions:
             out.append(
                 {

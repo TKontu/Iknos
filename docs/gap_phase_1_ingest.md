@@ -46,8 +46,11 @@ stop silent data corruption (over-long-document refusal; polarity-aware agreemen
 twin quarantine), landed before any further perception-layer tuning and before Trial A5
 fits thresholds. **G1.15 (prompt/schema-hash cache key) + G1.16 (embedding-model identity
 column + ingest guards + `reembed` reindex path) are now shipped** — the two silent-staleness
-closures; G1.15 triggers one loud full re-extraction on first deploy. Next: G1.18 (table
-payload in the wire contract) / G1.13 slice 2 (windowed embedding).
+closures; G1.15 triggers one loud full re-extraction on first deploy. **G1.18 (structured
+table payload in the parse wire contract) is now shipped** — a `TABLE` element carries a
+validated `Table`/`TableCell` grid through the wire schema, with element-relative cell
+offsets rebased to document-absolute at persistence; the 2-D structure now survives Stage 0
+(consumer stays Phase 2). Next: G1.13 slice 2 (windowed embedding).
 
 ## Current implementation (baseline)
 
@@ -425,7 +428,7 @@ even detect* the condition.
       trust boundary; prefer AGE prepared-statement params where the call path
       allows.
 
-### G1.18 — Structured table payload in the parse wire contract (§1 rule a) *(review A1 — do while the wire schema is still on a branch)*
+### G1.18 — Structured table payload in the parse wire contract (§1 rule a) *(review A1)* — ✅ shipped
 
 **Why.** §1 promises "tables ingest as structured observations (rows/cells →
 propositions with column semantics)". But `ParseResult` is one reading-order text
@@ -435,20 +438,36 @@ trust boundary and Phase 2's table extractor would have nothing to read.
 Retrofitting a wire contract after the MinerU service adapter ships is strictly
 more work than adding the slot now.
 
-- [ ] Add an optional `table` payload to `ParseElement` (only valid when
-      `kind == TABLE`): `{n_rows, n_cols, cells: [{row, col, row_span, col_span,
-      is_header, start, end, bbox?}]}` — each cell's `[start, end)` indexes into
-      the **same** reading-order blob, so cell provenance still resolves to spans
-      and visual provenance still works.
-- [ ] **Validation (in `ParseResult.from_offsets` / a table validator):** cell
-      offsets lie within the parent element's range; `(row, col)` within bounds; no
-      two cells claim the same grid position. Cells need *not* tile the element
-      range (separators/whitespace between cells are fine) — do not reuse the
-      strict element-tiling rule here.
-- [ ] Thread through the wire schema (`mineru.py::_WireResponse`), and persist on
-      the span `layout` dict (it is versioned — bump `layout_schema_version`).
-- [ ] **Consumer stays Phase 2** (cells → observation-class propositions with
+- [x] Added a `table` payload to `ParseElement` (only valid when `kind == TABLE`):
+      `Table{n_rows, n_cols, cells: tuple[TableCell{row, col, start, end, row_span,
+      col_span, is_header, bbox?}]}`, mirrored on `OffsetSpec`. **Design note:** cell
+      `[start, end)` offsets are **element-relative** (into the element's own text), not
+      blob-absolute as the original sketch read — this keeps `ParseElement`
+      position-independent (the module's "offsets are derived, never parser-supplied"
+      principle; a directly-constructed table element can't know its blob position). They
+      are rebased to **document-absolute** in `layouts_for_spans` (the one place the
+      element's place in the reading-order text is known), so cell provenance resolves to
+      spans and visual provenance still works — the gap goal, reached without violating
+      element position-independence.
+- [x] **Validation, all fail-loud at construction (so `from_offsets` /
+      `MinerUParser` surface it as a hard parse failure):** grid consistency — cells fit
+      `n_rows × n_cols`, no two claim the same position after span expansion (sparse and
+      merged cells allowed; *not* the strict element-tiling rule) — in
+      `Table.__post_init__`; element-relative cell-offset bounds vs the element text and
+      "a cell bbox needs the element's frame" in `ParseElement.__post_init__`;
+      offset ordering / positive spans in `TableCell.__post_init__`.
+- [x] Threaded through the wire schema (`mineru.py::_WireTable`/`_WireCell` →
+      `_to_table`), and persisted on the span `layout` dict — `LAYOUT_SCHEMA_VERSION`
+      bumped to **2** (a region may now carry a `table`, and may be geometry-less when it
+      exists only to carry a table whose element lacked page geometry — so table structure
+      is never silently dropped).
+- [x] **Consumer stays Phase 2** (cells → observation-class propositions with
       column semantics). This task only makes the structure *survive Stage 0*.
+- [x] **Tests:** grid/offset/coupling validators each reject their bad case; a table
+      round-trips through `from_offsets` (element-relative, re-validated against the
+      slice) and through the MinerU wire client; `layouts_for_spans` rebases cell offsets
+      to document-absolute and persists a geometry-less table. (`test_parse.py`,
+      `test_mineru.py`.)
 
 ### G1.19 — Hybrid-retrieval rank fusion (RRF) + sparse-ranking decision (§4) *(review A3)*
 
@@ -487,9 +506,11 @@ more work than adding the slot now.
    schema (no hand-bumped constant); dense rows carry their `model` with ingest guards
    refusing a swap and `scripts/reembed.py` migrating the index. G1.15 triggers one loud
    full re-extraction on first deploy.
-6. **G1.18 (table payload in wire contract)** — ← **next**: while the MinerU wire schema is
-   still on a branch / before the service adapter hardens.
-7. **G1.13 slice 2 (windowed embedding)** — before the MinerU service starts
+6. ~~**G1.18 (table payload in wire contract)**~~ — ✅ a `TABLE` element carries a validated
+   `Table`/`TableCell` grid through the wire schema; element-relative cell offsets rebased to
+   document-absolute at persistence (`LAYOUT_SCHEMA_VERSION` → 2). Landed while the wire schema
+   is still on a branch, as planned. Consumer stays Phase 2.
+7. **G1.13 slice 2 (windowed embedding)** — ← **next**: before the MinerU service starts
    feeding real multi-page PDFs.
 8. **G1.6 quarantine enforcement** — stakes gating (G1.6 flag is set per node;
    edge-time enforcement gated on Phase 2 — make it a Phase 2 *entry* item).
