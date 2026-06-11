@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     llm_extract_samples: int = Field(1, alias="LLM_EXTRACT_SAMPLES")
     prop_agreement_threshold: float = Field(0.86, alias="PROP_AGREEMENT_THRESHOLD")
 
+    # Cross-document "extract once" reuse (§6.1, G1.7b). When a never-extracted span's pipeline
+    # content_hash matches a prior committed extraction (the same text under the same model/prompt/
+    # regime/verifier — re-segmentation, shared boilerplate, an overlapping reference corpus), its
+    # propositions are replayed into the new span instead of re-running the LLM. On by default — it
+    # is purely additive and sound (the hash carries the full pipeline identity); set false to fall
+    # back to always re-extracting. (No production entrypoint constructs the Propositionizer yet;
+    # this is the wiring seam for when one does, mirroring llm_extract_samples.)
+    extract_reuse_enabled: bool = Field(True, alias="EXTRACT_REUSE_ENABLED")
+
     # Stage 0 document parse front-end (§1, G1.0). MinerU (AGPL-3.0) runs as a separate
     # hosted service behind this endpoint — the copyleft stops at the service edge, like
     # the LLM/verifier. An empty parser_base_url is the "no service" signal: ingest falls

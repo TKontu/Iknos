@@ -38,3 +38,32 @@ async def session(database_url: str) -> AsyncSession:
     async with SessionLocal() as s:
         yield s
     await engine.dispose()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _isolate_db(session: AsyncSession) -> None:
+    """Reset graph + relational data before every integration test (no shared-DB carry-over).
+
+    The suite runs against one live DB that the `session` fixture never resets between tests. That
+    was harmless while extraction idempotency keyed per-span — a content_hash collision across two
+    tests just meant each extracted independently. G1.7b cross-doc reuse changes that: a committed
+    extraction in *any* prior test is now replayable in a later one whose span shares its
+    content_hash, coupling tests by execution order (e.g. an initial-sentence span shared between
+    two documents). Cleaning before each test removes the coupling and makes order irrelevant.
+
+    Safe because migrations seed **no data** — only extensions, the graph, empty vlabel/elabel
+    definitions, and indexes — so there are no fixtures to preserve. `DETACH DELETE` clears
+    vertices/edges while keeping the label *definitions*; the relational tables come from the ORM
+    metadata (so a new table is auto-included) and TRUNCATE ... CASCADE handles their FK order.
+    Imported lazily so the local no-DATABASE_URL collection path stays import-light.
+    """
+    from sqlalchemy import text
+
+    from iknos.db.age import bootstrap_session, execute_cypher
+    from iknos.db.orm import Base
+
+    await bootstrap_session(session)
+    await execute_cypher(session, "MATCH (n) DETACH DELETE n")
+    tables = ", ".join(t.name for t in Base.metadata.sorted_tables)
+    await session.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE"))
+    await session.commit()

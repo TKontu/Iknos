@@ -33,7 +33,7 @@ model/prompt/regime/verifier re-extracts (or fails loud) instead of serving a st
 the **MinerU HTTP client** + bytes-in entry point are in; only standing up the live MinerU
 service + table/figure interpretation (Phase 2) remain. Remaining (next): **G1.6** quarantine
 *enforcement* (the `provisional` flag is now set per node; gating it at edge-creation is
-Phase-2-gated), then G1.7b (cross-doc reuse)/G1.8/G1.10–G1.12.
+Phase-2-gated); G1.7b (cross-doc reuse) is now shipped, leaving G1.8/G1.10 Part B/G1.11–G1.12.
 
 **2026-06 review** (`review_2026-06_architecture_plan.md`) added **G1.13–G1.19**: two
 critical correctness fixes (G1.13 long-document truncation, G1.14 polarity-blind
@@ -60,9 +60,11 @@ verifier-failure degradation, `pool_span`→`None` (zero-vector sentinel removed
 segmenter `actions` indexes (migration 0010), a per-LLM-call deadline, `EmbeddingSubstrate`
 lifecycle, and `cypher_map` property fuzzing. Next: **G1.6 quarantine enforcement** stays
 Phase-2-gated (no SUPPORTS/REFUTES creation site to gate yet). **G1.10 Part A (multi-level
-offset spans) is now shipped** (Part B RAPTOR summaries deferred per the §2 cost decision), so
-the remaining un-gated Phase-1 work is **G1.7b cross-doc reuse / G1.8 reference amortization**
-(+ optional **G1.12** multi-span provenance and **G1.10 Part B**).
+offset spans) is now shipped** (Part B RAPTOR summaries deferred per the §2 cost decision).
+**G1.7b cross-doc "extract once" reuse is now shipped** (`core/reuse.py` + replay path in
+`Propositionizer`; index migration 0012) — an identical-pipeline span anywhere replays cached
+propositions instead of re-running the LLM, so the remaining un-gated Phase-1 cost work is
+**G1.8 reference amortization** (+ optional **G1.12** multi-span provenance and **G1.10 Part B**).
 
 **Fixture corpus (exit-criterion seed) is now shipped** — `tests/fixtures/corpus/`: three
 real documents + a `manifest.toml` of regression anchors, a typed model-free/DB-free loader
@@ -84,7 +86,8 @@ called "Phase-2-gated" were re-checked against the merged code:
 - **G1.11 box on indexes** — partially unblocked (case boxes exist via G2.1), but propositions
   are indexed in Phase 1 *before* any box is assigned at Phase-2 extract time; threading a box
   through ingest needs an architectural decision, so it is sequenced after the un-gated work.
-Genuinely actionable un-gated Phase-1 work now: **G1.10**, **G1.7b**, **G1.8**, **G1.12**.
+Genuinely actionable un-gated Phase-1 work now: **G1.8**, **G1.12** (**G1.10 Part A** and
+**G1.7b** are now shipped).
 
 ## Current implementation (baseline)
 
@@ -244,16 +247,36 @@ silently serving a stale extraction (the production-correctness bug).
       sampling[incl. n_samples] + verifier_sig)` — `core/cache.py::extraction_content_hash` (pure,
       mirrors `ingest.span_content_hash`). Same span + same pipeline → true no-op; **changed**
       pipeline → loud `StaleExtractionError` (mirrors `DocumentResegmentationError`; cascade
-      re-extract deferred — G1.7b), so a model upgrade can never serve a stale extraction. The hash
+      re-extract — purge the stale span's propositions/edges/index rows and recreate — still
+      deferred, separate from G1.7b reuse below), so a model upgrade can never serve a stale
+      extraction. The hash
       + `schema_version` persist on the extract `Action.inputs` (per-span Action kept for audit);
       `EXTRACT_SCHEMA_VERSION`/`VERIFY_SCHEMA_VERSION` are manually-bumped contract versions. A
       partial functional index on `actions((inputs->>'target_span'), timestamp DESC)` keeps the
       lookup O(log n) (migration `0006`).
-- [ ] **G1.7b — cross-document "extract once" reuse.** Reuse the extraction *output* across
-      documents / re-segmentation (identical text anywhere skips the LLM and replays cached
-      propositions into the new span) — needs a content-addressed output store + replay +
-      verify/faithfulness cache design. Soundness note: this is why the shipped key is per-span,
-      **not** purely content (a pure-content skip would drop a second span carrying identical text).
+- [x] **G1.7b — cross-document "extract once" reuse — shipped.** A never-extracted span whose
+      pipeline `content_hash` matches a *previously committed* extraction anywhere (re-segmentation,
+      shared boilerplate, an overlapping reference corpus) **replays** that extraction's
+      propositions into the new span — new nodes, new `EVIDENCED_BY` edges, fresh locally-computed
+      embeddings, copied faithfulness — skipping only the LLM. `core/reuse.py::find_reusable_extraction`
+      owns the read/reconstruct half (the actions log *is* the content-addressed output store —
+      `outputs.propositions` + the graph vertices); `Propositionizer._build_replay_results` /
+      `_persist_replay` own the re-embed + write half (shared `_write_propositions` with the fresh
+      path, so node shape can't drift). Soundness: the key stays per-span (a pure-content skip would
+      *drop* a second span's propositions), and the `content_hash` carries the full pipeline identity
+      (target+context text, model, prompt/schema, sampling regime, verifier sig — `core/cache.py`),
+      so a match means the extractor *would* have produced the same propositions. Reused
+      faithfulness/provisional are copied (the verifier sig is in the hash, so re-verifying would
+      reproduce them) — no re-verify, no verify Action; the replay extract Action carries a
+      `reused_from` pointer so the original verdict is one hop away. The vector is **re-derived**
+      under the current substrate, not copied: `content_hash` pins only the LLM extractor, not the
+      embedding model, so re-embedding keeps the ANN space single-model by construction (G1.16) and
+      the local pass is negligible next to the skipped LLM call. A cached *empty* extraction is
+      reusable too (replays zero propositions, still skips the LLM). Index
+      `ix_actions_extract_content_hash` (migration 0012) backs the lookup; the reuse query runs only
+      for never-extracted spans (gated behind the `stored is None` branch), so a no-op re-run of an
+      unchanged document pays **zero** extra cost. Per-span error-isolated like inference (G1.17 R1).
+      On by default; `EXTRACT_REUSE_ENABLED` / `reuse_extractions=False` is the deploy escape hatch.
 - [ ] Cascade re-extraction: on a stale span, purge its old propositions/edges/index rows and
       recreate (pairs with the resegmentation-cascade deferral in `ingest.py`).
 
@@ -570,8 +593,10 @@ more work than adding the slot now.
 2. ~~**G1.1 epistemic fields** + **G1.2 routing** (#20) + **G1.4 verify** +
    **G1.5 faithfulness** (#21) + **G1.3 multi-sample** (#23)~~ — ✅ the §3.1
    perception-hardening core (consistency *and* verification).
-3. ~~**G1.7 content-addressed cache** (core)~~ — ✅ #25: version-aware per-span
-   idempotency (`core/cache.py`, migration `0006`). Cross-doc reuse is G1.7b.
+3. ~~**G1.7 content-addressed cache** (core) + **G1.7b cross-doc reuse**~~ — ✅ #25:
+   version-aware per-span idempotency (`core/cache.py`, migration `0006`); G1.7b replays an
+   identical-pipeline extraction into a new span instead of re-running the LLM
+   (`core/reuse.py`, migration `0012`).
 4. ~~**G1.13 slice 1 (truncation guard) + G1.14 (polarity-aware clustering +
    temperature guard)**~~ — ✅ the two critical correctness fixes: `embed_document`
    refuses over-long documents (`DocumentTooLongError`); multi-sample clustering is
@@ -596,8 +621,10 @@ more work than adding the slot now.
 9. **G1.6 quarantine enforcement** — stakes gating; **still Phase-2-gated** (the `provisional`
    flag is set per node, but no SUPPORTS/REFUTES creation site exists yet to gate at). A Phase 2
    *entry* item — land it when evidential edges are first created.
-10. **G1.7b cross-doc reuse** + **G1.8 reference amortization** — remaining cost work.
-11. **G1.10 multi-level/summaries**, **G1.11 box**, **G1.12 multi-span**,
+10. ~~**G1.7b cross-doc reuse**~~ — ✅ identical-pipeline spans replay cached propositions
+    (re-embed + new nodes) instead of re-running the LLM (`core/reuse.py`, migration 0012);
+    **G1.8 reference amortization** is the remaining cost work.
+11. **G1.10 Part B summaries**, **G1.11 box**, **G1.12 multi-span**,
     **G1.19 RRF fusion** — incremental, some gated on Phase 2.
 
 ## Revised exit criteria (delta over the originals)
@@ -614,11 +641,13 @@ more work than adding the slot now.
       epistemic_class/faithfulness/provisional`; a low-faithfulness proposition is
       quarantined from driving a `REFUTES`.
 - [ ] `verify` runs on a different model family from the extractor.
-- [ ] Re-ingesting unchanged content hits the **content-addressed** cache (not just
-      same-span-id); a static reference corpus is processed once and reused. *(Partial,
-      #25: re-ingest of unchanged content is a true no-op and a changed pipeline correctly
-      re-extracts — keyed on `(span_id, content_hash)`. Cross-content reuse "not just
-      same-span-id" is G1.7b; reference-corpus amortization is G1.8.)*
+- [~] Re-ingesting unchanged content hits the **content-addressed** cache (not just
+      same-span-id); a static reference corpus is processed once and reused. *(#25: re-ingest of
+      unchanged content is a true no-op and a changed pipeline correctly re-extracts — keyed on
+      `(span_id, content_hash)`. **G1.7b shipped** the cross-content half: identical text anywhere
+      now replays the cached extraction instead of re-running the LLM, "not just same-span-id".
+      Reference-corpus amortization — ingest a read-only domain pack once across investigations —
+      is G1.8, the one piece still open here.)*
 - [ ] The faithfulness gate metric is wired for Trial A5.
 - [ ] A document **longer than the embedding context** ingests with full dense
       coverage — no silent truncation, no zero vectors in pgvector; window layout

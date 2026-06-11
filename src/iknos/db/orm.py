@@ -45,6 +45,17 @@ class Action(Base):
             text("timestamp DESC"),
             postgresql_where=text("actor = 'propositionizer'"),
         ),
+        # Backs the G1.7b cross-doc reuse lookup (core/reuse.py::find_reusable_extraction): the
+        # newest extract Action whose content_hash matches a never-extracted span's, so its
+        # propositions can be replayed instead of paying the LLM again. Same functional+partial
+        # shape as the target_span index above; the timestamp leg serves the newest-first LIMIT 1.
+        # Migration 0012.
+        Index(
+            "ix_actions_extract_content_hash",
+            text("(inputs->>'content_hash')"),
+            text("timestamp DESC"),
+            postgresql_where=text("actor = 'propositionizer'"),
+        ),
         # Backs the §10.2 audit reach-back (G2.7, provenance.audit::producing_action): the
         # newest extract Action naming a given Fact in its outputs. Functional (the fact id
         # lives in JSONB outputs) + partial on the extract actor; declared here so the
