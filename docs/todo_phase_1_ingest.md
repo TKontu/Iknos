@@ -23,9 +23,12 @@ service** that emits the wire schema (ops/AGPL-side adapter) and **table/figure 
 (G1.10), box scoping (G1.11), cross-document cache reuse (G1.7b). The **2026-06 review**
 (`review_2026-06_architecture_plan.md`) added **G1.13–G1.19** — two critical correctness
 fixes (long-document truncation G1.13, polarity-blind agreement G1.14) plus staleness,
-robustness, table-contract, and rank-fusion work; G1.13 slice 1 and G1.14 are the new
-front of the queue. See `gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state
-below; not every box maps 1:1 to a gap ID.)*
+robustness, table-contract, and rank-fusion work. **G1.13 slice 1** (truncation guard) and
+**G1.14** (polarity-aware agreement + twin quarantine) are now shipped — the two critical
+correctness fixes that stopped silent data loss/inflated confidence; G1.15 (prompt-hash
+cache key) + G1.16 (embedding-model column) are the new front of the queue. See
+`gap_phase_1_ingest.md` for the gap-plan IDs. *(Granular state below; not every box maps
+1:1 to a gap ID.)*
 
 ## Document parsing — front-end (§1, Stage 0) — 🟡 contract + MinerU client shipped (G1.0/G1.0b)
 
@@ -70,11 +73,13 @@ below; not every box maps 1:1 to a gap ID.)*
       persist keyed by `(document, model)` or budget the re-embed; §1.)*
 - [x] Confirm boundary detection, multi-level pooling, and search all read from the
       cached vectors (no per-level re-embedding).
-- [ ] **Truncation guard (G1.13 slice 1 — critical):** a document longer than the
-      model context (8192 tokens) must **fail loudly** (`DocumentTooLongError`),
-      never silently index a prefix. Today `embed_document` truncates silently and
-      spans past the cutoff get zero vectors → skipped dense rows → invisible to
-      retrieval. *(Review C1.)*
+- [x] **Truncation guard (G1.13 slice 1 — critical):** a document longer than the
+      model context (8192 tokens) now **fails loudly** (`DocumentTooLongError`)
+      instead of silently indexing a prefix. *(`core/embeddings.py`:
+      `embed_document` tokenizes **without** truncation and guards on the true token
+      count via the pure `_raise_if_truncated` (`MAX_MODEL_TOKENS`) before any forward
+      pass — so no partial index is ever written for an over-long document. Review C1.
+      Windowed embedding (slice 2) lifts the ceiling.)*
 - [ ] **Windowed embedding (G1.13 slice 2):** overlapping macro-windows over long
       documents; each span pooled from the window where it sits furthest from a
       window edge; window layout recorded in the segment Action and folded into
@@ -120,13 +125,17 @@ below; not every box maps 1:1 to a gap ID.)*
       extractions, score each by cross-sample agreement. *(G1.3, #23; `core/consistency.py`
       + `combine_faithfulness` — agreement folds into `faithfulness` multiplicatively.
       Default `LLM_EXTRACT_SAMPLES=1` = no-op; per-model calibration is Trial A3.)*
-- [ ] **Polarity-aware agreement (G1.14 — critical):** cluster only within identical
-      `(polarity, epistemic_class)` partitions — embedding cosine cannot distinguish
-      a claim from its negation, so the current cosine-only clustering reports
-      agreement 1.0 on a 3-assert/2-negate split and persists a coin-flip polarity.
-      Cross-polarity "twins" drive agreement *down* and set `provisional`. Plus a
-      config guard: `LLM_EXTRACT_SAMPLES > 1` requires temperature > 0. Must land
-      **before** Trial A5 fits the agreement threshold. *(Review C2/P4.)*
+- [x] **Polarity-aware agreement (G1.14 — critical):** clustering now runs only
+      *within* identical `(polarity, epistemic_class)` partitions
+      (`consistency.cluster_candidates_partitioned`) — embedding cosine cannot
+      distinguish a claim from its negation, so a 3-assert/2-negate split now yields a
+      0.6 and a 0.4 cluster, never one 1.0 cluster. `consolidate_samples` then detects
+      cross-polarity **twins** (opposite polarity, medoid cosine ≥ threshold), sets
+      both halves `provisional` (OR-folded so the verify pass cannot clear it), and
+      records the twin pairing on the extract `Action.outputs` for Trial A5. The
+      `LLM_EXTRACT_SAMPLES > 1` ⇒ temperature > 0 config guard was already enforced at
+      `Propositionizer` construction. Landed **before** Trial A5 fits the threshold.
+      *(Review C2/P4.)*
 - [x] **`verify` step:** entailment/NLI check that the span supports the proposition
       *with its polarity and modality*; disagreement sets `provisional` (§3.1). Prefer an
       **independent verifier (different model family from the extractor)** to reduce
@@ -209,7 +218,7 @@ below; not every box maps 1:1 to a gap ID.)*
       reference corpus is processed once and reused.
 - [ ] A document longer than the embedding context ingests with **full** dense
       coverage — no silent truncation, no zero vectors in pgvector (G1.13).
-- [ ] Mixed-polarity extractions never report full agreement; polarity-unstable
+- [x] Mixed-polarity extractions never report full agreement; polarity-unstable
       spans yield `provisional` propositions (G1.14).
 - [ ] A prompt-template edit alone invalidates the extraction cache (G1.15); an
       embedding-model swap is refused, not silently mixed (G1.16).

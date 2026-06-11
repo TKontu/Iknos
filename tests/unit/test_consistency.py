@@ -14,6 +14,8 @@ from iknos.core.consistency import (
     agreement_of,
     canonical_of,
     cluster_candidates,
+    cluster_candidates_partitioned,
+    consolidate_samples,
 )
 from iknos.types.epistemic import Attribution, EpistemicClass, Modality, Polarity
 
@@ -25,14 +27,16 @@ def _cand(
     sample_index: int,
     position: int = 0,
     modality: Modality = Modality.CATEGORICAL,
+    polarity: Polarity = Polarity.ASSERTED,
+    epistemic_class: EpistemicClass = EpistemicClass.OBSERVATION,
 ) -> Candidate:
     return Candidate(
         text=text,
-        polarity=Polarity.ASSERTED,
+        polarity=polarity,
         modality=modality,
         attribution=Attribution.DOCUMENT,
         scope="",
-        epistemic_class=EpistemicClass.OBSERVATION,
+        epistemic_class=epistemic_class,
         embedding=embedding,
         sample_index=sample_index,
         position=position,
@@ -147,3 +151,58 @@ def test_canonical_empty_raises() -> None:
 
 def test_default_threshold_is_exposed() -> None:
     assert 0.0 < DEFAULT_AGREEMENT_THRESHOLD <= 1.0
+
+
+# --- polarity-aware clustering + twin detection (G1.14) ---
+
+
+def test_negation_does_not_co_cluster_with_assertion() -> None:
+    # A claim and its negation embed nearly on top of each other (cosine ~1) but are opposite
+    # polarity. Plain cosine clustering would merge them (agreement 1.0 on a polarity flip);
+    # the partitioned clusterer must keep them in separate clusters.
+    asserted = _cand("x", [1.0, 0.0], sample_index=0, polarity=Polarity.ASSERTED)
+    negated = _cand("x", [1.0, 0.0], sample_index=1, polarity=Polarity.NEGATED)
+    assert len(cluster_candidates([asserted, negated])) == 1  # cosine-only would merge
+    assert len(cluster_candidates_partitioned([asserted, negated])) == 2  # polarity splits
+
+
+def test_epistemic_class_also_partitions() -> None:
+    obs = _cand("x", [1.0, 0.0], sample_index=0, epistemic_class=EpistemicClass.OBSERVATION)
+    judge = _cand("x", [1.0, 0.0], sample_index=1, epistemic_class=EpistemicClass.JUDGEMENT)
+    assert len(cluster_candidates_partitioned([obs, judge])) == 2
+
+
+def test_consolidate_detects_polarity_twin_and_splits_agreement() -> None:
+    # 5 samples: 3 assert the claim, 2 negate it. Polarity-aware clustering yields a 3/5 and a
+    # 2/5 cluster (never one 5/5), both flagged unstable, paired as a twin.
+    cands = [_cand("x", [1.0, 0.0], sample_index=i, polarity=Polarity.ASSERTED) for i in range(3)]
+    cands += [
+        _cand("x", [1.0, 0.0], sample_index=i, polarity=Polarity.NEGATED) for i in range(3, 5)
+    ]
+    consolidated, twins = consolidate_samples(cands, n_samples=5)
+
+    assert len(consolidated) == 2
+    agreements = sorted(c.agreement for c in consolidated)
+    assert agreements == pytest.approx([0.4, 0.6])  # never 1.0; sums to ≤ 1
+    assert all(c.polarity_unstable for c in consolidated)
+    assert twins == [(0, 1)]  # the two clusters are a twin pair (indices into consolidated)
+
+
+def test_consolidate_same_polarity_is_not_a_twin() -> None:
+    # Stable claim across all samples → one cluster, agreement 1.0, no twin, not unstable.
+    cands = [_cand("x", [1.0, 0.0], sample_index=i) for i in range(3)]
+    consolidated, twins = consolidate_samples(cands, n_samples=3)
+    assert len(consolidated) == 1
+    assert consolidated[0].agreement == pytest.approx(1.0)
+    assert consolidated[0].polarity_unstable is False
+    assert twins == []
+
+
+def test_consolidate_distinct_claims_opposite_polarity_are_not_twins() -> None:
+    # Opposite polarity but *different* claims (orthogonal vectors) → cosine below threshold,
+    # so not a sign-flip of the same claim — no twin, neither flagged unstable.
+    a = _cand("a", [1.0, 0.0], sample_index=0, polarity=Polarity.ASSERTED)
+    b = _cand("b", [0.0, 1.0], sample_index=1, polarity=Polarity.NEGATED)
+    consolidated, twins = consolidate_samples([a, b], n_samples=2)
+    assert twins == []
+    assert not any(c.polarity_unstable for c in consolidated)

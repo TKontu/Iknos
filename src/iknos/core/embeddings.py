@@ -1,6 +1,36 @@
 import torch
 from transformers import AutoModel, AutoTokenizer
 
+# BAAI/bge-m3 context window. A document tokenizing past this would, under the old
+# truncation=True path, get a token prefix only — every span past the cutoff pools to a
+# zero vector, is skipped at persist time, and is silently invisible to dense retrieval
+# and the §5.1 candidate funnel (the exact "silent false negative" §5.1 warns about).
+MAX_MODEL_TOKENS = 8192
+
+
+class DocumentTooLongError(Exception):
+    """A document exceeds the embedding model's context window (G1.13 slice 1).
+
+    Until windowed embedding (G1.13 slice 2) lands, a document past ``MAX_MODEL_TOKENS``
+    cannot be embedded with full coverage, so we **refuse it loudly** rather than index a
+    silently-truncated prefix and drop every later span from dense retrieval. Mirrors the
+    fail-loud placement of ``core/ingest.py::DocumentResegmentationError``.
+    """
+
+
+def _raise_if_truncated(seq_len: int, *, max_tokens: int = MAX_MODEL_TOKENS) -> None:
+    """Refuse a document whose token length would be truncated by the embedding model.
+
+    Pure decision (no torch/model), so it is unit-testable without loading the model —
+    the wiring in ``embed_document`` just feeds it the un-truncated token count.
+    """
+    if seq_len > max_tokens:
+        raise DocumentTooLongError(
+            f"document tokenizes to {seq_len} tokens, over the embedding model's "
+            f"{max_tokens}-token context window; windowed embedding (G1.13 slice 2) is not "
+            f"yet implemented, so ingesting it would silently drop every span past the cutoff."
+        )
+
 
 def mean_pool_normalize(
     token_embeddings: torch.Tensor, attention_mask: torch.Tensor
@@ -65,11 +95,14 @@ class EmbeddingSubstrate:
     def embed_document(self, text: str) -> DocumentContext:
         """
         Embed the document and return the context holding token embeddings.
-        Currently handles up to max model length.
+
+        Refuses a document longer than the model context (``DocumentTooLongError``, G1.13
+        slice 1) instead of silently truncating it — we tokenize **without** truncation and
+        guard on the true length, so no partial index is ever written for an over-long
+        document. Windowed embedding (slice 2) will lift this ceiling.
         """
-        inputs = self.tokenizer(
-            text, return_tensors="pt", return_offsets_mapping=True, truncation=True, max_length=8192
-        )
+        inputs = self.tokenizer(text, return_tensors="pt", return_offsets_mapping=True)
+        _raise_if_truncated(inputs["input_ids"].shape[1])
 
         offset_mapping = inputs.pop("offset_mapping")[0].tolist()
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
@@ -98,7 +131,7 @@ class EmbeddingSubstrate:
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=8192,
+            max_length=MAX_MODEL_TOKENS,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 

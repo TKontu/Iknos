@@ -1,7 +1,29 @@
 import pytest
 import torch
 
-from iknos.core.embeddings import DocumentContext, mean_pool_normalize
+from iknos.core.embeddings import (
+    MAX_MODEL_TOKENS,
+    DocumentContext,
+    DocumentTooLongError,
+    _raise_if_truncated,
+    mean_pool_normalize,
+)
+
+# --- truncation guard (G1.13 slice 1) ---
+
+
+def test_raise_if_truncated_over_limit_refuses() -> None:
+    # A token count past the context window would be silently truncated → spans past the
+    # cutoff get zero vectors → invisible to dense retrieval. Refuse it loudly instead.
+    with pytest.raises(DocumentTooLongError, match="context window"):
+        _raise_if_truncated(MAX_MODEL_TOKENS + 1)
+
+
+def test_raise_if_truncated_at_and_under_limit_pass() -> None:
+    # Exactly filling the window (special tokens included) is fine; under it is fine.
+    _raise_if_truncated(MAX_MODEL_TOKENS)
+    _raise_if_truncated(MAX_MODEL_TOKENS - 100)
+    _raise_if_truncated(0)
 
 
 def test_document_context_pool_span():
