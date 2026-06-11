@@ -204,7 +204,9 @@ never to score them.
 
 **Confidence comes from consistency and verification, not verbalized self-report.**
 Reuse the §8 machinery: multi-sample extraction (stable extractions are high-confidence;
-unstable ones flagged), and an **extract-then-verify** pass. **Agreement must be
+unstable ones flagged), and an **extract-then-verify** pass — an entailment/NLI check
+that the source span actually supports the proposition *with its polarity and modality*
+(the perception-layer analogue of ensemble contradiction). **Agreement must be
 computed within identical epistemic-field partitions** — embedding similarity cannot
 distinguish polarity (a claim and its negation embed nearly identically, typically
 above any usable equivalence threshold), so equivalence clusters are formed only
@@ -213,10 +215,9 @@ that splits across polarities is a **negative** consistency signal — the extra
 is unstable on the claim's direction — and must drive agreement *down* and mark the
 proposition provisional, never be averaged into a single high-agreement cluster.
 Multi-sample also requires nonzero sampling temperature, or N identical samples make
-agreement trivially perfect; the configuration must enforce this, not document it — an entailment/NLI check
-that the source span actually supports the proposition *with its polarity and modality*
-(the perception-layer analogue of ensemble contradiction). Verification catches both
-hallucinated content (not in the source) and distortion (operator dropped).
+agreement trivially perfect; the configuration must enforce this, not document it.
+Verification catches both hallucinated content (not in the source) and distortion
+(operator dropped).
 
 **The combiner (decided):** `faithfulness = verify × calibrate(agreement)`, with
 `agreement = 1.0` as the identity element (single-sample / N=1 reduces exactly to the
@@ -1706,7 +1707,10 @@ resourced with evaluation gates, not routine engineering — see §13.
   (§12); group-valued counts for retraction, absorptive semiring for confidence.
 - [ ] **Review-triage VoI tuning** — the leverage/uncertainty/significance weighting and
   the batch/re-rank cadence (§11.1); and proving VoI-ordered review beats cheaper
-  baselines. Measured by the triage-efficiency trial.
+  baselines. Measured by the triage-efficiency trial. Now also covers the §11.3
+  extension: the VoI-per-unit-cost (EVSI) form, the type-conditioned lead generator,
+  and the predicted-vs-realized VoI calibration log — same trial family, costs
+  expert-/pack-supplied.
 - [ ] **Entity-resolution tuning** — the auto-merge confidence bar (the under/over-merge
   asymmetry), the relational-evidence scorer, and continuous re-resolution cadence
   (§5.2). Measured by the resolution gate (precision/recall).
