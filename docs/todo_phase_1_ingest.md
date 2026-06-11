@@ -38,8 +38,13 @@ verifier-failure degradation, `pool_span`→`None` killing the zero-vector senti
 segmenter `actions` indexes, a per-LLM-call deadline, `EmbeddingSubstrate` lifecycle, and
 `cypher_map` property fuzzing) **is now shipped** — one batch hardening the ingest path against
 partial failure, hangs, and the hand-rolled escaping boundary. **G1.6 quarantine enforcement**
-remains genuinely Phase-2-gated (no SUPPORTS/REFUTES creation site exists yet to gate);
-**G1.7b cross-doc reuse / G1.8 reference amortization** are the remaining Phase-1 cost work.
+remains genuinely Phase-2-gated (no SUPPORTS/REFUTES creation site exists yet to gate).
+**G1.7b cross-doc reuse is now shipped** — a never-extracted span whose pipeline `content_hash`
+matches a prior committed extraction anywhere (re-segmentation, shared boilerplate, an overlapping
+reference corpus) replays that extraction's propositions (re-embedded into new nodes, faithfulness
+copied, `reused_from` audit pointer) instead of re-running the LLM (`core/reuse.py` + the replay
+path in `Propositionizer`; index migration 0012). **G1.8 reference amortization** is the remaining
+Phase-1 cost work.
 The **fixture corpus** (exit-criterion seed for the gate corpus / Trial A5) is now shipped —
 `tests/fixtures/corpus/` with a long multi-window anchor (G1.13), a polarity-waver anchor
 (G1.14), and observation/judgement routing anchors (G1.2), behind a typed model-free loader.
@@ -227,12 +232,16 @@ decision. See `gap_phase_1_ingest.md` for the gap-plan IDs.
 
 ## Cost & incrementality (§6.1)
 
-- [~] **Content-addressed cache** for LLM outputs (propositions, extractions) keyed by
+- [x] **Content-addressed cache** for LLM outputs (propositions, extractions) keyed by
       content + model version; unchanged spans are never re-inferred ("extract once").
       *(G1.7 core, #25: extraction idempotency is version-aware — keyed on `(span_id,
       content_hash)` over the extractor model/prompt/regime/verifier (`core/cache.py`).
-      Unchanged content no-ops; a changed pipeline re-extracts (or fails loud). Cross-document
-      output reuse — "extract once" across docs/re-segmentation — is the remaining G1.7b.)*
+      Unchanged content no-ops; a changed pipeline re-extracts (or fails loud). **G1.7b — shipped:**
+      cross-document output reuse — a never-extracted span whose `content_hash` matches a prior
+      committed extraction anywhere replays its propositions (re-embedded, new nodes, copied
+      faithfulness, `reused_from` audit pointer) instead of re-running the LLM (`core/reuse.py`,
+      migration 0012); on by default, gated behind the `stored is None` branch so a no-op re-run
+      pays nothing extra. Still open: cascade re-extraction on a stale span — purge + recreate.)*
 - [x] **Hash the real prompt + schema into the cache key (G1.15):** `prompt_sha`/`schema_sha`
       (extractor *and* verifier) now feed `extraction_content_hash`, so a prompt edit
       re-extracts even without a hand-bumped `EXTRACT_SCHEMA_VERSION`; the version stays a
@@ -292,8 +301,10 @@ decision. See `gap_phase_1_ingest.md` for the gap-plan IDs.
       propositions → dense + sparse indexes, all with retained span references.
 - [ ] Hybrid retrieval (dense + sparse), box-scoped, returns propositions with their
       source text resolvable.
-- [ ] Re-ingesting an unchanged document hits the cache (no re-extraction); a static
-      reference corpus is processed once and reused.
+- [~] Re-ingesting an unchanged document hits the cache (no re-extraction); a static
+      reference corpus is processed once and reused. *(Cache no-op + cross-document "extract once"
+      reuse are shipped (G1.7/G1.7b); the read-only reference-corpus amortization across
+      investigations is G1.8, still open.)*
 - [x] A document longer than the embedding context ingests with **full** dense
       coverage — no silent truncation (G1.13 slice 2: windowed embedding). No zero
       vector reaches pgvector: `pool_span` now returns `None` for a no-token span and

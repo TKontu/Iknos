@@ -35,6 +35,7 @@ from iknos.core.consistency import (
 from iknos.core.embeddings import EmbeddingModelMismatchError, EmbeddingSubstrate
 from iknos.core.llm import LLMClient
 from iknos.core.prompts import vocab
+from iknos.core.reuse import ReusableExtraction, find_reusable_extraction
 from iknos.db.orm import PropositionEmbedding
 from iknos.provenance.action_log import record_action
 from iknos.types.epistemic import (
@@ -273,12 +274,20 @@ class Propositionizer:
         verifier: "Verifier | None" = None,
         n_samples: int = 1,
         agreement_threshold: float = DEFAULT_AGREEMENT_THRESHOLD,
+        reuse_extractions: bool = True,
     ) -> None:
         self.llm = llm
         self.substrate = substrate
         self.context_window = context_window
         self.concurrency = concurrency
         self.sampling = sampling or {"temperature": 0.0}
+        # Cross-document "extract once" reuse (G1.7b): a never-extracted span whose pipeline hash
+        # matches a prior committed extraction replays that extraction's propositions instead of
+        # re-running the LLM (core/reuse.py). On by default — it is purely additive and sound (the
+        # hash carries the full pipeline identity) — but a flag so a deploy can fall back to always
+        # re-extracting without a code change. Each replayed span still records its own extract
+        # Action, so the per-span idempotency key is preserved.
+        self.reuse_extractions = reuse_extractions
         # Optional independent verifier (G1.4). Absent → faithfulness/provisional stay null
         # (the documented G1.1 state); production wires it from settings when configured.
         self.verifier = verifier
@@ -502,22 +511,19 @@ class Propositionizer:
                 f"scripts/reembed.py to migrate the index first."
             )
 
-    async def _persist(
+    async def _write_propositions(
         self,
         session: AsyncSession,
         document_id: uuid.UUID,
-        span_id: uuid.UUID,
-        context_span_ids: list[str],
-        content_hash: str,
         results: list[PropositionResult],
-        verdicts: "list[_VerifyOut | None] | None" = None,
-        twins: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
-    ) -> uuid.UUID:
-        """Persist one span's propositions + edges + indexes + Action in a single transaction.
+    ) -> tuple[list[str], list[str]]:
+        """Create each proposition vertex + EVIDENCED_BY edge + dense/lexical index rows.
 
-        When verify verdicts are supplied (G1.4), a second Action (actor ``verifier``) records
-        them in the *same* transaction — so a committed proposition's faithfulness always has
-        an auditable verdict behind it. Returns the extract Action id.
+        The shared write path for both fresh extraction (:meth:`_persist`) and G1.7b replay
+        (:meth:`_persist_replay`): the two differ only in the ``Action``(s) they record, never in
+        how a proposition lands — so the node/edge/index shape can never drift between them. Returns
+        ``(prop_ids, edge_ids)`` for the recording Action's outputs. No commit (the caller owns the
+        transaction boundary).
         """
         from iknos.db.age import cypher_map, execute_cypher
 
@@ -573,6 +579,118 @@ class Propositionizer:
             )
             prop_ids.append(str(r.id))
             edge_ids.append(f"{r.id}->{r.span_id}")
+        return prop_ids, edge_ids
+
+    async def _build_replay_results(
+        self, span: Span, reusable: ReusableExtraction
+    ) -> list[PropositionResult]:
+        """Mint fresh :class:`PropositionResult`s from a cached extraction (G1.7b), for a new span.
+
+        Each cached proposition becomes a new node: a new id, this span's provenance, the cached
+        epistemic fields + faithfulness/agreement copied verbatim, and a **freshly computed**
+        embedding. The vector is re-derived under the current substrate rather than copied from the
+        source proposition because ``content_hash`` does *not* pin the embedding model (only the LLM
+        extractor) — re-embedding keeps the ANN space single-model by construction (G1.16) and the
+        local forward pass is negligible next to the LLM call this replay skips. Empty cache → no
+        results (a cached empty extraction).
+        """
+        if not reusable.propositions:
+            return []
+        # One batched forward pass off the event loop, like _infer_span's embed.
+        vectors = await asyncio.to_thread(
+            self.substrate.embed_passages, [c.text for c in reusable.propositions]
+        )
+        return [
+            PropositionResult(
+                id=uuid.uuid4(),
+                text=c.text,
+                span_id=span.id,
+                document_id=span.document_id,
+                embedding=v,
+                polarity=c.polarity,
+                modality=c.modality,
+                attribution=c.attribution,
+                scope=c.scope,
+                epistemic_class=c.epistemic_class,
+                routing=c.routing,
+                faithfulness=c.faithfulness,
+                provisional=c.provisional,
+                agreement=c.agreement,
+            )
+            for c, v in zip(reusable.propositions, vectors, strict=True)
+        ]
+
+    async def _persist_replay(
+        self,
+        session: AsyncSession,
+        document_id: uuid.UUID,
+        span_id: uuid.UUID,
+        context_span_ids: list[str],
+        content_hash: str,
+        results: list[PropositionResult],
+        reusable: ReusableExtraction,
+    ) -> uuid.UUID:
+        """Persist a *replayed* span's propositions + edges + indexes + extract Action (G1.7b).
+
+        The reuse twin of :meth:`_persist`: same node/edge/index writes (shared
+        :meth:`_write_propositions`), but the extract ``Action`` carries a ``reused_from`` pointer
+        instead of being a fresh LLM extraction, and **no verify Action is recorded** — the reused
+        ``faithfulness``/``provisional`` were already verified on the source proposition (the
+        verifier signature is in ``content_hash``), and the pointer keeps that original verify
+        ``Action`` one hop away. ``content_hash`` is still stored, so the *next* run sees this span
+        as already-extracted (a true no-op), exactly like a fresh extraction. Returns the Action id.
+        """
+        prop_ids, edge_ids = await self._write_propositions(session, document_id, results)
+
+        # Same sampling regime the cached extraction ran under (it is part of content_hash, so it
+        # matches by construction) — recorded for parity with fresh extract Actions.
+        extract_sampling: dict[str, object] = dict(self.sampling)
+        if self.n_samples > 1:
+            extract_sampling["n_samples"] = self.n_samples
+
+        action_id = await record_action(
+            session,
+            actor="propositionizer",
+            action_type="extract",
+            inputs={
+                "target_span": str(span_id),
+                "context_spans": context_span_ids,
+                # G1.7 idempotency key — identical to a fresh extraction's, so a re-run no-ops.
+                "content_hash": content_hash,
+                "schema_version": EXTRACT_SCHEMA_VERSION,
+                # G1.7b: these propositions were replayed from a prior identical-pipeline extraction
+                # rather than re-running the LLM. The pointer keeps the audit chain — and the
+                # original verify Action behind the reused faithfulness — one hop away.
+                "reused_from": {
+                    "span": str(reusable.source_span_id),
+                    "action": str(reusable.source_action_id),
+                },
+            },
+            outputs={"propositions": prop_ids, "edges": edge_ids},
+            model=self.llm.model,
+            sampling=extract_sampling,
+        )
+        await session.commit()
+        return action_id
+
+    async def _persist(
+        self,
+        session: AsyncSession,
+        document_id: uuid.UUID,
+        span_id: uuid.UUID,
+        context_span_ids: list[str],
+        content_hash: str,
+        results: list[PropositionResult],
+        verdicts: "list[_VerifyOut | None] | None" = None,
+        twins: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
+    ) -> uuid.UUID:
+        """Persist one span's propositions + edges + indexes + Action in a single transaction.
+
+        When verify verdicts are supplied (G1.4), a second Action (actor ``verifier``) records
+        them in the *same* transaction — so a committed proposition's faithfulness always has
+        an auditable verdict behind it. Returns the extract Action id.
+        """
+        prop_ids, edge_ids = await self._write_propositions(session, document_id, results)
 
         # Multi-sample audit (G1.3): record N in the sampling regime and the per-proposition
         # agreement, so the consistency signal is replayable and feeds Trial A5 straight from
@@ -698,10 +816,12 @@ class Propositionizer:
 
         # Phase 1: version-aware idempotency (G1.7), serial reads on the shared session. Each
         # span's pipeline content hash is compared against the one stored on its prior extract
-        # Action: absent → extract; identical → skip (true no-op); different → the extractor
-        # model/prompt/regime/verifier changed since it was extracted, so fail loud rather than
-        # orphan the old propositions (cascade re-extract is G1.7b). The hash is computed once here
-        # and reused at persist time so the stored key can never drift from the decision it drove.
+        # Action: identical → skip (true no-op); different → the extractor model/prompt/regime/
+        # verifier changed since it was extracted, so fail loud rather than orphan the old
+        # propositions (cascade re-extract is still future); absent → never extracted, so either
+        # *replay* a prior identical-pipeline extraction (G1.7b cross-doc reuse, below) or run the
+        # LLM. The hash is computed once here and reused at persist time so the stored key can never
+        # drift from the decision it drove.
         verifier_sig = (
             {
                 "model": self.verifier.llm.model,
@@ -715,20 +835,32 @@ class Propositionizer:
             else None
         )
         pending: list[int] = []
+        to_replay: list[tuple[int, ReusableExtraction]] = []
         hash_by_index: dict[int, str] = {}
         for i, s in enumerate(spans):
             chash = self._pipeline_hash(spans, i, raw_text, verifier_sig)
             hash_by_index[i] = chash
             stored = await self._extracted_hash(session, s.id)
-            if stored is None:
-                pending.append(i)
-            elif stored != chash:
+            if stored == chash:
+                continue  # already extracted with this exact pipeline: a true no-op.
+            if stored is not None:
                 raise StaleExtractionError(
                     f"span {s.id} was extracted under a different pipeline "
                     f"(stored {stored[:12]}…, now {chash[:12]}…); cascade re-extraction is not "
-                    f"yet supported (G1.7b)."
+                    f"yet supported."
                 )
-            # stored == chash → already extracted with this exact pipeline: a true no-op.
+            # Never extracted (stored is None). G1.7b: if an identical-pipeline extraction exists
+            # anywhere (same content_hash — same target text, context, model, prompt/schema, regime,
+            # verifier), replay its propositions into this span instead of paying the LLM again.
+            # Each replayed span still records its own extract Action, so the per-span idempotency
+            # key (and the soundness reason it is per-span, not pure-content) is preserved.
+            reusable = (
+                await find_reusable_extraction(session, chash) if self.reuse_extractions else None
+            )
+            if reusable is not None:
+                to_replay.append((i, reusable))
+            else:
+                pending.append(i)
 
         # Phase 2: concurrent inference, bounded by a semaphore, with no DB access. The permit is
         # acquired *inside* _infer_span around each individual sample call (G1.3 fans out N per
@@ -769,6 +901,29 @@ class Propositionizer:
         }
         inferred = [(i, results) for i, results, _ in ok_raw]
 
+        # Phase 2-replay (G1.7b): build replay results for the reusable spans — re-embed the cached
+        # proposition text under the current substrate, no LLM and no verify (the reused
+        # faithfulness was already computed on the source). DB-free, so it runs in the concurrent
+        # phase; per-span isolated like inference (a failed replay records no Action → re-runs next
+        # time, re-attempting reuse or falling through to a fresh extraction).
+        async def replay(
+            i: int, reusable: ReusableExtraction
+        ) -> tuple[int, list[PropositionResult], ReusableExtraction, BaseException | None]:
+            try:
+                results = await self._build_replay_results(spans[i], reusable)
+                return i, results, reusable, None
+            except Exception as exc:  # noqa: BLE001 — isolate; the span re-runs next time
+                logger.exception("replay failed for span %s; isolating", spans[i].id)
+                return i, [], reusable, exc
+
+        replayed_raw = await asyncio.gather(*(replay(i, ru) for i, ru in to_replay))
+        replayed: list[tuple[int, list[PropositionResult], ReusableExtraction]] = []
+        for i, results, reusable, exc in replayed_raw:
+            if exc is not None:
+                failed_spans.append(FailedSpan(span_id=spans[i].id, phase="replay", error=str(exc)))
+            else:
+                replayed.append((i, results, reusable))
+
         # Phase 2b: independent verification (G1.4) — another DB-free LLM call, so it runs
         # in the concurrent phase under the same budget. Absent verifier → verdicts stay
         # None and faithfulness/provisional remain null (the documented degraded mode).
@@ -806,6 +961,31 @@ class Propositionizer:
             except Exception as exc:  # noqa: BLE001 — isolate; roll back this span and continue
                 await session.rollback()
                 logger.exception("persist failed for span %s; isolating", spans[i].id)
+                failed_spans.append(
+                    FailedSpan(span_id=spans[i].id, phase="persist", error=str(exc))
+                )
+
+        # Phase 3-replay (G1.7b): persist the replayed spans, same per-span isolation. Each records
+        # an extract Action with a reused_from pointer and no verify Action (the reused faithfulness
+        # is already verified at the source) — but the same content_hash, so a re-run no-ops.
+        for i, results, reusable in replayed:
+            context_spans, _ = build_context(spans, i, raw_text, self.context_window)
+            context_ids = [str(s.id) for s in context_spans]
+            try:
+                action_ids.append(
+                    await self._persist_replay(
+                        session,
+                        document_id,
+                        spans[i].id,
+                        context_ids,
+                        hash_by_index[i],
+                        results,
+                        reusable,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 — isolate; roll back this span and continue
+                await session.rollback()
+                logger.exception("replay persist failed for span %s; isolating", spans[i].id)
                 failed_spans.append(
                     FailedSpan(span_id=spans[i].id, phase="persist", error=str(exc))
                 )
