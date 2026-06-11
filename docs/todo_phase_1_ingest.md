@@ -39,8 +39,15 @@ segmenter `actions` indexes, a per-LLM-call deadline, `EmbeddingSubstrate` lifec
 `cypher_map` property fuzzing) **is now shipped** — one batch hardening the ingest path against
 partial failure, hangs, and the hand-rolled escaping boundary. **G1.6 quarantine enforcement**
 remains genuinely Phase-2-gated (no SUPPORTS/REFUTES creation site exists yet to gate);
-**G1.7b cross-doc reuse / G1.8 reference amortization** and **G1.10 multi-level/RAPTOR** are the
-remaining Phase-1 cost/structure work. See `gap_phase_1_ingest.md` for the gap-plan IDs.
+**G1.7b cross-doc reuse / G1.8 reference amortization** are the remaining Phase-1 cost work.
+The **fixture corpus** (exit-criterion seed for the gate corpus / Trial A5) is now shipped —
+`tests/fixtures/corpus/` with a long multi-window anchor (G1.13), a polarity-waver anchor
+(G1.14), and observation/judgement routing anchors (G1.2), behind a typed model-free loader.
+**G1.10 Part A (multi-level offset spans) is now shipped** — the DP length penalty as a
+configurable per-level knob (`default_level_policy()`, default 2 levels) producing `Span`s at
+multiple granularities from the one cached embedding pass, persisted with per-level idempotency
+and purely additive to level 0; **Part B (RAPTOR summaries)** is deferred per the §2 cost
+decision. See `gap_phase_1_ingest.md` for the gap-plan IDs.
 *(Granular state below; not every box maps 1:1 to a gap ID.)*
 
 ## Document parsing — front-end (§1, Stage 0) — 🟡 contract + MinerU client shipped (G1.0/G1.0b)
@@ -123,14 +130,26 @@ remaining Phase-1 cost/structure work. See `gap_phase_1_ingest.md` for the gap-p
       argmin.
 - [x] **DP segmentation** over sentence units: maximize intra-segment coherence minus a
       length penalty (no O(n²) position×size brute force).
-- [ ] Length penalty as the **level knob** → multiple abstraction levels (sub-paragraph
+- [x] Length penalty as the **level knob** → multiple abstraction levels (sub-paragraph
       … chapter) from one mechanism; store segments as `Span` offset ranges with
-      `level`. *(G1.10 — the `level` field exists, default 0; multi-level generation is
-      not yet wired.)*
+      `level`. *(G1.10 **Part A — shipped.** `SegmentationBackbone(levels=…)` takes a
+      configurable `list[SegmentLevel]` (the level **count is data**, not code);
+      `default_level_policy()` is the default 2-level policy — a fine level 0 + one
+      coarse level 1 (4× `max_len`, 1/5 penalty). `segment_document_levels` derives every
+      level from the **one** cached embedding pass (embed once — §1/§2); `_ingest_parsed`
+      persists each level under its own per-level content hash + segment `Action`, so
+      coarse levels are **purely additive** — level 0 stays byte-identical and no existing
+      document is force-resegmented on deploy. `_segmented_hash` is now per-`level`. The
+      finest level drives the proposition layer; coarse levels ride along under
+      `SpanPersistResult.coarse`. Levels are independent granularities — RAPTOR nesting
+      with parent links is Part B / Phase-2 `PART_OF`.)*
 - [x] Blend an information signal (entity/number density) into the objective so
       segments don't collapse onto redundant blobs.
 - [ ] Coarse levels as **summaries**, not just longer windows (RAPTOR-style upward
-      tree) — needed so §5.1 coarse-to-fine pruning has crisp parents. *(G1.10.)*
+      tree) — needed so §5.1 coarse-to-fine pruning has crisp parents. *(G1.10 **Part B**
+      — deferred; adds ingest-time LLM cost. Part A ships the multi-level offset spans;
+      summary generation + parent links is the next increment, gated on the §2 cost
+      decision "confirm it's worth the pruning benefit before scaling".)*
 
 ## Proposition layer (§3) — built (increment 3)
 
@@ -284,10 +303,18 @@ remaining Phase-1 cost/structure work. See `gap_phase_1_ingest.md` for the gap-p
       spans yield `provisional` propositions (G1.14).
 - [x] A prompt-template edit alone invalidates the extraction cache (G1.15); an
       embedding-model swap is refused, not silently mixed (G1.16).
-- [ ] Maintain a small fixture corpus exercising this path (seed for the gate corpus).
-      Include at least one document longer than one embedding window and one span
-      whose negation the extractor is known to waver on (regression anchors for
-      G1.13/G1.14).
+- [x] **Fixture corpus (seed for the gate corpus) — shipped.** `tests/fixtures/corpus/`
+      holds three real documents + a `manifest.toml` of machine-readable regression
+      anchors, loaded by a typed, model-free/DB-free loader (`tests/fixtures/corpus.py`,
+      stdlib `tomllib`) and kept honest by `tests/unit/test_corpus.py`. It includes a
+      document **longer than one embedding window** — `long_case_file.txt`, > 8200 words,
+      so `tokens ≥ words > MAX_MODEL_TOKENS` makes ">1 window" provable in CI **with no
+      model in the loop** (G1.13 tail-coverage anchor; the judgement anchor sits in the
+      tail) — and a span **whose negation the extractor wavers on** (`polarity_waver.txt`,
+      the `"ambiguous"` polarity sentinel: must yield split clusters + a `provisional`
+      proposition, G1.14). Anchors carry **quotes, not hand-counted offsets** (the loader
+      locates each and asserts it is unique). The model-backed end-to-end run + gate
+      metric over this corpus is Trial A5; this is the labelled input it consumes.
 
 ## Phase risks / decisions
 

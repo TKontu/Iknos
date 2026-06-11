@@ -59,8 +59,32 @@ is now shipped** — one batch: per-span error isolation + a `PropositionizeRepo
 verifier-failure degradation, `pool_span`→`None` (zero-vector sentinel removed), parser/
 segmenter `actions` indexes (migration 0010), a per-LLM-call deadline, `EmbeddingSubstrate`
 lifecycle, and `cypher_map` property fuzzing. Next: **G1.6 quarantine enforcement** stays
-Phase-2-gated (no SUPPORTS/REFUTES creation site to gate yet), so the remaining Phase-1 work
-is **G1.7b cross-doc reuse / G1.8 reference amortization** and **G1.10 multi-level/RAPTOR**.
+Phase-2-gated (no SUPPORTS/REFUTES creation site to gate yet). **G1.10 Part A (multi-level
+offset spans) is now shipped** (Part B RAPTOR summaries deferred per the §2 cost decision), so
+the remaining un-gated Phase-1 work is **G1.7b cross-doc reuse / G1.8 reference amortization**
+(+ optional **G1.12** multi-span provenance and **G1.10 Part B**).
+
+**Fixture corpus (exit-criterion seed) is now shipped** — `tests/fixtures/corpus/`: three
+real documents + a `manifest.toml` of regression anchors, a typed model-free/DB-free loader
+(`tests/fixtures/corpus.py`), and `tests/unit/test_corpus.py`. It carries the two required
+anchors — a > 8200-word document (G1.13: `tokens ≥ words > MAX_MODEL_TOKENS`, so multi-window
+is CI-provable without the model) and an `"ambiguous"`-polarity waver span (G1.14) — plus
+observation/judgement routing anchors (G1.2). Anchors store quotes, not offsets (located +
+uniqueness-checked at load). This is the labelled input Trial A5 (faithfulness-gate metric)
+consumes.
+
+**Re-assessment after Phase 2/3 merged to `main`** (G2.1–G2.7 boxes + reference binding +
+credibility + part-whole + provenance; G3.4–G3.9 reasoning core). Three items previously
+called "Phase-2-gated" were re-checked against the merged code:
+- **G1.6 quarantine enforcement** — still gated: no `SUPPORTS`/`REFUTES` creation site
+  exists yet (`composed_loop.py` documents the evidential layer as Phase-4 work). Land the
+  `is_provisional` gate where evidential edges are first created.
+- **G1.19 RRF fusion** — still gated: no hybrid-retrieval consumer queries both indexes yet
+  (Phase-4 candidate generation). Nothing to fuse into.
+- **G1.11 box on indexes** — partially unblocked (case boxes exist via G2.1), but propositions
+  are indexed in Phase 1 *before* any box is assigned at Phase-2 extract time; threading a box
+  through ingest needs an architectural decision, so it is sequenced after the un-gated work.
+Genuinely actionable un-gated Phase-1 work now: **G1.10**, **G1.7b**, **G1.8**, **G1.12**.
 
 ## Current implementation (baseline)
 
@@ -253,10 +277,28 @@ integration test hand-creates them).
       *(Seam `persist_spans(layouts=...)` in place; populated once G1.0 lands.)*
 
 ### G1.10 — Multi-level spans + RAPTOR summaries (§2)
-- [ ] Length penalty as the **level knob** → multiple abstraction levels stored as
-      `Span` offset ranges with `level` (currently single-level).
-- [ ] Coarse levels as **summaries**, not just longer windows (RAPTOR-style upward
-      tree) — needed so §5.1 coarse-to-fine pruning has crisp parents.
+- [x] **Part A — multi-level offset spans (shipped).** Length penalty as the **level
+      knob** → multiple abstraction levels stored as `Span` offset ranges with `level`.
+      `core/segmentation.py`: `SegmentLevel` (frozen) + `default_level_policy()` (default
+      2 levels — fine + one coarse; the count is the list length, configured not coded)
+      + `SegmentationBackbone(levels=…)` + `segment_document_levels`, which pools/derives
+      the boundary signal **once** and runs the DP per level (embed once — §1/§2; only
+      penalty/`max_len` differ). `core/ingest.py`: `_ingest_parsed` persists every level
+      from the one embedding pass; `_segmented_hash` is per-`(document, level)` and each
+      level carries its own content hash + segment `Action`, so coarse levels are **purely
+      additive** (level 0 byte-identical; no forced resegmentation on deploy).
+      `SpanPersistResult.coarse` carries the coarse results; the finest level feeds the
+      proposition layer. Levels are independent granularities — strict containment/parent
+      links are Part B / Phase-2 `PART_OF` (G2.5). Tests: `test_segmentation.py`
+      (multi-level pure logic — policy, per-level params byte-identity, coarse-merges,
+      level-0 ↔ single-level agreement, degenerate/empty) + `test_ingest_layout.py`
+      (live-AGE multi-level persistence + per-level idempotency). *No production ingest
+      entrypoint constructs the segmenter yet (tests inject it); wire it to
+      `default_level_policy()` when that entrypoint lands.*
+- [ ] **Part B — RAPTOR summaries (deferred).** Coarse levels as **summaries**, not just
+      longer windows (RAPTOR-style upward tree) — needed so §5.1 coarse-to-fine pruning
+      has crisp parents. Adds ingest-time LLM cost; gated on the §2 "confirm it's worth
+      the pruning benefit before scaling" decision. Next increment after Part A.
 
 ### G1.11 — `box` on the indexes (cross-phase)
 - [ ] Add `box` to `proposition_embeddings` / `proposition_lexical_index` (today:

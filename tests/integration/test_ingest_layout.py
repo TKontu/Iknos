@@ -26,6 +26,7 @@ from iknos.core.ingest import (
     span_content_hash,
 )
 from iknos.core.parse import NullParser, OffsetSpec, ParseKind, ParseResult, SourceQuality
+from iknos.core.segmentation import SegmentLevel
 from iknos.db.age import bootstrap_session, execute_cypher
 from iknos.db.spans import resolve_span_text
 
@@ -68,12 +69,27 @@ def _mock_substrate(vecs: list[list[float]]) -> MagicMock:
     return substrate
 
 
+def _level0() -> SegmentLevel:
+    return SegmentLevel(0, _PARAMS["max_len"], _PARAMS["penalty_weight"], _PARAMS["density_weight"])
+
+
 def _mock_segmenter(char_spans: list[tuple[int, int]]) -> MagicMock:
+    """A single-level segmenter (level 0 only) — the pre-G1.10 behaviour, for the tests that
+    assert one segment Action and a flat span set. ``_ingest_parsed`` now drives the multi-level
+    entry point ``segment_document_levels``; a one-element policy reproduces the old path."""
     seg = MagicMock()
-    seg.segment_document = MagicMock(return_value=char_spans)
+    seg.segment_document_levels = MagicMock(return_value=[(_level0(), char_spans)])
     seg.max_len = _PARAMS["max_len"]
     seg.penalty_weight = _PARAMS["penalty_weight"]
     seg.density_weight = _PARAMS["density_weight"]
+    return seg
+
+
+def _mock_multilevel_segmenter(
+    levels: list[tuple[SegmentLevel, list[tuple[int, int]]]],
+) -> MagicMock:
+    seg = MagicMock()
+    seg.segment_document_levels = MagicMock(return_value=levels)
     return seg
 
 
@@ -312,3 +328,92 @@ async def test_ingest_document_bytes_null_parser_degrades_to_no_layout(
         {"d": str(doc_id)},
     )
     assert parse_row.scalar_one() == "null"
+
+
+async def _spans_at_level(session: AsyncSession, doc_id: uuid.UUID, level: int) -> list[str]:
+    rows = await execute_cypher(
+        session,
+        f"MATCH (s:Span {{document_id: '{doc_id}', level: {level}}}) RETURN s.id",
+        returns="id agtype",
+    )
+    return sorted(r[0] for r in rows)
+
+
+async def test_ingest_persists_multiple_levels(session: AsyncSession) -> None:
+    """G1.10: a multi-level segmenter persists every level from one embedding pass.
+
+    The finest level (0) is returned for the proposition layer; coarse levels ride along under
+    ``.coarse``. Each level gets its own Span vertices + dense rows (at its ``level``) and its own
+    segment Action, so coarse spans are queryable for §5.1 coarse-to-fine pruning.
+    """
+    await bootstrap_session(session)
+    doc_id = uuid.uuid4()
+    raw = "Alpha one here. Alpha two here. Beta three here. Beta four here."
+    fine = [(0, 15), (16, 31), (32, 48), (49, len(raw))]  # four fine spans
+    coarse = [(0, 31), (32, len(raw))]  # two coarse spans (merged pairs)
+    levels = [(SegmentLevel(0, 5, 0.1, 0.5), fine), (SegmentLevel(1, 20, 0.02, 0.5), coarse)]
+
+    # pool_span is called per level in order: four fine, then two coarse.
+    substrate = _mock_substrate([_VEC] * (len(fine) + len(coarse)))
+    result = await ingest_document(
+        session, doc_id, raw, substrate, _mock_multilevel_segmenter(levels)
+    )
+    await session.commit()
+
+    # Returned result is the finest level; the coarse level rides along under .coarse.
+    assert len(result.spans) == len(fine)
+    assert all(s.level == 0 for s in result.spans)
+    assert len(result.coarse) == 1
+    assert all(s.level == 1 for s in result.coarse[0].spans)
+    assert len(result.coarse[0].spans) == len(coarse)
+
+    # One segment Action per level, each tagged with its level.
+    assert await _action_count(session, "segmenter", doc_id) == 2
+    lvl_rows = await session.execute(
+        text(
+            "SELECT inputs->>'level' FROM actions "
+            "WHERE actor='segmenter' AND inputs->>'document_id'=:d ORDER BY inputs->>'level'"
+        ),
+        {"d": str(doc_id)},
+    )
+    assert [r[0] for r in lvl_rows] == ["0", "1"]
+
+    # Both levels' spans + dense rows are persisted and distinct.
+    assert len(await _spans_at_level(session, doc_id, 0)) == len(fine)
+    assert len(await _spans_at_level(session, doc_id, 1)) == len(coarse)
+    dense = await session.execute(
+        text("SELECT level, count(*) FROM document_embeddings WHERE document_id=:d GROUP BY level"),
+        {"d": doc_id},
+    )
+    assert dict(dense.all()) == {0: len(fine), 1: len(coarse)}
+
+
+async def test_multilevel_ingest_is_idempotent_per_level(session: AsyncSession) -> None:
+    """G1.10: re-ingesting an unchanged multi-level document is a true no-op at *every* level.
+
+    The per-level resegmentation guard means level 1's stored hash never collides with level 0's,
+    so neither level re-writes and no extra segment Action is recorded.
+    """
+    await bootstrap_session(session)
+    doc_id = uuid.uuid4()
+    raw = "Gamma one here. Gamma two here. Delta three here. Delta four here."
+    fine = [(0, 15), (16, 31), (32, 49), (50, len(raw))]
+    coarse = [(0, 31), (32, len(raw))]
+    levels = [(SegmentLevel(0, 5, 0.1, 0.5), fine), (SegmentLevel(1, 20, 0.02, 0.5), coarse)]
+    n = len(fine) + len(coarse)
+
+    first = await ingest_document(
+        session, doc_id, raw, _mock_substrate([_VEC] * n), _mock_multilevel_segmenter(levels)
+    )
+    await session.commit()
+    assert first.already_segmented is False and first.coarse[0].already_segmented is False
+
+    second = await ingest_document(
+        session, doc_id, raw, _mock_substrate([_VEC] * n), _mock_multilevel_segmenter(levels)
+    )
+    await session.commit()
+
+    # No-op at both levels: guard short-circuits, no rows written, no new Actions.
+    assert second.already_segmented is True and second.coarse[0].already_segmented is True
+    assert second.embedding_rows == 0 and second.coarse[0].embedding_rows == 0
+    assert await _action_count(session, "segmenter", doc_id) == 2  # still one per level

@@ -1,0 +1,7 @@
+Supplemental Investigator Note — Matter 2023-0417, Item 31
+
+The reconciliation of the Halden Maritime operating account for the period 1 February through 31 March 2023 was completed on 12 April 2023 by the forensic accounting team. The bank statement records a single outbound wire of USD 4,200,000 dated 14 March 2023 to an account held at Brügen Privatbank.
+
+The authorisation trail for that wire is incomplete. The treasury workflow normally captures a dual approval, but only one approval token is present in the export, and the second token's audit row is blank. Interviewed on 9 April 2023, the treasury officer stated that she did not recall preparing the instruction.
+
+On the central question of approval, the file is genuinely equivocal. Investigators could not exclude the possibility that Okonkwo had not authorised the wire transfer. The single recovered token bears his credential, yet the device-binding metadata that would tie the token to his workstation was missing from the same export, and he has consistently denied initiating any transfer to Brügen Privatbank. No further corroborating record was located before this note was filed.
