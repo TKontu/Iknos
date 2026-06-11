@@ -34,13 +34,15 @@ upsert ``merge_edge`` (keyed on endpoints + label), so a re-run writes no duplic
 
 Scope deliberately left to later slices (documented seams):
 
-- **Anchor-canonicalization fold** — making ``resolve.canonical_components`` and the
-  ``partwhole`` level read prefer an entity's confirmed anchor as its canonical identity /
-  level source (§5.2/§14) → G2.8 slice 2. This slice writes the ``ANCHORS_TO`` edges and
-  exposes the reads (:meth:`anchored_targets`, :meth:`coverage`) those consumers will use; it
-  does **not** yet mutate the shipped ``resolve``/``partwhole`` behaviour.
+- **Anchor-canonicalization fold (shipped — G2.8 slice 2).** ``resolve.anchored_components``
+  /``resolve.canonical_components`` and ``partwhole.entity_level``/``fact_level`` now prefer an
+  entity's confirmed anchor as its canonical identity / level source (§5.2/§14), via the
+  :meth:`anchored_targets` read this slice exposes. (Slice 1 wrote the ``ANCHORS_TO`` edges and
+  the reads without yet mutating ``resolve``/``partwhole``.)
 - **Taxonomy-anchor stage in the reference binder** (§3.1 cascade tail) — a ``Mention`` that
-  fails the in-graph stage binds to a taxonomy node via the same linking → with slice 2.
+  fails the in-graph stage binds to a taxonomy node via this same linking. Unblocked by this
+  anchoring subsystem; a later increment (a distinct ``REFERS_TO`` cascade stage in
+  ``core/reference``), not part of the slice-2 canonicalization fold.
 - **Embedding-neighbourhood blocking** (§5.2) — needs an entity-embedding store; this slice
   blocks on shared normalized tokens only.
 - **Belief-revision / retraction** of a stale anchor when the taxonomy or the entity changes

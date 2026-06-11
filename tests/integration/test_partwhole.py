@@ -13,9 +13,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.boxes.serde import case_box
+from iknos.core.anchor import EntityLinker
 from iknos.core.extract import ExtractInput, Extractor
-from iknos.core.partwhole import MeronymyInducer
+from iknos.core.partwhole import LevelReading, MeronymyInducer
 from iknos.db.age import bootstrap_session, cypher_map, execute_cypher
+from iknos.domain.loader import load_pack
+from iknos.domain.packs import bundled_pack
+from iknos.types.edges import AttachmentProvenance
 from iknos.types.nodes import Proposition, Span
 
 pytestmark = pytest.mark.asyncio
@@ -139,12 +143,17 @@ async def test_induce_builds_closure_and_derives_level(session: AsyncSession) ->
     assert await _count_edges(session, box, "partOf") == 6
 
     # Derived level of the "The roller spalled." fact = roller's partonomy depth = 3, even
-    # though that fact's roller is a different fresh node than the one in the hierarchy.
+    # though that fact's roller is a different fresh node than the one in the hierarchy. With
+    # no pack loaded the level source is the induced partonomy (provenance INDUCED, §14).
     f4 = await _fact_id(session, p4[0], box)
-    assert await inducer.fact_level(session, box.id, f4) == [3]
+    assert await inducer.fact_level(session, box.id, f4) == [
+        LevelReading(3, AttachmentProvenance.INDUCED)
+    ]
     # The gearbox fact attaches at the coarsest level (no parent).
     f1 = await _fact_id(session, p1[0], box)
-    assert await inducer.fact_level(session, box.id, f1) == [1]  # shaft is p1's subject
+    assert await inducer.fact_level(session, box.id, f1) == [
+        LevelReading(1, AttachmentProvenance.INDUCED)  # shaft is p1's subject
+    ]
 
     # Idempotent re-run: settled propositions skipped, no duplicate edges.
     again = await inducer.induce_box(session, box.id)
@@ -180,3 +189,43 @@ async def test_non_transitive_subtype_excluded_from_rollup(session: AsyncSession
     # Excluded from the closure (§14): no partOf edge, gearbox has no partonomy ancestor.
     assert result.part_of_count == 0
     assert await _count_edges(session, box, "partOf") == 0
+
+
+async def test_level_read_follows_confirmed_anchor_into_pack_partonomy(
+    session: AsyncSession,
+) -> None:
+    """G2.8 slice 2: an anchored entity's level is read off the pack taxonomy depth (§14).
+
+    The pack's ``roller -> bearing -> pump`` puts "Roller" at partonomy depth 2. A case "roller"
+    confirm-anchors to it, so its fact's level resolves to 2 with provenance ANCHORED — read off
+    the **taxonomy**, with no induced meronymy in the case box at all. An out-of-taxonomy
+    "gearbox" falls back to the (empty) induced partonomy: depth 0, provenance INDUCED.
+    """
+    await bootstrap_session(session)
+    pack = bundled_pack("pump_basic")
+    await load_pack(session, pack)
+    await session.commit()
+
+    box = case_box("partwhole-anchored-level", "1", "test", 0.8)
+    extract_table = {
+        "roller": [{"label": "roller", "type": "component", "kind": "object", "role": "subject"}],
+        "gearbox": [{"label": "gearbox", "type": "assembly", "kind": "object", "role": "subject"}],
+    }
+    p_roller = await _seed_proposition(session, text_="The roller spalled.")
+    p_gearbox = await _seed_proposition(session, text_="The gearbox vibrated.")
+    await _extract(session, box, extract_table, [p_roller, p_gearbox])
+
+    # No induce run: the case box has zero partOf edges, so any non-zero level is anchor-driven.
+    await EntityLinker().anchor_box(session, box.id, pack_box_ids=[pack.box_id])
+    assert await _count_edges(session, box, "partOf") == 0
+
+    inducer = _inducer({})
+    f_roller = await _fact_id(session, p_roller[0], box)
+    assert await inducer.fact_level(session, box.id, f_roller) == [
+        LevelReading(2, AttachmentProvenance.ANCHORED)
+    ]
+    # The out-of-taxonomy gearbox has no anchor and no induced structure -> INDUCED depth 0.
+    f_gearbox = await _fact_id(session, p_gearbox[0], box)
+    assert await inducer.fact_level(session, box.id, f_gearbox) == [
+        LevelReading(0, AttachmentProvenance.INDUCED)
+    ]

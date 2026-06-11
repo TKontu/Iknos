@@ -88,13 +88,16 @@ because Phase 2 is where its absence turns from latent to expensive.*
         attention**) → resolve into components. *(G2.3 — `block_candidates` (shared-token,
         same-kind) → deterministic relational `score_pair` → `components`. Embedding-neighbourhood
         and taxonomy-anchor blocking signals deferred — need an entity-embedding store / G2.4–G2.5.)*
-  - [~] **Anchor canonicalizes:** a mention that entity-links to the domain-pack taxonomy
+  - [x] **Anchor canonicalizes:** a mention that entity-links to the domain-pack taxonomy
         takes that node as its canonical identity (anchor-first, §9/§14). *(G2.8 slice 1 —
-        `core/anchor.py`: the **entity-linking** subsystem ships — a scored, conservative
+        `core/anchor.py`: the **entity-linking** subsystem — a scored, conservative
         `ANCHORS_TO` edge (case entity → taxonomy node; the direction **is** "anchor
         canonicalizes") via a deterministic lexical cascade, plus the `anchored_targets` read.
-        The **fold** that makes `resolve.canonical_components` prefer a confirmed anchor as the
-        canonical identity is the slice-2 consumer.)*
+        G2.8 slice 2 — `resolve.anchored_components` **folds** the confirmed `ANCHORS_TO` map
+        into the `SAME_AS` components and `resolve.canonical_components` reads it: a confirm-
+        anchored component takes its taxonomy node as `canonical`, and two mentions sharing an
+        anchor target fold into one entity (a `SAME_AS`-bridged multi-anchor conflict is
+        surfaced, not auto-resolved). Belief revision on a re-anchor is the Phase-3 seam.)*
   - [x] **Conservative default:** auto-merge only above a high confidence bar; below it
         keep entities separate but record a `candidate` `SAME_AS` link (bridgeable, not
         committed). Route candidate merges to expert triage; confirm via override (§10.3).
@@ -160,13 +163,14 @@ because Phase 2 is where its absence turns from latent to expensive.*
       `core/partwhole.py` + `edges.MeronymyType`/`is_transitive`: `transitive_closure` is
       cycle-safe (Kahn-isolates meronymy cycles, excludes+flags them) and component-integral-
       restricted; edges carry the type tag, two annotations, bitemporal.)*
-- [~] **Anchor first (primary, reliable):** entity-link each referent to the active
+- [x] **Anchor first (primary, reliable):** entity-link each referent to the active
       domain pack's taxonomy (ISO 14224, BOM, FMA…) and read the level off. Record
       attachment provenance = anchored, high confidence (§14). *(G2.8 slice 1 — the
-      **entity-linking** half ships (`core/anchor.py`, scored `ANCHORS_TO` to the active pack
-      taxonomy). "Read the level off" the anchored partonomy depth + stamping
-      `AttachmentProvenance.ANCHORED` is slice 2, wiring `partwhole`'s derived-level read to
-      follow a confirmed anchor into the pack's `partOf` order.)*
+      **entity-linking** half (`core/anchor.py`, scored `ANCHORS_TO` to the active pack
+      taxonomy). G2.8 slice 2 — `partwhole.MeronymyInducer.entity_level`/`fact_level` now read
+      the level off the **anchored** node: a confirmed `ANCHORS_TO` makes the read follow the
+      taxonomy node into the pack's `partOf` order (depth there), returning a `LevelReading`
+      stamped `AttachmentProvenance.ANCHORED`; induced otherwise.)*
 - [x] **Induce only as fallback (out-of-taxonomy referents):** the `extract` pass emits
       `directPartOf` candidates from compositional noun phrases ("high speed shaft
       locating bearing"), "Y of X", possessives, "part of". Lower confidence,
@@ -185,8 +189,10 @@ because Phase 2 is where its absence turns from latent to expensive.*
       size, structure-only); out-of-taxonomy → box embeddings (or ConE for joint
       is-a + part-of). Do **not** use embedding cosine or lexical concreteness as level
       proxies (§13). *(G2.5 — the **structure-only partonomy depth** (`derived_level` =
-      ancestor count) ships; the intrinsic-IC refinement and box-embedding/ConE generality
-      are deferred seams. Embedding cosine / lexical concreteness are correctly never used.)*
+      ancestor count); G2.8 slice 2 — the **anchored** depth (read off the pack's `partOf`
+      order via a confirmed anchor) ships alongside the induced depth. The intrinsic-IC
+      refinement and box-embedding/ConE generality remain deferred seams. Embedding cosine /
+      lexical concreteness are correctly never used.)*
 - [x] Attach each fact's **derived level** via its subject-role `INVOLVES` entity;
       represent ambiguous attachment as uncertain/multiple, not forced (§14). *(G2.5 —
       `fact_level`: subject-role referent's depth, canonicalized; several subjects → several
@@ -228,12 +234,13 @@ because Phase 2 is where its absence turns from latent to expensive.*
       separately (by box) and jointly (by tier). *(G0.7 pack loader → reference boxes;
       G2.2 extract → case boxes; G2.1 `list_boxes` (by box) + `active_boxes_by_tier`
       (jointly by tier).)*
-- [~] Facts attach to a `PART_OF` hierarchy — anchored to a domain pack where coverage
+- [x] Facts attach to a `PART_OF` hierarchy — anchored to a domain pack where coverage
       allows, induced+flagged otherwise — and a node's level resolves from its referent.
-      *(G2.5 — the **induced+flagged** path and structure-only level ship; `fact_level`
-      resolves a node's level from its subject-role referent. G2.8 slice 1 ships the
-      **entity-linking** the anchored path needs (`ANCHORS_TO` + coverage); reading the level
-      off the anchored taxonomy depth (`AttachmentProvenance.ANCHORED`) is slice 2.)*
+      *(G2.5 — the **induced+flagged** path and structure-only level; `fact_level` resolves a
+      node's level from its subject-role referent. G2.8 slice 1 — the **entity-linking** the
+      anchored path needs (`ANCHORS_TO` + coverage); slice 2 — `fact_level` now reads the
+      level off the anchored taxonomy depth (`AttachmentProvenance.ANCHORED`) when a confirmed
+      anchor exists, induced otherwise.)*
 
 ## Phase risks / decisions
 

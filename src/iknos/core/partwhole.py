@@ -28,9 +28,12 @@ methods.
 
 Scope deliberately left to later slices (documented seams):
 
-- **Anchoring to the pack taxonomy** (the *primary*, reliable path, §14) — needs entity
-  linking → with G2.3/G2.4 anchor-canonicalization. This slice runs the §9.1 "induce-mode"
-  (everything provisional), which is the correct cold-start behaviour, not a gap.
+- **Anchoring to the pack taxonomy** (the *primary*, reliable path, §14) — the G2.5 induce
+  slice ran §9.1 "induce-mode" (everything provisional, the correct cold-start). G2.8 slice 2
+  wires the level read to it: :meth:`MeronymyInducer.entity_level`/:meth:`fact_level` prefer a
+  confirmed ``ANCHORS_TO`` (``core/anchor``), reading the level off the **taxonomy node's**
+  depth in the pack ``partOf`` order with provenance ``ANCHORED``, induced otherwise. Belief
+  revision on a re-anchor (re-run Layer A/B) stays the Phase-3 seam.
 - **Relative ordering (last resort)** — containment cues + co-occurrence/degree asymmetry +
   the §2 chunk prior when no parent is named (§14 step 3).
 - **Continuous level / intrinsic IC** — anchored depth + a Seco-style information-content
@@ -226,6 +229,20 @@ def derived_level(closure: set[tuple[uuid.UUID, uuid.UUID]], node: uuid.UUID) ->
     deferred seam; this is the depth term it scales.
     """
     return sum(1 for c, _a in closure if c == node)
+
+
+@dataclass(frozen=True)
+class LevelReading:
+    """A derived abstraction level (§14): the partonomy ``depth`` + which path produced it.
+
+    ``provenance`` records the level *source* so its reliability is interpretable (§14):
+    :attr:`AttachmentProvenance.ANCHORED` when the depth was read off the entity's confirmed
+    domain-pack anchor (the *primary, reliable* path) vs :attr:`AttachmentProvenance.INDUCED`
+    when it was read off the case box's text-induced partonomy (the domain-fragile fallback).
+    """
+
+    depth: int
+    provenance: AttachmentProvenance
 
 
 # --- write contracts -------------------------------------------------------
@@ -548,38 +565,78 @@ class MeronymyInducer:
         referents = await self._load_referents(session, box)
         return {member: r.canonical for r in referents for member in r.ids}
 
-    async def _ancestor_count(self, session: AsyncSession, canonical: uuid.UUID) -> int:
+    async def _ancestor_count(self, session: AsyncSession, node: uuid.UUID) -> int:
         from iknos.db.age import execute_cypher
 
         rows = await execute_cypher(
             session,
-            f"MATCH (e {{id: '{canonical}'}})-[:partOf]->(a) RETURN count(a)",
+            f"MATCH (e {{id: '{node}'}})-[:partOf]->(a) RETURN count(a)",
             returns="n agtype",
         )
         return int(str(rows[0][0])) if rows else 0
 
+    async def _confirmed_anchors(
+        self, session: AsyncSession, box: uuid.UUID
+    ) -> dict[uuid.UUID, uuid.UUID]:
+        """The box's confirmed ``ANCHORS_TO`` map (canonical case entity → taxonomy node).
+
+        Lazy import keeps this module DB-free to import (the ``resolve.py`` discipline) and
+        avoids a static ``partwhole`` → ``anchor`` cycle. Keyed on the same label-canonical id
+        :meth:`_canonical_map` produces, so a subject resolves and looks up consistently.
+        """
+        from iknos.core.anchor import EntityLinker
+
+        return await EntityLinker().anchored_targets(session, box)
+
+    async def _level_reading(
+        self,
+        session: AsyncSession,
+        anchors: dict[uuid.UUID, uuid.UUID],
+        canonical: uuid.UUID,
+    ) -> LevelReading:
+        """Read one canonical entity's level — **anchor first**, induced as fallback (§14).
+
+        A confirm-anchored entity's level is read off its **taxonomy node's** depth in the
+        pack's ``partOf`` order (the reliable, high-confidence path), provenance ``ANCHORED``;
+        otherwise off the case box's induced partonomy, provenance ``INDUCED``.
+        """
+        target = anchors.get(canonical)
+        if target is not None:
+            return LevelReading(
+                depth=await self._ancestor_count(session, target),
+                provenance=AttachmentProvenance.ANCHORED,
+            )
+        return LevelReading(
+            depth=await self._ancestor_count(session, canonical),
+            provenance=AttachmentProvenance.INDUCED,
+        )
+
     async def entity_level(
         self, session: AsyncSession, box: uuid.UUID, entity_id: uuid.UUID
-    ) -> int:
-        """The partonomy depth of an entity = its ``partOf`` ancestor count (§14, derived).
+    ) -> LevelReading:
+        """An entity's derived abstraction level (§14): partonomy depth + attachment provenance.
 
         ``entity_id`` is resolved to its label-canonical id first (:meth:`_canonical_map`), so
-        any fresh node of the entity reports the same depth. Depth 0 is the coarsest level.
+        any fresh node of the entity reports the same level. A confirmed domain-pack anchor is
+        preferred as the level source (``ANCHORED``); otherwise the induced partonomy is read
+        (``INDUCED``). Depth 0 is the coarsest level.
         """
         cmap = await self._canonical_map(session, box)
-        return await self._ancestor_count(session, cmap.get(entity_id, entity_id))
+        anchors = await self._confirmed_anchors(session, box)
+        return await self._level_reading(session, anchors, cmap.get(entity_id, entity_id))
 
     async def fact_level(
         self, session: AsyncSession, box: uuid.UUID, fact_id: uuid.UUID
-    ) -> list[int]:
-        """A fact's derived abstraction level(s) (§14): the depth of its subject-role referent.
+    ) -> list[LevelReading]:
+        """A fact's derived abstraction level(s) (§14): the level of its subject-role referent.
 
         Level is the position of the fact's **primary referent** — the entity on its
-        ``subject``-role ``INVOLVES`` edge — in the ``partOf`` order (§14). A fact with several
-        subject-role entities yields **several** levels: ambiguity is represented as
+        ``subject``-role ``INVOLVES`` edge — in the ``partOf`` order (§14), read **anchor first**
+        (a confirmed anchor's taxonomy depth) and induced otherwise. A fact with several
+        subject-role entities yields **several** readings: ambiguity is represented as
         uncertain/multiple, never forced to one value (§14). Each subject is resolved to its
-        label-canonical id before its depth is counted. Returns the sorted distinct depths;
-        empty when the fact has no subject-role referent.
+        label-canonical id first. Returns the sorted distinct readings (by depth, then
+        provenance); empty when the fact has no subject-role referent.
         """
         from iknos.db.age import execute_cypher, unquote_agtype
 
@@ -591,5 +648,6 @@ class MeronymyInducer:
         )
         subjects = [uuid.UUID(unquote_agtype(eid)) for (eid,) in rows]
         cmap = await self._canonical_map(session, box)
-        levels = {await self._ancestor_count(session, cmap.get(s, s)) for s in subjects}
-        return sorted(levels)
+        anchors = await self._confirmed_anchors(session, box)
+        readings = {await self._level_reading(session, anchors, cmap.get(s, s)) for s in subjects}
+        return sorted(readings, key=lambda r: (r.depth, str(r.provenance)))
