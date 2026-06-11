@@ -65,6 +65,32 @@ class BindingState(StrEnum):
     CONFIRMED = "confirmed"
 
 
+class AnchorState(StrEnum):
+    """The ``state`` property on an ``ANCHORS_TO`` entity-linking edge (§5.2, §9, §14, §10).
+
+    Anchoring entity-links a case ``Actor``/``Object`` to a **domain-pack taxonomy** node —
+    the *primary, reliable* identity/level path (§14: "anchor first"). The edge is directed
+    (case entity → taxonomy node): the taxonomy node is the authoritative identity an anchored
+    entity takes on (*anchor canonicalizes*, §5.2/§14). The state mirrors :class:`SameAsState`'s
+    conservative default — an over-eager anchor mis-canonicalizes an entity and corrupts its
+    level, so a near-miss stays open:
+
+    - ``CONFIRMED`` — a single taxonomy node cleared the high bar (typically an exact
+      normalized-label match within the active pack scope): the entity's anchor is committed,
+      and the taxonomy node is its canonical identity / level source.
+    - ``CANDIDATE`` — below that bar, or two taxonomy nodes tie (e.g. a cross-pack homonym —
+      a "valve" in two active packs): the anchor stays **open**. The entity may carry several
+      ``CANDIDATE`` ``ANCHORS_TO`` edges (the competing taxonomy nodes), pending expert
+      disambiguation (§ phase risks: cross-domain ambiguity is resolved by pack scope + review).
+
+    An entity with no taxonomy node above even the candidate bar writes **no** edge — the
+    absence of an ``ANCHORS_TO`` is the un-anchored state (it falls back to induced levels, §14).
+    """
+
+    CANDIDATE = "candidate"
+    CONFIRMED = "confirmed"
+
+
 class MeronymyType(StrEnum):
     """The part-whole *type* tag on a ``directPartOf``/``partOf`` edge (§14, §10).
 

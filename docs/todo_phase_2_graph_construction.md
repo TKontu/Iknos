@@ -33,9 +33,11 @@ because Phase 2 is where its absence turns from latent to expensive.*
       shipped** — Phase 2 consumes propositions and their faithfulness; both fixes
       change what reaches it. *(Shipped in #32 — `feat(ingest): G1.13 slice 1
       truncation guard + G1.14 polarity-aware agreement`.)*
-- [ ] **Structured table payload available (G1.18)** if table extraction is in this
+- [x] **Structured table payload available (G1.18)** if table extraction is in this
       phase's scope — the "rows/cells → propositions with column semantics" task
-      below has nothing to read without it.
+      below has nothing to read without it. *(Shipped in #40 — `feat(ingest): G1.18
+      structured table payload in the parse wire contract`. The payload is now available;
+      the Phase-2 rows/cells→propositions consumer that reads it is not yet built.)*
 
 ## Boxes & tiers (§9)
 
@@ -86,9 +88,13 @@ because Phase 2 is where its absence turns from latent to expensive.*
         attention**) → resolve into components. *(G2.3 — `block_candidates` (shared-token,
         same-kind) → deterministic relational `score_pair` → `components`. Embedding-neighbourhood
         and taxonomy-anchor blocking signals deferred — need an entity-embedding store / G2.4–G2.5.)*
-  - [ ] **Anchor canonicalizes:** a mention that entity-links to the domain-pack taxonomy
-        takes that node as its canonical identity (anchor-first, §9/§14). *(Deferred → G2.4/G2.5,
-        with the part-whole anchoring; needs entity-linking.)*
+  - [~] **Anchor canonicalizes:** a mention that entity-links to the domain-pack taxonomy
+        takes that node as its canonical identity (anchor-first, §9/§14). *(G2.8 slice 1 —
+        `core/anchor.py`: the **entity-linking** subsystem ships — a scored, conservative
+        `ANCHORS_TO` edge (case entity → taxonomy node; the direction **is** "anchor
+        canonicalizes") via a deterministic lexical cascade, plus the `anchored_targets` read.
+        The **fold** that makes `resolve.canonical_components` prefer a confirmed anchor as the
+        canonical identity is the slice-2 consumer.)*
   - [x] **Conservative default:** auto-merge only above a high confidence bar; below it
         keep entities separate but record a `candidate` `SAME_AS` link (bridgeable, not
         committed). Route candidate merges to expert triage; confirm via override (§10.3).
@@ -154,10 +160,13 @@ because Phase 2 is where its absence turns from latent to expensive.*
       `core/partwhole.py` + `edges.MeronymyType`/`is_transitive`: `transitive_closure` is
       cycle-safe (Kahn-isolates meronymy cycles, excludes+flags them) and component-integral-
       restricted; edges carry the type tag, two annotations, bitemporal.)*
-- [ ] **Anchor first (primary, reliable):** entity-link each referent to the active
+- [~] **Anchor first (primary, reliable):** entity-link each referent to the active
       domain pack's taxonomy (ISO 14224, BOM, FMA…) and read the level off. Record
-      attachment provenance = anchored, high confidence (§14). *(Deferred — needs
-      entity-linking, the G2.3/G2.4 anchor seam; `AttachmentProvenance.ANCHORED` reserved.)*
+      attachment provenance = anchored, high confidence (§14). *(G2.8 slice 1 — the
+      **entity-linking** half ships (`core/anchor.py`, scored `ANCHORS_TO` to the active pack
+      taxonomy). "Read the level off" the anchored partonomy depth + stamping
+      `AttachmentProvenance.ANCHORED` is slice 2, wiring `partwhole`'s derived-level read to
+      follow a confirmed anchor into the pack's `partOf` order.)*
 - [x] **Induce only as fallback (out-of-taxonomy referents):** the `extract` pass emits
       `directPartOf` candidates from compositional noun phrases ("high speed shaft
       locating bearing"), "Y of X", possessives, "part of". Lower confidence,
@@ -165,10 +174,13 @@ because Phase 2 is where its absence turns from latent to expensive.*
       from compositional cues → `directPartOf` with `provenance=induced`, `INDUCED_CONFIDENCE`.)*
 - [ ] **Relative ordering (last resort):** containment cues + co-occurrence/degree
       asymmetry + the §2 chunk-level prior, when no parent is named. *(Deferred → §14 step 3.)*
-- [ ] **Coverage policy:** measure the fraction of referents that anchor to the active
+- [x] **Coverage policy:** measure the fraction of referents that anchor to the active
       pack(s). High → anchoring is the level mechanism; persistently low → pack
       inadequate, escalate to induction + review and mark levels provisional (§14).
-      *(Deferred — needs anchoring to exist to measure coverage against.)*
+      *(G2.8 slice 1 — `anchor.EntityLinker.coverage` / `AnchorCoverage`
+      (confirmed-anchored / total canonical entities) reads off the `ANCHORS_TO` edges; the
+      Trial-A4 anchoring-coverage measurement and the pack-adequacy signal that gates whether
+      levels are anchored or provisional.)*
 - [~] **Level estimation:** anchored → partonomy depth + intrinsic IC (Seco, subtree
       size, structure-only); out-of-taxonomy → box embeddings (or ConE for joint
       is-a + part-of). Do **not** use embedding cosine or lexical concreteness as level
@@ -199,7 +211,7 @@ because Phase 2 is where its absence turns from latent to expensive.*
       producing `Action` (§10.2). *(G2.7 — `provenance/audit`: `fact_provenance` walks
       Fact → Proposition + Span(s) → resolved source text → producing extract `Action`;
       `audit_box_facts` is the box-level invariant (returns the Facts that fail, with the
-      gap reasons). Backed by the migration-0008 partial functional index on
+      gap reasons). Backed by the migration-0009 partial functional index on
       `actions(outputs->>'fact')` so the reach-back stays O(log n).)*
 
 ## Exit criteria
@@ -219,8 +231,9 @@ because Phase 2 is where its absence turns from latent to expensive.*
 - [~] Facts attach to a `PART_OF` hierarchy — anchored to a domain pack where coverage
       allows, induced+flagged otherwise — and a node's level resolves from its referent.
       *(G2.5 — the **induced+flagged** path and structure-only level ship; `fact_level`
-      resolves a node's level from its subject-role referent. **Anchored** attachment
-      (entity-link to the pack taxonomy) is the deferred entity-linking seam.)*
+      resolves a node's level from its subject-role referent. G2.8 slice 1 ships the
+      **entity-linking** the anchored path needs (`ANCHORS_TO` + coverage); reading the level
+      off the anchored taxonomy depth (`AttachmentProvenance.ANCHORED`) is slice 2.)*
 
 ## Phase risks / decisions
 

@@ -130,6 +130,12 @@ hard negation/modality cases (regression anchors for G1.13/G1.14).
       harder on taxonomy anchoring + expert review before trusting downstream reasoning.
 - **Gates:** Phase 2 — entity resolution; bounds A4 (anchoring/level) and feeds the
   quality of every component-level aggregation (Phase 3).
+- *Runnable now:* the subsystem under test shipped as **G2.3** (`core/resolve.py`) — the
+  "Vary" knobs map directly: the auto-merge bar is `RESOLVE_CONFIRM_BAR`/`RESOLVE_CANDIDATE_BAR`,
+  and relational-vs-similarity scoring is the deterministic relational `score_pair` (similarity
+  barred from scoring, blocking-only). Taxonomy-anchoring and the contradiction→split-review
+  loop are still deferred seams (G2.4/G2.5, Phase 4), so the first A6 pass measures the
+  no-anchor, no-recovery-loop configuration.
 
 ### Trial A7 — Review-triage value of information (efficiency)
 
