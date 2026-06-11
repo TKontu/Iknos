@@ -26,7 +26,7 @@ until the gate passes").
 | **G4.1** | **QBAF gradual-semantics adjudication core** — the semantics decision (DF-QuAD vs Quadratic Energy) + the pure `solve` engine (bounded fixpoint, non-convergence surfaced) + verdict banding / computed hypothesis state | Phase 3 Layer B (contract only) | **shipped (this increment)** |
 | G4.2 | **Candidate generation** (§5.1) — the cheap→expensive funnel: structural priors (shared `INVOLVES`, co-occurrence), embedding k-NN over pgvector, coarse-to-fine over §2 levels; tuned for recall early | Phase 1 embeddings, Phase 2 graph | planned |
 | G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | planned |
-| G4.4 | **QBAF persistence adapter** — load the active `SUPPORTS`/`REFUTES` subgraph + hypothesis base scores (Layer B) from AGE → `BAF`; write the computed `acceptability` / `state` back to the `Hypothesis` node. The Phase-4 analogue of G3.4 | G4.1, Phase 2/3 adapters | planned |
+| **G4.4** | **QBAF persistence adapter** — load the active `SUPPORTS`/`REFUTES` subgraph + hypothesis base scores (Layer B) from AGE → `BAF`; write the computed `acceptability` / `state` back to the `Hypothesis` node. The Phase-4 analogue of G3.4 | G4.1, Phase 2/3 adapters | **shipped (this increment)** |
 | G4.5 | **`corroborate` / `find-contradiction` operators + ensemble gate** (§7.2) — gather supporting/refuting evidence; `find-contradiction` as a first-class refuter generator; the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement) that authorises a persisted `refuted` flip; wires the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize` driver | G4.3, G4.4, G3.9 | planned |
 | G4.6 | **Validation gate** (§8 experiment) — planted-contradiction corpus (regression suite); measure retraction propagation, hypothesis-state flip, consistency-vs-verbalized confidence, ensemble-vs-single, candidate/refuter recall, level-attachment accuracy; bias-controlled scoring, not LLM-as-judge | G4.2–G4.5 | planned |
 
@@ -124,6 +124,67 @@ bar). ruff + `ruff format` clean; mypy(`src/iknos`) clean (only the pre-existing
   algorithm for incrementally updating final strengths under graph change). Incrementality
   stops at Layer A's delta; the affected QBAF sub-region is recomputed in full (acceptable at
   investigation scale, §13). `solve` is that full recompute.
+
+## G4.4 — QBAF persistence adapter (this increment)
+
+**What shipped.** `core/qbaf_adapter.py` — the boundary that reads the persisted AGE graph into
+the pure G4.1 engine and writes the verdict back, the Phase-4 analogue of G3.4's
+`derivation_adapter`. Same pure/DB split (pure assembly + evaluation, DB only in the `async`
+methods, lazy `iknos.db.age` import).
+
+**Opened by reconciling a G4.1 duplication (recorded so it is not repeated).** G4.1 had
+re-declared `HypothesisState` and a `Verdict` banding policy (same 0.75/0.5/0.25 cut-points)
+inside `core/qbaf.py`, duplicating `types/intentional.py`'s `HypothesisState` + `AcceptabilityBand`
++ `band` — the single source of truth that module's docstring says the QBAF should *consume*.
+The dedup commit makes `qbaf.py` import that vocabulary; `classify_state`'s support bar is now the
+§11.2 `plausible` boundary via `band()` (no second policy), and `aggregate_evidence` was extracted
+so `classify_state` can be fed the real per-node support/attack. Banding tests stay in
+`test_intentional.py`, not duplicated.
+
+**Design decisions taken up front:**
+
+- **The two inputs are the §12 seam.** `base = the node's Layer B `confidence`` (the QBAF
+  intrinsic score), `SUPPORTS`/`REFUTES` edges carry the §7.1 `strength`. Kept as separate maps,
+  never merged. The reused `load_reasoning_nodes` supplies the same node confidence Layer B
+  produced, so the seam is literally the same number.
+- **Edge direction is the schema's (§5, §10): Fact/Conclusion (evidence) → Hypothesis.** So the
+  edge `source` lends strength and `target` receives it (`Edge.src`/`.dst`); the **sign** routes
+  to the support vs attack collection (§8 "sign before magnitude" — categorical, modelled
+  structurally). The sign is taken from *which relationship type matched* (one query per type, as
+  AGE matches a single label per pattern), the canonical source of direction.
+- **Active-subgraph selection, dead-endpoint drop.** Bitemporally-current (`valid_to IS NULL`),
+  active-box nodes/edges only; an evidential edge with an inactive endpoint is **dropped** — a
+  retracted/deprecated-box supporter lends nothing. This is the *opposite* polarity to the
+  derivation adapter, which keeps an inactive antecedent in a conjunctive body so the rule gets
+  *harder*; QBAF support is additive, so a vanished supporter must contribute nothing. Recorded
+  because the asymmetry is easy to get wrong.
+- **Write-back is a partial `SET`, and the band is not stored.** `persist_verdicts` writes
+  `h.acceptability` + `h.state` with a targeted `SET h.acceptability=…, h.state=…`, **not**
+  `merge_vertex`'s full `SET n = {…}` (which would clobber the node's bitemporal/confidence
+  fields — the integration test asserts `confidence` survives the write). The presentation
+  `band` is **not** persisted (§11.2 / `intentional.py`: computed from the strength at render
+  time, never a stored substitute for the real value).
+- **De-dup of the shared reads.** `load_active_box_ids` / `load_reasoning_nodes` were extracted as
+  module functions in `derivation_adapter` and are reused here, so the "active box" definition and
+  the node-confidence read cannot diverge between the propagation and adjudication loads.
+
+**Tests.** `tests/unit/test_qbaf_adapter.py` (DB-free): assembly (arguments + base map, sign
+routing, active-box gating, dead/dangling-edge drop, determinism) and adjudication (supported /
+refuted / unsupported, acceptability over all args, hypothesis-outside-subgraph skip).
+`tests/integration/test_qbaf_adapter.py` (real AGE): `evaluate` computes the verdict and a
+deprecated-box + a retracted supporter are both correctly excluded (don't inflate it);
+`persist_verdicts` writes `acceptability`/`state` back **without clobbering** `confidence`; and a
+**retraction** of the sole supporter lowers acceptability back to the base. ruff + `ruff format` +
+mypy(`src/iknos`) clean (only the pre-existing `resolve.py` error remains); 538 unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **The edge-judgment pipeline (G4.3)** that *produces* calibrated `SUPPORTS`/`REFUTES` edges — this
+  adapter *consumes* them; the contract is exercised here with hand-built fixtures (as G3.4 defined
+  the `DERIVED_FROM` contract before G3.8 wrote it).
+- **The ensemble gate (§7.2)** — `persist_verdicts` writes every verdict it is given; gating a flip
+  *to* `refuted` on ensemble agreement is the caller's filter (G4.5), kept out of the dumb writer.
+- **Incremental / `SAME_AS`-canonicalized loads** — full current-state read over raw nodes (§13).
 
 ## Phase risks / decisions (carried from §8, §13)
 

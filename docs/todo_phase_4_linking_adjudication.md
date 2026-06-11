@@ -10,14 +10,18 @@ Phase 3 as a thin slice.
 disciplines, confidence pipeline, experiment), §7.2 (ensemble gate, hypothesis state),
 §10 (`sign`/`strength`/`significance`).
 
-**Status — 🟡 adjudication core landed (G4.1); candidate generation / edge-judgment /
-persistence / gate open.** G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
+**Status — 🟡 adjudication core + persistence landed (G4.1, G4.4); candidate generation /
+edge-judgment / gate open.** G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
 the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
 conservative default, both retained at the seam), the `solve` bounded fixpoint (acyclic-exact,
 cyclic non-convergence **surfaced as a finding** not smoothed, §13), and the read-off
 (acceptability → §11.2 verdict band + computed hypothesis state). It consumes Layer B
-confidence as the base score (§12 seam). Candidate generation (§5.1, G4.2), the LLM
-edge-judgment pipeline (§8, G4.3), the AGE persistence adapter (G4.4), the `corroborate` /
+confidence as the base score (§12 seam). **G4.4** (`core/qbaf_adapter.py`) wires it to real AGE:
+loads the active `SUPPORTS`/`REFUTES` subgraph + base scores → `BAF`, adjudicates, and writes the
+computed `acceptability`/`state` back to the `Hypothesis` node (partial `SET`, band derived-not-
+stored); it reuses the shared `load_active_box_ids`/`load_reasoning_nodes` reads and consumes the
+`types/intentional.py` vocabulary (the G4.1 banding/state duplication was reconciled here).
+Candidate generation (§5.1, G4.2), the LLM edge-judgment pipeline (§8, G4.3), the `corroborate` /
 `find-contradiction` operators + ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6)
 are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
 
@@ -58,8 +62,10 @@ are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
 - [x] Model supports/refutes as a **Quantitative Bipolar Argumentation Framework**;
       Layer B confidence is the base score. *(G4.1 — `core/qbaf.py`: `BAF` (arguments +
       weighted `Edge` support/attack); `solve` consumes a `base` map = Layer B confidence as
-      the intrinsic score (§12 seam), one edge contributing `strength·σ(src)`. Loading the
-      real subgraph + base scores from AGE is the G4.4 persistence adapter.)*
+      the intrinsic score (§12 seam), one edge contributing `strength·σ(src)`. **G4.4** —
+      `core/qbaf_adapter.py` loads the real active `SUPPORTS`/`REFUTES` subgraph + base scores
+      (the node `confidence`) from AGE into the `BAF`, edge direction fixed by the schema
+      (Fact/Conclusion → Hypothesis); integration-tested on live AGE.)*
 - [x] Gradual semantics (DF-QuAD or Quadratic Energy), in-house (QBAF-Py/Uncertainpy
       as reference only). *(G4.1 — both in-house as `GradualSemantics` values
       (`DF_QUAD`/`QUADRATIC_ENERGY`), the engine generic over one; **decided with a fixture:
@@ -69,9 +75,11 @@ are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
 - [~] **Hypothesis state machine:** compute supported/unsupported/refuted +
       `acceptability` from incoming evidence; state is computed, never hand-set (§10).
       *(G4.1 — `acceptability` computed by `solve`; `classify_state` derives
-      supported/refuted/unsupported and `VerdictBands.band` the §11.2 verdict, both **computed,
-      never hand-set**. **Open:** the flip *to* `refuted` requires the ensemble gate (§7.2,
-      G4.5), and writing `state`/`acceptability` to the `Hypothesis` node is G4.4.)*
+      supported/refuted/unsupported and `intentional.band` the §11.2 verdict, both **computed,
+      never hand-set**. **G4.4** — `QbafAdapter.evaluate` runs this over real AGE and
+      `persist_verdicts` writes `acceptability`/`state` back to the `Hypothesis` node (partial
+      `SET`; band derived-not-stored). **Open:** the flip *to* `refuted` requires the ensemble
+      gate (§7.2, G4.5) — `persist_verdicts` writes what it's given, the caller filters.)*
 - [x] Bound iteration + detect oscillation on cyclic argument graphs; surface
       unresolved regions rather than forcing convergence (principle 8, §13). *(G4.1 — `solve`
       bounds the fixpoint iteration and, on hitting the bound, returns `converged=False` with
