@@ -25,7 +25,7 @@ until the gate passes").
 |----|-----------|------------|-------|
 | **G4.1** | **QBAF gradual-semantics adjudication core** — the semantics decision (DF-QuAD vs Quadratic Energy) + the pure `solve` engine (bounded fixpoint, non-convergence surfaced) + verdict banding / computed hypothesis state | Phase 3 Layer B (contract only) | **shipped (this increment)** |
 | G4.2 | **Candidate generation** (§5.1) — the cheap→expensive funnel: structural priors (shared `INVOLVES`, co-occurrence), embedding k-NN over pgvector, coarse-to-fine over §2 levels; tuned for recall early | Phase 1 embeddings, Phase 2 graph | **slices 1–2 shipped** (`core/candidates.py`): the recall-first funnel core + the structural-entity prior (slice 1) and the embedding k-NN workhorse over `proposition_embeddings` (slice 2); coarse-to-fine + keyword co-occurrence planned |
-| G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | **slice 1 shipped** (the subjective-logic confidence-scoring core, `core/subjective_logic.py`); LLM judge + recalibration + AGE producer planned |
+| G4.3 | **Edge-judgment pipeline** (§8) — sign-before-magnitude, blind + randomized, multi-sample consistency, per-model recalibration, subjective-logic opinion + source discounting, cumulative/averaging fusion → calibrated `SUPPORTS`/`REFUTES` `strength` (never the raw LLM number) | G4.2, an LLM seam | **slices 1–2 shipped** (slice 1 the subjective-logic confidence-scoring core, `core/subjective_logic.py`; slice 2 the blind/randomized/multi-sample LLM edge judge, `core/edge_judge.py`); per-model recalibration + AGE producer planned |
 | **G4.4** | **QBAF persistence adapter** — load the active `SUPPORTS`/`REFUTES` subgraph + hypothesis base scores (Layer B) from AGE → `BAF`; write the computed `acceptability` / `state` back to the `Hypothesis` node. The Phase-4 analogue of G3.4 | G4.1, Phase 2/3 adapters | **shipped (this increment)** |
 | G4.5 | **`corroborate` / `find-contradiction` operators + ensemble gate** (§7.2) — gather supporting/refuting evidence; `find-contradiction` as a first-class refuter generator; the **ensemble gate** (multi-sample LLM + symbolic + temporal agreement) that authorises a persisted `refuted` flip; wires the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize` driver | G4.3, G4.4, G3.9 | planned |
 | G4.6 | **Validation gate** (§8 experiment) — planted-contradiction corpus (regression suite); measure retraction propagation, hypothesis-state flip, consistency-vs-verbalized confidence, ensemble-vs-single, candidate/refuter recall, level-attachment accuracy; bias-controlled scoring, not LLM-as-judge | G4.2–G4.5 | planned |
@@ -320,13 +320,9 @@ ruff + `ruff format` + mypy(`src/iknos`) clean (only the pre-existing `resolve.p
 
 **Deferred (documented seams, not regressions) — the rest of G4.3:**
 
-- **The LLM judge** (next slice) — **sign-before-magnitude** (classify supports/refutes/
-  irrelevant first and separately; estimate magnitude only for non-irrelevant edges), **relative
-  not absolute** (elicit by ranking competing evidence on the same hypothesis), **blind +
-  randomized** (judge blind to the current hypothesis state — sycophancy guard; randomize
-  evidence order across samples — position-bias guard). That prompted elicitation produces the
-  per-sample counts `opinion_from_evidence` consumes; this slice is the scoring algebra that
-  consumes them (the pure/LLM split, exactly as G4.1(pure)/G4.4(AGE)).
+- **The LLM judge** — **shipped in slice 2** (`core/edge_judge.py`, below): the
+  blind/randomized/multi-sample elicitation that produces the per-sample counts this slice's
+  `opinion_from_evidence` consumes (the pure/LLM split, exactly as G4.1(pure)/G4.4(AGE)).
 - **Per-model recalibration (step 2)** — a *fitted* per-model consistency→correctness curve with
   no data yet; like the `combine_faithfulness` calibration seam and the G4.1 verdict bands, it
   swaps in at `opinion_from_evidence` (scaling the evidence) or post-projection without a contract
@@ -335,6 +331,93 @@ ruff + `ruff format` + mypy(`src/iknos`) clean (only the pre-existing `resolve.p
   `strength` + `significance` (from the node/tier, §9) and an `Action` (raw judgment + sampling +
   calibration, §10.1); the data-bound increment that consumes this read-off, the Phase-4 analogue
   of how `derivation_adapter` (G3.4) consumes `core/confidence.py`.
+
+## G4.3 — Edge-judgment pipeline, slice 2: the blind, randomized, multi-sample LLM judge
+
+**What shipped (this increment).** `core/edge_judge.py` — the LLM-bound layer between the G4.2
+candidate funnel and the slice-1 subjective-logic read-off. Candidate generation decides *which*
+`(evidence → hypothesis)` pairs to assess; the subjective-logic core is the *pure algebra* that
+turns per-sample agreement into a calibrated `strength`; this slice is the **elicitation** in
+between — the §8 bias-hardened judgment that *produces* the counts the algebra consumes. It is to
+`subjective_logic.py` what `verify.py` is to `epistemic.faithfulness_from_verdict`: a DB-free LLM
+judge (reuses `LLMClient` verbatim, judges plain text), unit-testable with a mock client and run in
+the producer's concurrent phase. The AGE producer that persists the surviving edges is the next
+slice (the Phase-4 analogue of how the propositionizer wraps the `Verifier`).
+
+**The four §8 disciplines, implemented:**
+
+- **Sign before magnitude.** The model classifies *direction only* — a three-way `JudgedSign`
+  (`supports`/`refutes`/`irrelevant`) — and is **never asked for a number** (the guided-decode
+  schema has no magnitude field; §8: "do not feed raw verbalized LLM confidence as edge weight").
+  Magnitude is not elicited; it *emerges* from cross-sample consistency. An `irrelevant` **plurality**
+  drops the pair (precision late, §5.1 — recorded in `HypothesisJudgment.irrelevant` so the drop is
+  auditable, not silently missing); strength is estimated only for the non-irrelevant survivors, and
+  the directional sign *is* the `SUPPORTS`/`REFUTES` edge type the producer writes (§10).
+- **Blind (sycophancy guard).** `build_messages` carries the hypothesis statement and the evidence
+  text and **nothing** about the hypothesis's current acceptability/state — the judge cannot anchor
+  on "the system already believes this" because it is never told (the discipline is *structural*: no
+  state parameter exists).
+- **Randomized + relative (position-bias guard).** A hypothesis's whole candidate set is judged
+  **together** in one prompt (the competing evidence weighed relative to each other, §8 "relative,
+  not absolute"), and the **presentation order is permuted per sample** by `_permutation` — a
+  Fisher–Yates shuffle driven by `sha256(hypothesis_id | sample_index)`, **not** a process-salted
+  RNG, so a run is **replayable** (§10) yet each sample probes a different order. This is also why
+  multi-sampling yields signal *even at temperature 0*: distinct orders are distinct prompts, so a
+  position-biased model disagrees with itself across samples — the disagreement *is* the consistency
+  measurement.
+- **Multi-sample consistency → opinion.** The per-item votes are tallied into the
+  `(positive, negative)` counts `opinion_from_evidence` consumes (`positive` = votes for the dominant
+  direction, `negative` = the opposite direction, `irrelevant` votes **abstain** — neither, so they
+  *raise* the opinion's uncertainty exactly as the SL contract says). The opinion is **discounted by
+  source reliability** (the §8 ↔ §9.1 seam; `JudgeEvidence.reliability`, identity until the producer
+  wires `effective_credibility`) and its projected probability is the calibrated `strength` ∈ [0, 1].
+
+**Decisions recorded eyes-open:**
+
+- **Diversity from order-randomization, not (only) temperature.** Unlike the multi-sample extractor
+  (`proposition.py`, which *requires* `temperature>0` because identical prompts give identical
+  samples and so guards against greedy multi-sampling), this judge gets its diversity from the
+  per-sample permutation, so `temperature=0` is the deliberate default — deterministic, replayable
+  judging. The one case the permutation cannot diversify is a *single-candidate* hypothesis (no order
+  to vary): there N greedy samples agree trivially and the raw consistency is optimistic — that
+  optimism is absorbed at the **per-model recalibration seam** (`opinion_from_evidence`'s prior
+  weight / a fitted curve, identity until G4.6), not papered over.
+- **Irrelevant-plurality drop (recall → precision handoff).** A pair is dropped iff `irrelevant` is
+  the **strict plurality** of the panel; a directional plurality survives with its abstentions kept
+  as uncertainty — recall-leaning at the margin, the funnel (recall-first, G4.2) having left the bulk
+  of precision to this stage. One explicit, tunable rule, not scattered thresholds.
+- **No fusion here.** A single model's N samples fold into **one** opinion via the consistency counts
+  (that *is* the multi-sample fold); `subjective_logic.fuse` combines the opinions of *independent
+  judges* (varied models + the symbolic/temporal channels) and is the ensemble gate's job (G4.5). The
+  full `Opinion` is exposed on each `EdgeJudgment` so that stage can fuse without re-eliciting.
+- **Sign instability is surfaced, not smoothed.** When the panel splits *direction* (both `supports`
+  and `refutes` voted), `EdgeJudgment.sign_stable` is `False` — a §13 finding (the analogue of the
+  G1.14 polarity twins), the signal the ensemble gate (§7.2, G4.5) must clear before it will
+  authorise a persisted `refuted` flip; never averaged into a confident verdict.
+
+**Tests** (`tests/unit/test_edge_judge.py`, DB-free; 24 new). The sign-only contract (no magnitude
+field anywhere in the schema); blindness (no state words in the prompt); the permutation
+(deterministic/replayable, varies per sample + per hypothesis, identity for trivial lengths, a
+genuine permutation) and end-to-end un-permute (signs classified by text recovered to the canonical
+item across differently-ordered samples); the consistency fold (unanimous → high strength, split →
+`sign_stable=False` + near-neutral strength, abstentions lower strength vs full agreement); the
+irrelevant-plurality drop vs directional-plurality survival; reliability discounting (partial lowers,
+zero → base rate); ref-mapping robustness (missing → abstention, out-of-range/duplicate ignored); and
+the empty/`n_samples<1` guards. ruff + `ruff format` + mypy(`src/iknos`) clean (only the pre-existing
+`resolve.py` error remains); 640 unit tests pass.
+
+**Deferred (documented seams, not regressions) — the rest of G4.3:**
+
+- **The AGE producer** (next slice) — reads the candidate pool out of the graph, resolves each
+  node's claim text (`EVIDENCED_BY` → `Proposition.text`) and source reliability
+  (`effective_credibility`), calls this judge, and writes the surviving `SUPPORTS`/`REFUTES` edges
+  carrying `strength` + `significance` (from the node/tier, §9) and an `Action` (raw votes + sampling
+  + the `JUDGE_SCHEMA_VERSION`/`prompt_sha`/`schema_sha`, §10.1). The `sign_stable=False` findings are
+  handed to the ensemble gate (G4.5), which owns the `refuted`-flip authorisation.
+- **Per-model recalibration (step 2)** — the fitted consistency→correctness curve at
+  `opinion_from_evidence`, identity until G4.6 fits it against the planted corpus.
+- **Explicit relative ranking** — the set is judged together today (the relative *framing*); an
+  explicit ranking/pairwise elicitation over the set is a refinement at the same prompt seam.
 
 ## G4.4 — QBAF persistence adapter (this increment)
 

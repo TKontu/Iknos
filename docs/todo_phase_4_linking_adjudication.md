@@ -12,7 +12,8 @@ disciplines, confidence pipeline, experiment), §7.2 (ensemble gate, hypothesis 
 
 **Status — 🟡 adjudication core + persistence landed (G4.1, G4.4); candidate-generation funnel
 complete across both cheap stages (G4.2 slice 1 structural + slice 2 embedding k-NN);
-edge-judgment core started (G4.3 slice 1); LLM judge / operators / gate open.**
+edge-judgment scoring core + blind LLM judge landed (G4.3 slice 1 subjective-logic algebra +
+slice 2 blind/randomized judge); AGE edge producer / operators / gate open.**
 G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
 the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
 conservative default, both retained at the seam), the `solve` bounded fixpoint (acyclic-exact,
@@ -28,7 +29,17 @@ core (§8(c), steps 3–4): the binomial `Opinion`, the multi-sample-consistency
 source-reliability discounting, and **cumulative/averaging fusion** — with the fusion **decided
 by a fixture** (`DEFAULT_FUSION = AVERAGING`, idempotent under correlated evidence so it cannot
 inflate certainty; cumulative retained at the seam). The fused/discounted opinion's projected
-probability *is* the calibrated edge `strength` the QBAF consumes. **G4.2 slice 1**
+probability *is* the calibrated edge `strength` the QBAF consumes. **G4.3 slice 2**
+(`core/edge_judge.py`) lands the **blind, randomized, multi-sample LLM edge judge** (§8): per
+hypothesis it judges the whole candidate set **together** (relative, not pair-by-pair),
+**blind** to the hypothesis state (sycophancy guard), with a **per-sample permutation** of the
+evidence (position-bias guard, content-addressed so it is replayable and the diversity source at
+temperature 0); it classifies **sign only** (supports/refutes/irrelevant — no verbalized
+magnitude), drops `irrelevant`-plurality pairs, and folds the per-sample votes into the
+G4.3-slice-1 `opinion_from_evidence` → `discount` → projected-probability read-off — the
+calibrated `strength`, with a `sign_stable` finding when the panel splits direction (§13). It is
+the DB-free LLM layer between the funnel and the read-off; the AGE producer that writes the
+surviving edges is the next slice. **G4.2 slice 1**
 (`core/candidates.py`) lands the candidate-generation funnel (§5.1): the recall-first **funnel
 core** (`funnel` + `CandidatePool`, with the union-over-intersect combination **decided by a
 fixture** — `DEFAULT_STRATEGY = UNION`, so the dissimilar refuter the embedding stage misses
@@ -39,8 +50,8 @@ judgment that consumes the survivors. **G4.2 slice 2** adds the **embedding k-NN
 `proposition_embeddings` vector, the `k` nearest claims by cosine union in as `EMBEDDING_KNN`, with
 the recall-first **no-similarity-floor decision** mirroring the funnel's `UNION` and the G1.16
 model-identity guard enforced). Coarse-to-fine (stage 3) + keyword co-occurrence remain documented
-seams. The rest of the edge-judgment pipeline (§8, G4.3 — the
-blind/randomized LLM judge, per-model recalibration, the AGE producer), the `corroborate` /
+seams. The rest of the edge-judgment pipeline (§8, G4.3 — per-model recalibration and the AGE
+producer that persists the judged `SUPPORTS`/`REFUTES` edges), the `corroborate` /
 `find-contradiction` operators + ensemble gate (§7.2, G4.5), and the validation gate (§8, G4.6)
 are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
 
@@ -77,21 +88,40 @@ are open. See `gap_phase_4_linking_adjudication.md` for the build plan.
 
 ## Edge adjudication (§8 disciplines) — the bias-hardened judgment
 
-- [ ] **Sign before magnitude:** classify direction (supports/refutes/irrelevant)
-      first; estimate strength only for non-irrelevant edges.
-- [ ] **Relative, not absolute:** elicit strength by ranking/pairwise comparison of
-      competing evidence on the same hypothesis.
-- [ ] **Blind + randomized:** judge blind to current hypothesis state (sycophancy
-      guard); randomize evidence order across samples (position-bias guard).
+- [x] **Sign before magnitude:** classify direction (supports/refutes/irrelevant)
+      first; estimate strength only for non-irrelevant edges. *(G4.3 slice 2 —
+      `core/edge_judge.py`: the judge emits a categorical `JudgedSign`
+      (supports/refutes/irrelevant) and **no number** (the schema has no magnitude field);
+      an `irrelevant` plurality drops the pair, strength is estimated only for the
+      non-irrelevant survivors and the directional sign becomes the `SUPPORTS`/`REFUTES`
+      edge type.)*
+- [~] **Relative, not absolute:** elicit strength by ranking/pairwise comparison of
+      competing evidence on the same hypothesis. *(G4.3 slice 2 — a hypothesis's whole
+      candidate set is judged **together** in one prompt (the competing evidence weighed
+      relative to each other), not pair-by-pair; magnitude is **never elicited** as a number
+      — it emerges from cross-sample consistency. **Open:** an explicit ranking/pairwise
+      elicitation over the set is a further refinement at the same seam.)*
+- [x] **Blind + randomized:** judge blind to current hypothesis state (sycophancy
+      guard); randomize evidence order across samples (position-bias guard). *(G4.3 slice 2 —
+      the prompt carries the hypothesis + evidence and **nothing** about the hypothesis's
+      acceptability/state (blind); each sample sees a **per-sample permutation** of the
+      evidence (`_permutation`), content-addressed on `(hypothesis_id, sample_index)` so a run
+      is replayable yet position-bias-probing — and the source of sample diversity even at
+      temperature 0.)*
 - [~] **Multi-sample consistency**, per-model recalibration, encode as subjective-logic
       opinion with source discounting, fuse with cumulative/averaging (not raw
       Dempster's rule). *(G4.3 slice 1 — `core/subjective_logic.py`: the pure algebra —
       `Opinion`, `opinion_from_evidence` (the consistency→opinion map), `discount` (source
       reliability, the §8↔§9.1 seam), and `cumulative_fuse`/`averaging_fuse`/`fuse` with
       `DEFAULT_FUSION = AVERAGING` decided by a fixture (idempotent under correlated evidence —
-      cannot inflate; cumulative retained at the seam). **Open:** the blind/randomized LLM
-      elicitation that produces the per-sample counts, and per-model recalibration (a fitted
-      curve, identity until G4.6).)*
+      cannot inflate; cumulative retained at the seam). **G4.3 slice 2** — `core/edge_judge.py`
+      runs the blind/randomized panel and tallies the per-sample votes into the
+      `(positive, negative)` counts `opinion_from_evidence` consumes (`irrelevant` votes
+      abstain → raise uncertainty), discounts by source reliability, and reads off the
+      projected probability as the calibrated edge `strength`; sign instability (both
+      directions voted) is surfaced as a `sign_stable=False` finding (§13), the signal the
+      G4.5 ensemble gate consumes. **Open:** per-model recalibration (a fitted curve, identity
+      until G4.6) and cross-judge fusion (the ensemble, G4.5).)*
 - [ ] Write `SUPPORTS`/`REFUTES` edges carrying `sign`, fused/recalibrated `strength`,
       and `significance` (from the node/tier). Stored `strength` is **never** the raw
       LLM number (§10).
