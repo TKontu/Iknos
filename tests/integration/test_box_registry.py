@@ -8,7 +8,9 @@ Action; and the consolidated pack loader now emits the same Action.
 
 Re-run safe: boxes use deterministic ids (``case_box`` derives id from name+version) and
 ``create_box`` no-ops on an existing box, so a create-box Action count stays 1 across
-repeated suite runs. Tests use distinct names to avoid cross-test interference.
+repeated suite runs. Tests use distinct names to avoid cross-test interference. The pack
+test is the exception — ``load_pack`` emits its create-box Action only on a *first* load,
+so it purges any prior pump-basic Box first to force one (don't depend on a pristine DB).
 """
 
 from datetime import UTC, datetime
@@ -133,6 +135,17 @@ async def test_pack_load_emits_create_box_action(session: AsyncSession) -> None:
     # create-box Action (uniform auditability across pack and general boxes).
     await bootstrap_session(session)
     pack = bundled_pack("pump_basic")
+    # Unlike create_box (whose Action count stays 1 across re-runs because the original
+    # persists), load_pack emits the create-box Action *only on a real first load* and
+    # no-ops on an existing Box. So this assertion needs a genuine first load — purge any
+    # pump-basic Box + its create-box Action left by a prior suite run on the shared DB.
+    await execute_cypher(session, f"MATCH (b:Box {{id: '{pack.box_id}'}}) DETACH DELETE b")
+    await session.execute(
+        text("DELETE FROM actions WHERE action_type = 'create-box' AND outputs->>'box' = :id"),
+        {"id": str(pack.box_id)},
+    )
+    await session.commit()
+
     await load_pack(session, pack)
     await session.commit()
 
