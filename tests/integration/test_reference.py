@@ -100,13 +100,18 @@ async def _refers_to(session: AsyncSession, box) -> list[tuple[str, str]]:
     return [(str(st).strip('"'), str(strn)) for st, strn in rows]
 
 
-async def _provisional(session: AsyncSession, prop: Proposition) -> object:
+async def _provisional(session: AsyncSession, prop: Proposition) -> str:
     rows = await execute_cypher(
         session,
         f"MATCH (p:Proposition {cypher_map({'id': str(prop.id)})}) RETURN p.provisional",
         returns="prov agtype",
     )
-    return str(rows[0][0])
+    # An unset property reads back as agtype null, which the driver surfaces as either
+    # Python None or the string "null" depending on the AGE/agtype codec — normalize both
+    # to "null" so the assertions are robust to the representation (the codebase idiom,
+    # cf. db.age handling and provenance.audit).
+    raw = rows[0][0]
+    return "null" if raw is None or str(raw) == "null" else str(raw)
 
 
 async def test_binder_confirms_proper_name_and_marks_clean(session: AsyncSession) -> None:
