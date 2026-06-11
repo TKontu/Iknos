@@ -74,6 +74,7 @@ from iknos.core.edge_judge import (
     HypothesisJudgment,
     JudgeEvidence,
 )
+from iknos.core.quarantine import DEFAULT_QUARANTINE, QuarantinePolicy, is_quarantined
 from iknos.core.truth_maintenance import NodeId
 from iknos.types.edges import EdgeSign
 from iknos.types.nodes import Tier
@@ -153,11 +154,19 @@ class NodeMeta:
     ``EVIDENCED_BY`` → ``Proposition.text`` provenance which is empty for an un-propositionized
     hypothesis stub). ``tier`` feeds :func:`edge_significance`; ``box`` is the node's owning box
     (the written edge inherits its **target** hypothesis's box).
+
+    ``provisional`` is the node's *own* ``provisional`` property (§3.1) — present on a
+    :class:`~iknos.types.nodes.Conclusion` (``True`` for an ``induce``d/defeasible conclusion,
+    ``False`` for a ``deduce``d one), ``None`` on a ``Fact``/``Hypothesis`` which carry none. A
+    base Fact's provisional status lives on its source ``Proposition`` instead, resolved by the
+    ``EVIDENCED_BY`` walk in :meth:`EdgeProducer._load_provisional`; the two combine into the
+    quarantine input (§3.1, G2.9).
     """
 
     statement: str
     tier: Tier | None
     box: str | None
+    provisional: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -210,6 +219,7 @@ def evidential_edge_props(
     strength: float,
     significance: float,
     sign_stable: bool,
+    quarantined: bool,
     now: datetime,
 ) -> dict[str, Any]:
     """Flatten one evidential edge to AGE properties — the canonical write contract (cf.
@@ -218,10 +228,13 @@ def evidential_edge_props(
     Carries the three §8/§9 quantities (``sign``/``strength``/``significance``), the
     ``sign_stable`` finding (so the §7.2 ensemble gate can *graph-query* unstable directional edges
     before authorising a ``refuted`` flip — a first-class signal, not buried only in the Action),
-    and bitemporal fields stamped **open** (``valid_to``/``event_time`` null), so a retraction
-    stamps ``valid_to`` and the QBAF adapter's current-state filter drops the edge (§10). ``sign``
-    is stored redundantly with the label for ``EvidentialEdge``-schema fidelity; the QBAF adapter
-    takes direction from the label, the canonical source.
+    the ``quarantined`` flag (§3.1, G2.9 — ``True`` when a *provisional* source drives this
+    high-stakes move; the QBAF adapter drops a quarantined edge so it does not overturn a hypothesis
+    until the source is confirmed, but the edge persists so it is auditable and lifts on
+    re-judgment), and bitemporal fields stamped **open** (``valid_to``/``event_time`` null), so a
+    retraction stamps ``valid_to`` and the QBAF adapter's current-state filter drops the edge (§10).
+    ``sign`` is stored redundantly with the label for ``EvidentialEdge``-schema fidelity; the QBAF
+    adapter takes direction from the label, the canonical source.
     """
     return {
         "box": box,
@@ -229,6 +242,7 @@ def evidential_edge_props(
         "strength": strength,
         "significance": significance,
         "sign_stable": sign_stable,
+        "quarantined": quarantined,
         "event_time": None,
         "ingested_at": now.isoformat(),
         "valid_from": now.isoformat(),
@@ -273,7 +287,9 @@ def plan_hypothesis(
     *,
     node_meta: Mapping[NodeId, NodeMeta],
     credibility: Mapping[NodeId, float | None],
+    provisional: Mapping[NodeId, bool],
     policy: SignificancePolicy,
+    quarantine_policy: QuarantinePolicy,
     now: datetime,
     model: str | None,
     sampling: dict[str, Any],
@@ -285,11 +301,13 @@ def plan_hypothesis(
 
     For each surviving :class:`~iknos.core.edge_judge.EdgeJudgment`: ``significance`` is computed
     from the **evidence** node's tier + credibility (§9, :func:`edge_significance`), the edge is
-    planned with the calibrated ``strength`` (§8) and the structural ``sign`` (the label), and the
-    panel tally is folded into the Action provenance (§10.1) — including the dropped-``irrelevant``
-    pairs (auditable as *considered and rejected*, not silently missing) and the
-    ``prompt_sha``/``schema_sha``/``schema_version`` (so a re-judgment under a changed pipeline is
-    detectable). The edge inherits the **target hypothesis's** box.
+    planned with the calibrated ``strength`` (§8) and the structural ``sign`` (the label), the
+    §3.1 ``quarantined`` flag is decided from the **evidence** node's provisional status +
+    ``quarantine_policy`` (:func:`~iknos.core.quarantine.is_quarantined` — a provisional source may
+    not drive a ``REFUTES``), and the panel tally is folded into the Action provenance (§10.1) —
+    including the dropped-``irrelevant`` pairs (auditable as *considered and rejected*, not silently
+    missing) and the ``prompt_sha``/``schema_sha``/``schema_version`` (so a re-judgment under a
+    changed pipeline is detectable). The edge inherits the **target hypothesis's** box.
     """
     hyp_box = node_meta[judgment.hypothesis].box if judgment.hypothesis in node_meta else None
 
@@ -302,12 +320,16 @@ def plan_hypothesis(
             ev_meta.tier if ev_meta is not None else None,
             credibility.get(j.evidence),
         )
+        quarantined = is_quarantined(
+            j.sign, provisional.get(j.evidence, False), policy=quarantine_policy
+        )
         props = evidential_edge_props(
             box=hyp_box,
             sign=j.sign,
             strength=j.strength,
             significance=significance,
             sign_stable=j.sign_stable,
+            quarantined=quarantined,
             now=now,
         )
         edges.append(
@@ -318,7 +340,7 @@ def plan_hypothesis(
                 props=props,
             )
         )
-        edge_provenance.append(_edge_audit(j, significance))
+        edge_provenance.append(_edge_audit(j, significance, quarantined))
 
     action = PlannedAction(
         inputs={
@@ -341,7 +363,7 @@ def plan_hypothesis(
     return HypothesisPlan(hypothesis=judgment.hypothesis, edges=tuple(edges), action=action)
 
 
-def _edge_audit(j: EdgeJudgment, significance: float) -> dict[str, Any]:
+def _edge_audit(j: EdgeJudgment, significance: float, quarantined: bool) -> dict[str, Any]:
     """One edge's raw judgment record for the Action (§10.1) — the votes behind the number."""
     return {
         "evidence": j.evidence,
@@ -353,6 +375,7 @@ def _edge_audit(j: EdgeJudgment, significance: float) -> dict[str, Any]:
         "abstained": j.abstained,
         "n_samples": j.n_samples,
         "sign_stable": j.sign_stable,
+        "quarantined": quarantined,
     }
 
 
@@ -366,6 +389,7 @@ class ProducedEdge:
     strength: float
     significance: float
     sign_stable: bool
+    quarantined: bool = False
 
 
 @dataclass(frozen=True)
@@ -376,8 +400,10 @@ class EdgeProductionResult:
     panel judged ``irrelevant`` (recall→precision handoff, §5.1); ``unstable`` the persisted edges
     whose panel split *direction* (``sign_stable=False``) — the §13 findings the §7.2 ensemble gate
     (G4.5)
-    must clear before a ``refuted`` flip, surfaced not smoothed. ``action_ids`` are the provenance
-    Actions written (one per judged hypothesis).
+    must clear before a ``refuted`` flip, surfaced not smoothed; ``quarantined`` the persisted edges
+    a *provisional* source drove into a high-stakes move (§3.1, G2.9) — written for audit but
+    dropped by the QBAF adapter so they do not overturn a hypothesis until the source is confirmed.
+    ``action_ids`` are the provenance Actions written (one per judged hypothesis).
     """
 
     edges: tuple[ProducedEdge, ...] = ()
@@ -388,6 +414,16 @@ class EdgeProductionResult:
     def unstable(self) -> tuple[ProducedEdge, ...]:
         """The persisted edges with an unstable sign — the gate's input (§7.2, §13)."""
         return tuple(e for e in self.edges if not e.sign_stable)
+
+    @property
+    def quarantined(self) -> tuple[ProducedEdge, ...]:
+        """The persisted edges a provisional source drove into a high-stakes move (§3.1, G2.9).
+
+        The QBAF adapter drops these from the framework (they do not drive a hypothesis's state);
+        surfaced here so the expert-triage queue (Phase 7) can route the provisional source for
+        confirmation — the value-of-information item that, once confirmed, lifts the quarantine.
+        """
+        return tuple(e for e in self.edges if e.quarantined)
 
     @property
     def is_finding(self) -> bool:
@@ -410,11 +446,13 @@ class EdgeProducer:
         *,
         candidates: CandidateGenerationAdapter | None = None,
         policy: SignificancePolicy = DEFAULT_SIGNIFICANCE,
+        quarantine_policy: QuarantinePolicy = DEFAULT_QUARANTINE,
         concurrency: int = 4,
     ) -> None:
         self.judge = judge
         self.candidates = candidates or CandidateGenerationAdapter()
         self.policy = policy
+        self.quarantine_policy = quarantine_policy
         self.concurrency = concurrency
 
     async def _load_node_meta(self, session: object) -> dict[NodeId, NodeMeta]:
@@ -432,16 +470,58 @@ class EdgeProducer:
             rows = await execute_cypher(
                 session,  # type: ignore[arg-type]
                 f"MATCH (n:{label}) WHERE n.valid_to IS NULL "
-                "RETURN n.id, n.statement, n.tier, n.box",
-                returns="nid agtype, statement agtype, tier agtype, box agtype",
+                "RETURN n.id, n.statement, n.tier, n.box, n.provisional",
+                returns="nid agtype, statement agtype, tier agtype, box agtype, provisional agtype",
             )
-            for nid, statement, tier, box in rows:
+            for nid, statement, tier, box, provisional in rows:
                 meta[unquote_agtype(nid)] = NodeMeta(
                     statement=_opt_str(statement) or "",
                     tier=_opt_tier(tier),
                     box=_opt_str(box),
+                    provisional=_opt_bool(provisional),
                 )
         return meta
+
+    async def _load_provisional(
+        self, session: object, evidence_ids: Iterable[NodeId], node_meta: Mapping[NodeId, NodeMeta]
+    ) -> dict[NodeId, bool]:
+        """Each evidence node's **provisional** status (§3.1) — the quarantine input, OR-folded.
+
+        A node is provisional if *either*:
+
+        - its own ``provisional`` property is ``True`` — a defeasible ``induce``d
+          :class:`~iknos.types.nodes.Conclusion` (read in :meth:`_load_node_meta`); or
+        - it is a base ``Fact`` whose source ``Proposition`` is provisional — the perception-layer
+          gate (low faithfulness / ambiguous binding / polarity-unstable, §3.1). A ``Fact`` carries
+          no ``provisional`` of its own, so this walks ``Fact -[:EVIDENCED_BY]-> Proposition`` and
+          OR-folds ``Proposition.provisional`` over its (normally one) sources.
+
+        A ``null`` provisional reads as ``False`` everywhere — quarantine fires only on a *positive*
+        provisional signal, never on its absence (the perception layer may simply not have judged
+        the proposition yet). Returns a total map over ``evidence_ids``.
+        """
+        from iknos.db.age import execute_cypher, unquote_agtype
+
+        out: dict[NodeId, bool] = {
+            eid: bool(node_meta[eid].provisional) if eid in node_meta else False
+            for eid in evidence_ids
+        }
+
+        # Fact -> source Proposition: the perception-layer provisional gate a Fact inherits (§3.1).
+        # One query over all current Facts (investigation scale, as the QBAF/candidate reads); the
+        # result is filtered to evidence_ids and OR-folded so a Fact with several propositions is
+        # provisional if any is.
+        rows = await execute_cypher(
+            session,  # type: ignore[arg-type]
+            "MATCH (f:Fact)-[:EVIDENCED_BY]->(p:Proposition) WHERE f.valid_to IS NULL "
+            "RETURN f.id, p.provisional",
+            returns="fid agtype, provisional agtype",
+        )
+        for fid, provisional in rows:
+            nid = unquote_agtype(fid)
+            if nid in out and _opt_bool(provisional) is True:
+                out[nid] = True
+        return out
 
     async def _load_credibility(
         self, session: object, evidence_ids: Iterable[NodeId]
@@ -501,6 +581,7 @@ class EdgeProducer:
 
         evidence_ids = {e.id for _hyp, (_text, evs) in grouped.items() for e in evs}
         credibility = await self._load_credibility(session, evidence_ids)
+        provisional = await self._load_provisional(session, evidence_ids, node_meta)
 
         # Phase 2 — judge every hypothesis's set concurrently under one shared LLM budget.
         sem = asyncio.Semaphore(self.concurrency)
@@ -524,7 +605,9 @@ class EdgeProducer:
                 judgment,
                 node_meta=node_meta,
                 credibility=credibility,
+                provisional=provisional,
                 policy=self.policy,
+                quarantine_policy=self.quarantine_policy,
                 now=now,
                 model=getattr(self.judge.llm, "model", None),
                 sampling=self.judge.sampling,
@@ -565,6 +648,11 @@ class EdgeProducer:
                             credibility.get(j.evidence),
                         ),
                         sign_stable=j.sign_stable,
+                        quarantined=is_quarantined(
+                            j.sign,
+                            provisional.get(j.evidence, False),
+                            policy=self.quarantine_policy,
+                        ),
                     )
                 )
 
@@ -584,6 +672,17 @@ def _opt_str(v: object) -> str | None:
     from iknos.db.age import unquote_agtype
 
     return unquote_agtype(v)
+
+
+def _opt_bool(v: object) -> bool | None:
+    """Parse an agtype boolean that may be SQL/agtype null into ``bool | None``.
+
+    AGE renders a boolean property unquoted (``true``/``false``) and a missing one as ``null``;
+    ``None`` / ``"null"`` → ``None`` (the §3.1 *undecided* provisional state — neither provisional
+    nor confirmed). Anything else is compared against the literal ``true``."""
+    if v is None or str(v) == "null":
+        return None
+    return str(v) == "true"
 
 
 def _opt_tier(v: object) -> Tier | None:

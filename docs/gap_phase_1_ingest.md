@@ -31,10 +31,10 @@ model/prompt/regime/verifier re-extracts (or fails loud) instead of serving a st
 
 **G1.0/G1.0b** parse front-end shipped: the contract, null parser, `Span.layout` wiring, and
 the **MinerU HTTP client** + bytes-in entry point are in; only standing up the live MinerU
-service + table/figure interpretation (Phase 2) remain. Remaining (next): **G1.6** quarantine
-*enforcement* (the `provisional` flag is now set per node; gating it at edge-creation is
-Phase-2-gated); G1.7b (cross-doc reuse) and G1.8 (reference amortization) are now shipped,
-leaving G1.10 Part B/G1.11–G1.12.
+service + table/figure interpretation (Phase 2) remain. **G1.6** quarantine *enforcement* (the
+`provisional` flag is set per node; gating it at edge-creation) shipped in **G2.9**; G1.7b
+(cross-doc reuse) and G1.8 (reference amortization) are also shipped, leaving G1.10 Part B/
+G1.11–G1.12.
 
 **2026-06 review** (`review_2026-06_architecture_plan.md`) added **G1.13–G1.19**: two
 critical correctness fixes (G1.13 long-document truncation, G1.14 polarity-blind
@@ -59,8 +59,8 @@ and the window layout is recorded on the segment Action. **G1.17 robustness hard
 is now shipped** — one batch: per-span error isolation + a `PropositionizeReport`,
 verifier-failure degradation, `pool_span`→`None` (zero-vector sentinel removed), parser/
 segmenter `actions` indexes (migration 0010), a per-LLM-call deadline, `EmbeddingSubstrate`
-lifecycle, and `cypher_map` property fuzzing. Next: **G1.6 quarantine enforcement** stays
-Phase-2-gated (no SUPPORTS/REFUTES creation site to gate yet). **G1.10 Part A (multi-level
+lifecycle, and `cypher_map` property fuzzing. **G1.6 quarantine enforcement** shipped in **G2.9**
+(the edge producer created the SUPPORTS/REFUTES site to gate). **G1.10 Part A (multi-level
 offset spans) is now shipped** (Part B RAPTOR summaries deferred per the §2 cost decision).
 **G1.7b cross-doc "extract once" reuse is now shipped** (`core/reuse.py` + replay path in
 `Propositionizer`; index migration 0012) — an identical-pipeline span anywhere replays cached
@@ -85,9 +85,9 @@ consumes.
 **Re-assessment after Phase 2/3 merged to `main`** (G2.1–G2.7 boxes + reference binding +
 credibility + part-whole + provenance; G3.4–G3.9 reasoning core). Three items previously
 called "Phase-2-gated" were re-checked against the merged code:
-- **G1.6 quarantine enforcement** — still gated: no `SUPPORTS`/`REFUTES` creation site
-  exists yet (`composed_loop.py` documents the evidential layer as Phase-4 work). Land the
-  `is_provisional` gate where evidential edges are first created.
+- **G1.6 quarantine enforcement** — ✅ **shipped in G2.9**: once the edge producer (G4.3 s3)
+  created the first `SUPPORTS`/`REFUTES` site, the `is_provisional` gate landed there
+  (`core/quarantine.is_quarantined`; producer marks `quarantined`, QBAF adapter drops it).
 - **G1.19 RRF fusion** — still gated: no hybrid-retrieval consumer queries both indexes yet
   (Phase-4 candidate generation). Nothing to fuse into.
 - **G1.11 box on indexes** — partially unblocked (case boxes exist via G2.1), but propositions
@@ -235,14 +235,18 @@ for propositionization" as a non-goal. The revised plan reverses that.
       verdicts are persisted in `actions.outputs` ready for the metric; computing the
       metric on a labeled corpus is the remaining Trial-A5 work.)*
 
-### G1.6 — Quarantine by stakes (§3.1) *(partial — flag set, enforcement pending)*
+### G1.6 — Quarantine by stakes (§3.1) *(flag set here; enforcement shipped in G2.9)*
 - [x] The `provisional` flag is now **set** per proposition (`is_provisional(faithfulness)`,
       G1.5) and persisted on the node.
-- [ ] **Enforcement:** provisional / low-faithfulness propositions may exist but
-      **cannot drive high-stakes moves** (e.g. a `REFUTES`) until confirmed; route them
-      to the expert-triage queue. The rule originates here (the queue UI is Phase 7);
-      enforce the gate wherever a proposition feeds an evidential edge. *(Evidential
-      edges are Phase 2, so enforcement is gated on that.)*
+- [x] **Enforcement:** provisional / low-faithfulness propositions may exist but
+      **cannot drive high-stakes moves** (e.g. a `REFUTES`) until confirmed. The rule
+      originates here; enforcement lands wherever a proposition feeds an evidential edge —
+      which is Phase 2's edge producer, so it **shipped in G2.9** (see
+      `gap_phase_2_graph_construction.md`): `core/quarantine.is_quarantined` is the pure
+      stakes-gate, the edge producer marks each edge `quarantined` (resolving a base fact's
+      provisional status via `Fact → EVIDENCED_BY → Proposition.provisional`), and the QBAF
+      adapter drops a quarantined edge from the framework. Expert-triage queue UI is Phase 7;
+      the stakes-dependent continuous cutoff is the Trial-A5 / G4.6 calibration seam.
 
 ### G1.7 — Content-addressed cache (§6.1) *(generalizes current idempotency)* — ✅ core shipped (#25)
 Pre-G1.7 idempotency keyed on `Action.inputs.target_span` (a span id) alone — so a span was
@@ -652,9 +656,10 @@ more work than adding the slot now.
    verifier-failure degradation (R2), `pool_span`→`None` (R3), parser/segmenter `actions`
    indexes (R4, migration 0010), per-call deadline (R5), substrate lifecycle (R6),
    `cypher_map` fuzzing (R7).
-9. **G1.6 quarantine enforcement** — stakes gating; **still Phase-2-gated** (the `provisional`
-   flag is set per node, but no SUPPORTS/REFUTES creation site exists yet to gate at). A Phase 2
-   *entry* item — land it when evidential edges are first created.
+9. ~~**G1.6 quarantine enforcement**~~ — ✅ **shipped in G2.9** once the edge producer (G4.3 s3)
+   created the first SUPPORTS/REFUTES site to gate at. `core/quarantine.is_quarantined` gates a
+   provisional source from driving a `REFUTES`; the producer marks the edge `quarantined` and the
+   QBAF adapter drops it. (See `gap_phase_2_graph_construction.md` § G2.9.)
 10. ~~**G1.7b cross-doc reuse**~~ — ✅ identical-pipeline spans replay cached propositions
     (re-embed + new nodes) instead of re-running the LLM (`core/reuse.py`, migration 0012).
     ~~**G1.8 reference amortization**~~ — ✅ a reference corpus ingests once into a
@@ -673,9 +678,10 @@ more work than adding the slot now.
 - [ ] A claim resolves back to a **region on the original page** (`Span.layout`),
       not just a character offset; table cells ingest as observation-class
       propositions with column semantics.
-- [ ] Each proposition carries `polarity/modality/attribution/scope/
+- [x] Each proposition carries `polarity/modality/attribution/scope/
       epistemic_class/faithfulness/provisional`; a low-faithfulness proposition is
-      quarantined from driving a `REFUTES`.
+      quarantined from driving a `REFUTES`. *(Epistemic fields G1.1–G1.5; the
+      quarantine-from-`REFUTES` enforcement shipped in G2.9.)*
 - [ ] `verify` runs on a different model family from the extractor.
 - [x] Re-ingesting unchanged content hits the **content-addressed** cache (not just
       same-span-id); a static reference corpus is processed once and reused. *(#25: re-ingest of

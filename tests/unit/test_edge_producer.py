@@ -38,6 +38,7 @@ from iknos.core.edge_producer import (
     evidential_edge_props,
     plan_hypothesis,
 )
+from iknos.core.quarantine import DEFAULT_QUARANTINE, QuarantinePolicy
 from iknos.core.subjective_logic import Opinion
 from iknos.types.edges import EdgeSign
 from iknos.types.nodes import Tier
@@ -113,12 +114,14 @@ def test_evidential_edge_props_carries_the_three_quantities_and_open_bitemporal(
         strength=0.42,
         significance=0.7,
         sign_stable=False,
+        quarantined=True,
         now=NOW,
     )
     assert props["sign"] == "refutes"  # categorical, lowercase EdgeSign value
     assert props["strength"] == 0.42
     assert props["significance"] == 0.7
     assert props["sign_stable"] is False  # the §13 finding is graph-queryable
+    assert props["quarantined"] is True  # the §3.1 gate is graph-queryable
     assert props["box"] == "box-1"
     # Stamped open so a retraction can stamp valid_to and the QBAF current-state filter drops it.
     assert props["valid_to"] is None
@@ -130,8 +133,13 @@ def test_evidential_edge_props_carries_the_three_quantities_and_open_bitemporal(
 # --- evidence grouping ------------------------------------------------------------------------
 
 
-def _meta(statement: str, tier: Tier | None = Tier.CASE, box: str | None = "box-1") -> NodeMeta:
-    return NodeMeta(statement=statement, tier=tier, box=box)
+def _meta(
+    statement: str,
+    tier: Tier | None = Tier.CASE,
+    box: str | None = "box-1",
+    provisional: bool | None = None,
+) -> NodeMeta:
+    return NodeMeta(statement=statement, tier=tier, box=box, provisional=provisional)
 
 
 def test_build_evidence_groups_by_hypothesis_with_identity_reliability() -> None:
@@ -198,12 +206,20 @@ def test_build_evidence_drops_nodes_without_resolved_text() -> None:
 # --- per-hypothesis plan ----------------------------------------------------------------------
 
 
-def _plan(judgment: HypothesisJudgment, meta: dict[str, NodeMeta], cred: dict[str, float | None]):
+def _plan(
+    judgment: HypothesisJudgment,
+    meta: dict[str, NodeMeta],
+    cred: dict[str, float | None],
+    provisional: dict[str, bool] | None = None,
+    quarantine_policy: QuarantinePolicy = DEFAULT_QUARANTINE,
+):
     return plan_hypothesis(
         judgment,
         node_meta=meta,
         credibility=cred,
+        provisional=provisional or {},
         policy=DEFAULT_SIGNIFICANCE,
+        quarantine_policy=quarantine_policy,
         now=NOW,
         model="judge-model",
         sampling={"temperature": 0.0},
@@ -283,7 +299,42 @@ def test_plan_hypothesis_action_records_provenance_and_drops() -> None:
         "abstained": 0,
         "n_samples": 5,
         "sign_stable": True,
+        "quarantined": False,
     }
+
+
+# --- quarantine (§3.1, G2.9) ------------------------------------------------------------------
+
+
+def test_plan_quarantines_a_provisional_source_driving_a_refutes() -> None:
+    # A provisional source's REFUTES is written but flagged quarantined (it must not overturn a
+    # hypothesis until confirmed); the same source's SUPPORTS is left to drive normally.
+    judgment = HypothesisJudgment(
+        hypothesis="h1",
+        judgments=(
+            _judgment("prov", "h1", sign=EdgeSign.REFUTES, strength=0.7),
+            _judgment("prov", "h1", sign=EdgeSign.SUPPORTS, strength=0.6),
+            _judgment("solid", "h1", sign=EdgeSign.REFUTES, strength=0.9),
+        ),
+    )
+    meta = {"h1": _meta("hyp"), "prov": _meta("shaky"), "solid": _meta("firm")}
+    plan = _plan(judgment, meta, {}, provisional={"prov": True, "solid": False})
+
+    by_key = {(e.label, e.src_id): e for e in plan.edges}
+    assert by_key[("REFUTES", "prov")].props["quarantined"] is True  # provisional → refute gated
+    assert by_key[("SUPPORTS", "prov")].props["quarantined"] is False  # corroboration is allowed
+    assert by_key[("REFUTES", "solid")].props["quarantined"] is False  # non-provisional refutes
+
+
+def test_plan_records_quarantine_in_the_action_audit() -> None:
+    judgment = HypothesisJudgment(
+        hypothesis="h1",
+        judgments=(_judgment("prov", "h1", sign=EdgeSign.REFUTES, strength=0.7),),
+    )
+    meta = {"h1": _meta("hyp"), "prov": _meta("shaky")}
+    plan = _plan(judgment, meta, {}, provisional={"prov": True})
+    (audit,) = plan.action.outputs["judgments"]
+    assert audit["quarantined"] is True
 
 
 # --- result helpers ---------------------------------------------------------------------------
@@ -296,6 +347,14 @@ def test_result_surfaces_unstable_edges_as_findings() -> None:
     assert res.unstable == (unstable,)
     assert res.is_finding is True
     assert EdgeProductionResult(edges=(stable,)).is_finding is False
+
+
+def test_result_surfaces_quarantined_edges() -> None:
+    clean = ProducedEdge("e1", "h1", EdgeSign.SUPPORTS, 0.8, 0.9, sign_stable=True)
+    gated = ProducedEdge("e2", "h1", EdgeSign.REFUTES, 0.3, 0.5, sign_stable=True, quarantined=True)
+    res = EdgeProductionResult(edges=(clean, gated))
+    assert res.quarantined == (gated,)
+    assert EdgeProductionResult(edges=(clean,)).quarantined == ()
 
 
 # --- produce orchestration (fake I/O) ---------------------------------------------------------
@@ -334,18 +393,22 @@ class _FakeSession:
 
 
 class _StubProducer(EdgeProducer):
-    """Overrides the two metadata reads so ``produce`` runs without a graph."""
+    """Overrides the metadata reads so ``produce`` runs without a graph."""
 
-    def __init__(self, *args, node_meta, credibility, **kwargs) -> None:  # noqa: ANN002
+    def __init__(self, *args, node_meta, credibility, provisional=None, **kwargs) -> None:  # noqa: ANN002
         super().__init__(*args, **kwargs)
         self._node_meta = node_meta
         self._credibility = credibility
+        self._provisional = provisional or {}
 
     async def _load_node_meta(self, session):  # noqa: ANN001
         return self._node_meta
 
     async def _load_credibility(self, session, evidence_ids):  # noqa: ANN001
         return {e: self._credibility.get(e) for e in evidence_ids}
+
+    async def _load_provisional(self, session, evidence_ids, node_meta):  # noqa: ANN001
+        return {e: self._provisional.get(e, False) for e in evidence_ids}
 
 
 @pytest.mark.asyncio
@@ -448,3 +511,43 @@ async def test_produce_drops_irrelevant_and_writes_nothing_for_empty_pool(monkey
     assert writes == [] and actions == []
     assert result.edges == ()
     assert result.dropped == (("e1", "h1"),)
+
+
+@pytest.mark.asyncio
+async def test_produce_quarantines_a_provisional_source_refutes(monkeypatch) -> None:  # noqa: ANN001
+    # End to end: a provisional evidence node's REFUTES is written with quarantined=True and
+    # surfaced on the result, so the QBAF adapter can drop it (§3.1, G2.9).
+    writes: list[dict] = []
+
+    async def fake_merge_edge(session, *, src_id, dst_id, label, props):  # noqa: ANN001
+        writes.append({"src": src_id, "dst": dst_id, "label": label, "props": props})
+
+    async def fake_record_action(session, **kw):  # noqa: ANN001
+        return uuid.uuid4()
+
+    monkeypatch.setattr("iknos.db.age.merge_edge", fake_merge_edge)
+    monkeypatch.setattr("iknos.provenance.action_log.record_action", fake_record_action)
+
+    pool = CandidatePool(
+        candidates=(
+            Candidate(
+                evidence="e1", hypothesis="h1", sources=frozenset({CandidateSource.EMBEDDING_KNN})
+            ),
+        )
+    )
+    meta = {"h1": _meta("the hypothesis"), "e1": _meta("shaky contradicting evidence")}
+    judge = EdgeJudge(_FakeLLM({"shaky contradicting evidence": JudgedSign.REFUTES}), n_samples=3)
+    producer = _StubProducer(
+        judge,
+        candidates=_FakeCandidateAdapter(pool),
+        node_meta=meta,
+        credibility={"e1": 0.6},
+        provisional={"e1": True},
+    )
+
+    result = await producer.produce(_FakeSession())
+
+    (w,) = writes
+    assert (w["src"], w["dst"], w["label"]) == ("e1", "h1", "REFUTES")
+    assert w["props"]["quarantined"] is True
+    assert len(result.quarantined) == 1 and result.quarantined[0].evidence == "e1"

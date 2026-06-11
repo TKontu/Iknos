@@ -24,11 +24,19 @@ because Phase 2 is where its absence turns from latent to expensive.*
       a synthetic graph at target schema density, on the four real query patterns,
       *before* building heavily on AGE. If AGE fails here, the fallback decision
       (separate graph store) must be made now, not after Phases 2–5 are built on it.
-- [ ] **Quarantine enforcement lands with the first evidential edges (G1.6).** The
+- [x] **Quarantine enforcement lands with the first evidential edges (G1.6).** The
       `provisional` flag is already set per proposition; the §3.1 rule "provisional
       atoms cannot drive high-stakes moves (e.g. a `REFUTES`)" is enforced at
       edge-creation time — which begins in this phase. Until enforced, the flag is
-      decorative.
+      decorative. *(G2.9 — `core/quarantine.py`: the pure stakes-gate (`is_quarantined`:
+      a provisional source may not drive a `REFUTES`). The edge producer **marks** each
+      edge `quarantined` at creation (resolving the evidence node's provisional status —
+      its own flag for an `induce`d conclusion, or `Fact → EVIDENCED_BY → Proposition.
+      provisional` for a base fact), and the QBAF adapter **drops** a quarantined edge
+      from the framework, so it cannot overturn a hypothesis until confirmed — the
+      perception-layer analogue of the §7.2 ensemble gate. The stakes-dependent
+      *continuous* faithfulness-vs-significance cutoff is the deferred calibration seam
+      (Trial A5 / G4.6).)*
 - [x] **Polarity-aware agreement (G1.14) and the truncation guard (G1.13 slice 1)
       shipped** — Phase 2 consumes propositions and their faithfulness; both fixes
       change what reaches it. *(Shipped in #32 — `feat(ingest): G1.13 slice 1

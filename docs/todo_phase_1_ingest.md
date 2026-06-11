@@ -19,8 +19,9 @@ HTTP client** (`MinerUParser` over our own versioned text+offsets wire schema +
 `ParseResult.from_offsets` validated slicer + bytes-in `ingest_document_bytes` entry point +
 `make_parser` factory) are shipped. What remains for live MinerU is **standing up the hosted
 service** that emits the wire schema (ops/AGPL-side adapter) and **table/figure interpretation**
-(Phase 2). Open: MinerU service standup, quarantine enforcement (G1.6), multi-level/RAPTOR
-(G1.10), box scoping (G1.11), cross-document cache reuse (G1.7b). The **2026-06 review**
+(Phase 2). Open: MinerU service standup, multi-level/RAPTOR
+(G1.10), box scoping (G1.11). (Quarantine enforcement G1.6 — shipped in G2.9; cross-document
+cache reuse G1.7b — shipped.) The **2026-06 review**
 (`review_2026-06_architecture_plan.md`) added **G1.13–G1.19** — two critical correctness
 fixes (long-document truncation G1.13, polarity-blind agreement G1.14) plus staleness,
 robustness, table-contract, and rank-fusion work. **G1.13 slice 1** (truncation guard) and
@@ -38,7 +39,7 @@ verifier-failure degradation, `pool_span`→`None` killing the zero-vector senti
 segmenter `actions` indexes, a per-LLM-call deadline, `EmbeddingSubstrate` lifecycle, and
 `cypher_map` property fuzzing) **is now shipped** — one batch hardening the ingest path against
 partial failure, hangs, and the hand-rolled escaping boundary. **G1.6 quarantine enforcement**
-remains genuinely Phase-2-gated (no SUPPORTS/REFUTES creation site exists yet to gate).
+shipped in G2.9, once the edge producer (G4.3 s3) created the first SUPPORTS/REFUTES site to gate.
 **G1.7b cross-doc reuse is now shipped** — a never-extracted span whose pipeline `content_hash`
 matches a prior committed extraction anywhere (re-segmentation, shared boilerplate, an overlapping
 reference corpus) replays that extraction's propositions (re-embedded into new nodes, faithfulness
@@ -203,10 +204,13 @@ decision. See `gap_phase_1_ingest.md` for the gap-plan IDs.
 - [x] Record a `faithfulness` ∈ [0,1] per proposition — kept **distinct** from source
       credibility (§9) and evidential strength (§8). *(G1.5, #21 — derived from the
       verify verdict, never self-reported.)*
-- [ ] **Quarantine by stakes:** provisional/low-faithfulness propositions may exist but
+- [x] **Quarantine by stakes:** provisional/low-faithfulness propositions may exist but
       cannot drive high-stakes moves (e.g., a `REFUTES`) until confirmed; route to the
-      expert-triage queue. *(G1.6 — `provisional` is now set per node; edge-time
-      enforcement is gated on Phase 2 evidential edges.)*
+      expert-triage queue. *(G1.6 set `provisional` per node; **edge-time enforcement
+      shipped in G2.9** now that evidential edges exist — `core/quarantine.is_quarantined`
+      gates a provisional source from driving a `REFUTES`, the edge producer marks the
+      edge `quarantined`, and the QBAF adapter drops it. Expert-triage routing is Phase 7;
+      the stakes-dependent continuous cutoff is the Trial-A5/G4.6 calibration seam.)*
 - [ ] Faithfulness gate metric wired for the trial plan (entailment, negation/modality
       preservation) — see `todo_trials.md` A5. *(Decomposed verdicts persisted in
       `actions.outputs`; computing the metric on a labeled corpus remains.)*

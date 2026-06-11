@@ -51,6 +51,23 @@ def test_inactive_box_node_is_excluded_and_its_edge_dropped() -> None:
     assert out.baf.supports == ()  # the dead supporter's edge dropped
 
 
+def test_quarantined_edge_is_dropped_from_the_framework() -> None:
+    """A quarantined REFUTES (a provisional source's high-stakes move, §3.1/G2.9) is dropped — it
+    must not overturn a hypothesis until the source is confirmed, so it lends nothing here, exactly
+    as a dead-endpoint edge does. Both endpoints are active; only the quarantine gates it."""
+    nodes = [_node("h", confidence=0.5), _node("prov", confidence=0.9), _node("solid")]
+    edges = [
+        EvidenceRow(
+            source="prov", target="h", sign=EdgeSign.REFUTES, strength=0.9, quarantined=True
+        ),
+        EvidenceRow(source="solid", target="h", sign=EdgeSign.REFUTES, strength=0.4),
+    ]
+    out = assemble_baf(nodes, edges)
+    # The provisional source is still an argument (it exists), but its attack does not drive.
+    assert out.baf.arguments == frozenset({"h", "prov", "solid"})
+    assert [(e.src, e.dst) for e in out.baf.attacks] == [("solid", "h")]
+
+
 def test_dangling_edge_to_unknown_node_is_dropped() -> None:
     nodes = [_node("h"), _node("f1")]
     edges = [

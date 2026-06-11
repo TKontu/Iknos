@@ -95,11 +95,23 @@ async def _involves(session: AsyncSession, *, node: uuid.UUID, entity: uuid.UUID
     )
 
 
-async def _evidence_proposition(session: AsyncSession, *, fact: uuid.UUID) -> None:
-    """Give a Fact a §9.1 credibility chain: a Proposition with an epistemic_class it evidences."""
+async def _evidence_proposition(
+    session: AsyncSession, *, fact: uuid.UUID, provisional: bool | None = None
+) -> None:
+    """Give a Fact a §9.1 credibility chain: a Proposition with an epistemic_class it evidences.
+
+    ``provisional`` sets the source proposition's §3.1 quarantine gate (None = the un-judged
+    default, never quarantining)."""
     pid = uuid.uuid4()
     await merge_vertex(
-        session, "Proposition", {"id": str(pid), "text": "claim", "epistemic_class": "observation"}
+        session,
+        "Proposition",
+        {
+            "id": str(pid),
+            "text": "claim",
+            "epistemic_class": "observation",
+            "provisional": provisional,
+        },
     )
     await merge_edge(session, src_id=fact, dst_id=pid, label="EVIDENCED_BY", props={})
 
@@ -196,3 +208,46 @@ async def test_produce_writes_signed_edges_with_separated_strength_and_significa
     }
     assert result.dropped == ()
     assert result.is_finding is False
+
+
+async def test_provisional_source_refutes_is_quarantined_and_does_not_drive(
+    session: AsyncSession,
+) -> None:
+    """G2.9 / §3.1, end to end on real AGE: a Fact whose source ``Proposition`` is provisional
+    drives a ``REFUTES``; the producer writes it ``quarantined=True`` and the QBAF adapter drops it,
+    so the hypothesis is **not** overturned (acceptability stays at base) until the source is
+    confirmed.
+    """
+    await bootstrap_session(session)
+    box = case_box("g29-quarantine", "1", "test", 0.8)
+    await _put_box(session, box)
+
+    actor = await _put_actor(session, box.id)
+    h = await _put_node(session, "Hypothesis", box.id, statement=_HYP, confidence=0.5)
+    f_refute = await _put_node(session, "Fact", box.id, statement=_REFUTE, confidence=0.9)
+    for n in (h, f_refute):
+        await _involves(session, node=n, entity=actor)
+    # The refuter's source proposition is provisional -> its REFUTES is a quarantined move.
+    await _evidence_proposition(session, fact=f_refute, provisional=True)
+    await session.commit()
+
+    judge = EdgeJudge(_ScriptedLLM({_REFUTE: JudgedSign.REFUTES}), n_samples=3)
+    result = await EdgeProducer(judge).produce(session)
+
+    # The edge is written, but flagged quarantined on the graph and surfaced on the result.
+    rows = await execute_cypher(
+        session,
+        f"MATCH (s)-[r:REFUTES]->(t {{id: '{h}'}}) RETURN s.id, r.quarantined",
+        returns="sid agtype, quarantined agtype",
+    )
+    assert len(rows) == 1
+    (src, quarantined) = rows[0]
+    assert unquote_agtype(src) == str(f_refute)
+    assert str(quarantined) == "true"
+    assert {e.evidence for e in result.quarantined} == {str(f_refute)}
+
+    # The QBAF adapter drops the quarantined attack: with no driving edge, the hypothesis stays at
+    # its base acceptability (0.5) — the provisional refuter did not overturn it.
+    adj = await QbafAdapter().evaluate(session)
+    verdict = next(v for v in adj.verdicts if v.id == str(h))
+    assert verdict.acceptability == pytest.approx(0.5)

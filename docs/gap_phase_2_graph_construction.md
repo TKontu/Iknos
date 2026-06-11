@@ -30,7 +30,7 @@ bounding pieces (§5.2, §14, §13) — come *after* the node-creation substrate
 | G2.6 | Conditional credibility (§9.1) gated by epistemic class + sensitivity seeding onto facts | G2.2 | **shipped (this increment)** — derived-not-stored credibility computation + sensitivity seed; the per-claim alignment-judging pass deferred |
 | G2.7 | Provenance & audit (§10.2) — checkable Fact reach-back (Fact → spans → source text → producing `Action`) + the box-level invariant, backed by a partial functional index | G2.2 | **shipped (#42)** — `provenance/audit`; the universal per-node/edge crawler is the deferred seam |
 | **G2.8** | **Entity-linking / taxonomy anchoring** (§5.2/§9/§14) — link case entities to the active pack taxonomy via a scored `ANCHORS_TO`; the *primary, reliable* identity/level path G2.3/G2.4/G2.5 defer to | G2.2 (+ G0.7 packs) | **shipped (this increment — slice 1)** — the linking operator + `ANCHORS_TO` edges + coverage metric; the anchor-canonicalization fold (into `resolve`) + anchor-first level (into `partwhole`) + the reference-binder taxonomy stage are slice 2 |
-| G2.9 | Quarantine **enforcement** (Phase-1 G1.6) — provisional/low-faithfulness propositions cannot drive a `REFUTES` (gated until evidential edges exist) | Phase 4 edges | planned |
+| G2.9 | Quarantine **enforcement** (Phase-1 G1.6) — provisional/low-faithfulness propositions cannot drive a `REFUTES` (gated until evidential edges exist) | Phase 4 edges (G4.3 s3) | **shipped (this increment)** — categorical sign gate (a provisional source may not drive a `REFUTES`); the stakes-dependent *continuous* faithfulness-vs-significance cutoff is the deferred calibration seam (Trial A5 / G4.6) |
 
 Cross-cutting (enforced from G2.2 on): every created node/edge has a non-empty
 provenance path to `Span`(s) and a producing `Action` (§10.1/§10.2); two annotations
@@ -722,3 +722,101 @@ and un-regressing; **slice 2** wires the consumers (below).
       emits an `Action`.
 - [x] The §14 coverage metric (confirmed-anchored / total) and the confirmed-anchor read
       (`anchored_targets`) ship as the slice-2 canonicalization/level consumers' inputs.
+
+---
+
+## G2.9 — Quarantine enforcement *(shipped)*
+
+**Goal.** Make the §3.1 rule *enforceable*, not decorative: a **provisional** atom *"may exist but
+must not drive a strong move (e.g. a `REFUTES` that overturns a hypothesis) until confirmed."* The
+`provisional` flag has been set per proposition since Phase 1 (`is_provisional` /
+`combine_faithfulness`), but until evidential edges existed there was no high-stakes move to gate.
+G4.3 slice 3 landed the edge producer that writes `SUPPORTS`/`REFUTES` — so the gate lands now, at
+edge-creation (the producer *marks*) and at adjudication (the QBAF adapter *honours*).
+
+### What shipped
+
+- **`iknos/core/quarantine.py` (pure, DB-free).** The one place the §3.1 decision lives, so the two
+  consumers cannot diverge on what "high-stakes" means:
+  - `QuarantinePolicy` — `high_stakes_signs: frozenset[EdgeSign]` (default `{REFUTES}`), a swappable
+    data object (cf. `_BAND_LOWER_BOUNDS`, `DEFAULT_SIGNIFICANCE`); `is_high_stakes(sign)`.
+  - `is_quarantined(sign, source_provisional, *, policy)` — `True` iff the source is provisional
+    **and** the sign is high-stakes. Total over scalars, pure; a `null` provisional reads as
+    `False` (quarantine fires only on a *positive* signal, never on absence of evidence).
+- **`iknos/core/edge_producer.py` — the producer *marks*.**
+  - `NodeMeta.provisional` (the node's own flag — a `Conclusion` carries it; `_load_node_meta`
+    reads `n.provisional`).
+  - `_load_provisional(session, evidence_ids, node_meta)` — resolves each evidence node's
+    provisional status: OR-folds the node's own `provisional` (an `induce`d conclusion) with the
+    base-Fact perception gate (`Fact -[:EVIDENCED_BY]-> Proposition.provisional`).
+  - `evidential_edge_props(..., quarantined)`, `plan_hypothesis(..., provisional, quarantine_policy)`,
+    `_edge_audit(..., quarantined)`, `ProducedEdge.quarantined`, `EdgeProductionResult.quarantined`
+    (the persisted quarantined edges — the Phase-7 triage queue's input). `EdgeProducer` takes a
+    `quarantine_policy` (default `DEFAULT_QUARANTINE`).
+- **`iknos/core/qbaf_adapter.py` — the adapter *honours*.** `EvidenceRow.quarantined`,
+  `_load_evidential_edges` reads `r.quarantined`, and `assemble_baf` **drops** a quarantined edge
+  from the framework (it lends nothing to a hypothesis's state) — exactly as a dead-endpoint edge is
+  dropped. This is the actual enforcement: without it the marked `REFUTES` would still attack.
+
+### Decisions
+
+- **Mark-and-drop, not block-the-write.** §3.1 says the edge *"may exist but must not drive"* — so
+  the producer persists a quarantined `REFUTES` (auditable; the votes + `quarantined` are in the
+  Action) and the adapter excludes it. The edge **lifts automatically** on confirmation: when the
+  source's `provisional` clears, a re-judgment's `merge_edge` (full `SET r = {…}`) overwrites the
+  flag, and the QBAF re-includes it. (Belief-revision re-run on a flip is the Phase-3 seam; the
+  re-judgment path covers the simple case today.)
+- **The edge layer marks; it does not adjudicate.** This mirrors the existing `sign_stable`
+  contract: the producer surfaces a first-class graph-queryable signal, and the gate (the QBAF /
+  the §7.2 ensemble, G4.5) consumes it. Quarantine is the *perception-layer* analogue of the §7.2
+  *ensemble-layer* gate on refutation — both protect a hypothesis from being overturned on weak
+  grounds, at two different layers.
+- **Categorical sign gate now; stakes-dependent cutoff deferred.** §3.1 names the move categorically
+  (a `REFUTES`) and also says the cutoff is *stakes-dependent* (a high-significance refutation needs
+  higher source faithfulness than a minor one). The categorical rule — the one that actually
+  protects hypothesis state — ships; the continuous faithfulness-vs-significance threshold is a
+  genuine calibration question (Trial A5 / G4.6) left as the documented `QuarantinePolicy` seam
+  rather than guessed.
+- **`SUPPORTS` is not gated.** Corroboration is a low-stakes move; a provisional source's weaker
+  support is already expressed by its lower edge `strength` / node `confidence`, so a hard gate
+  would double-count. Only the named high-stakes move is gated.
+- **Backward-compatible read.** A `quarantined` property absent (pre-G2.9 edges) or `null` reads as
+  not-quarantined (`_flag` / `_opt_bool`), so an existing graph adjudicates exactly as before until
+  its edges are re-judged.
+
+### Deferred (documented seams)
+
+- The **stakes-dependent continuous threshold** (Trial A5 / G4.6) — a `QuarantinePolicy` field +
+  richer `is_quarantined` signature, swapped in without touching either consumer.
+- **Expert-triage routing** of quarantined edges (Phase 7) — `EdgeProductionResult.quarantined`
+  surfaces them; the queue that confirms the provisional source (lifting the quarantine) is Phase 7.
+- **Belief-revision re-run** when a confirmation lifts a quarantine (Phase 3) — today the lift
+  happens on the next `produce` re-judgment, not on an incremental Layer A/B re-run.
+
+### Tests
+
+- **Unit (`tests/unit/test_quarantine.py`, DB-free):** the categorical rule (provisional → `REFUTES`
+  gated, `SUPPORTS` allowed), the non-provisional pass-through (both signs), the default policy's
+  high-stakes set, and a custom policy extending it (the swappable seam).
+- **Unit (`tests/unit/test_edge_producer.py`):** `plan_hypothesis` quarantines a provisional
+  source's `REFUTES` but not its `SUPPORTS` nor a non-provisional `REFUTES`; the Action audit
+  carries `quarantined`; `evidential_edge_props` carries the flag; `EdgeProductionResult.quarantined`
+  surfaces it; the end-to-end `produce` writes `quarantined=True` for a provisional source's refute.
+- **Unit (`tests/unit/test_qbaf_adapter.py`):** `assemble_baf` drops a quarantined edge from the
+  framework while keeping the source an argument and a sibling non-quarantined attack live.
+- **Integration (`tests/integration/test_edge_producer.py`, live AGE):** a `Fact` whose source
+  `Proposition` is provisional drives a `REFUTES`; the written edge is `quarantined=True`, the
+  result surfaces it, and `QbafAdapter.evaluate` leaves the hypothesis at its base acceptability
+  (the provisional refuter did not overturn it). (Runs in CI; locally collected only when
+  `DATABASE_URL` is set.)
+
+### Exit criteria (G2.9)
+
+- [x] A provisional atom (low-faithfulness/ambiguously-bound proposition, or a defeasible inductive
+      conclusion) cannot drive a `REFUTES`: the edge producer marks the edge `quarantined` and the
+      QBAF adapter drops it, so the move does not overturn a hypothesis until the source is confirmed.
+- [x] The quarantine is enforced **at edge-creation time** (the §3.1 / Phase-2-entry-criterion
+      wording) and is graph-queryable (`r.quarantined`) and auditable (the producing `Action`).
+- [x] A `SUPPORTS` from a provisional source is **not** gated (low-stakes corroboration).
+- [x] The quarantine lifts non-destructively when the source is confirmed (re-judgment overwrites
+      the flag); the edge is never silently dropped from the graph.

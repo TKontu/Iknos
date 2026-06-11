@@ -85,12 +85,19 @@ class EvidenceRow:
     ``source`` is the evidence (Fact/Conclusion) bearing on ``target`` (Hypothesis/Conclusion)
     — the schema direction (§5, §10). ``sign`` selects support vs attack; ``strength`` is the
     §7.1 calibrated edge weight in ``[0, 1]`` (never a raw LLM number, §8/§10).
+
+    ``quarantined`` is the §3.1 / G2.9 gate the edge producer stamped at creation: ``True`` when a
+    *provisional* source drove this high-stakes move (a ``REFUTES``). A quarantined edge is
+    **dropped** from the framework (:func:`assemble_baf`) — it may exist and carries its provenance,
+    but a provisional atom must not overturn a hypothesis until confirmed, so it lends nothing to
+    adjudication (the perception-layer analogue of the §7.2 ensemble gate on refutation).
     """
 
     source: ArgId
     target: ArgId
     sign: EdgeSign
     strength: Strength
+    quarantined: bool = False
 
 
 @dataclass(frozen=True)
@@ -121,7 +128,10 @@ def assemble_baf(
     2. **Edges.** Each :class:`EvidenceRow` whose **both** endpoints are active becomes an
        :class:`~iknos.core.qbaf.Edge` (``src=source``, ``dst=target``, ``strength``), routed by
        ``sign`` to ``supports`` / ``attacks``. An edge with an inactive endpoint is **dropped**
-       (a retracted/deprecated-box supporter lends nothing — support is additive).
+       (a retracted/deprecated-box supporter lends nothing — support is additive). A
+       **``quarantined``** edge is dropped for the same reason (§3.1, G2.9): a provisional source
+       may not drive a high-stakes move, so its edge contributes nothing until the source is
+       confirmed — it exists in the graph (auditable, bridgeable) but not in the framework.
 
     Ordering is deterministic (sorted) so the produced framework and any replay trace are stable
     regardless of row iteration order (§10).
@@ -143,6 +153,8 @@ def assemble_baf(
     supports: list[Edge] = []
     attacks: list[Edge] = []
     for e in edges:
+        if e.quarantined:
+            continue  # §3.1/G2.9 — a provisional source's high-stakes move does not drive
         if not (is_active(e.source) and is_active(e.target)):
             continue
         edge = Edge(src=e.source, dst=e.target, strength=e.strength)
@@ -262,7 +274,10 @@ class QbafAdapter:
 
         One query per relationship type (AGE matches a single label per pattern, as in
         ``load_reasoning_nodes``); the ``sign`` comes from which type matched (the canonical
-        source of direction), so the edge's stored ``sign`` property need not be re-read.
+        source of direction), so the edge's stored ``sign`` property need not be re-read. The
+        ``quarantined`` flag (§3.1, G2.9) is read so :func:`assemble_baf` can drop a provisional
+        source's high-stakes edge (a missing/``null`` flag — an edge written before G2.9 — reads as
+        not quarantined).
         """
         from iknos.db.age import execute_cypher, unquote_agtype
 
@@ -272,16 +287,17 @@ class QbafAdapter:
                 session,  # type: ignore[arg-type]
                 f"MATCH (s)-[r:{rel}]->(t) "
                 "WHERE s.valid_to IS NULL AND t.valid_to IS NULL AND r.valid_to IS NULL "
-                "RETURN s.id, t.id, r.strength",
-                returns="sid agtype, tid agtype, strength agtype",
+                "RETURN s.id, t.id, r.strength, r.quarantined",
+                returns="sid agtype, tid agtype, strength agtype, quarantined agtype",
             )
-            for sid, tid, strength in raw:
+            for sid, tid, strength, quarantined in raw:
                 rows.append(
                     EvidenceRow(
                         source=unquote_agtype(sid),
                         target=unquote_agtype(tid),
                         sign=sign,
                         strength=_num(strength, default=1.0),
+                        quarantined=_flag(quarantined),
                     )
                 )
         return rows
@@ -345,3 +361,12 @@ def _num(v: object, *, default: float) -> float:
     if v is None or str(v) == "null":
         return default
     return float(str(v))
+
+
+def _flag(v: object) -> bool:
+    """Parse an agtype boolean (or SQL/agtype null) into ``bool`` — null/absent → ``False``.
+
+    The ``quarantined`` property is absent on edges written before G2.9 and ``null`` when the
+    source was not provisional; both read as *not quarantined*, so a pre-G2.9 graph adjudicates
+    exactly as before until edges are re-judged under the new producer."""
+    return str(v) == "true"
