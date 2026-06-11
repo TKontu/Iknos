@@ -92,6 +92,82 @@ def cluster_candidates(
     return clusters
 
 
+def cluster_candidates_partitioned(
+    candidates: list[Candidate], *, threshold: float = DEFAULT_AGREEMENT_THRESHOLD
+) -> list[list[Candidate]]:
+    """Cluster, but only *within* identical ``(polarity, epistemic_class)`` partitions (G1.14).
+
+    Sentence-embedding cosine cannot tell a claim from its negation — a claim and its negation
+    typically sit at cosine > 0.9 — so plain :func:`cluster_candidates` co-clusters asserted and
+    negated variants of the same claim, reporting maximal agreement on precisely the polarity
+    instability §3.1 exists to catch. Polarity and epistemic class are therefore treated as
+    **identity** (hard partition); modality stays soft (it varies legitimately across phrasings and
+    is left to the cosine clustering). The inner algorithm is the untouched greedy-against-
+    representative :func:`cluster_candidates`; this only restricts what may co-cluster.
+
+    Partitions are visited in sorted ``(polarity, epistemic_class)`` order and candidates within a
+    partition keep their :func:`_ordered` order, so the result is deterministic (replay, §10).
+    """
+    groups: dict[tuple[Polarity, EpistemicClass], list[Candidate]] = {}
+    for cand in _ordered(candidates):
+        groups.setdefault((cand.polarity, cand.epistemic_class), []).append(cand)
+    clusters: list[list[Candidate]] = []
+    for key in sorted(groups):
+        clusters.extend(cluster_candidates(groups[key], threshold=threshold))
+    return clusters
+
+
+@dataclass(frozen=True)
+class Consolidated:
+    """One consolidated proposition out of multi-sample clustering (G1.3 + G1.14).
+
+    ``canonical`` is the cluster's medoid (text + operators coherent); ``agreement`` is the
+    distinct-sample fraction; ``polarity_unstable`` is set when this cluster is one half of a
+    **polarity twin** — a same-claim cluster of the opposite polarity also survived, i.e. the
+    sampler wavered on the sign of the claim. A polarity-unstable proposition is quarantined
+    (``provisional``) regardless of how the verifier scores it.
+    """
+
+    canonical: Candidate
+    agreement: float
+    polarity_unstable: bool
+
+
+def consolidate_samples(
+    candidates: list[Candidate], *, n_samples: int, threshold: float = DEFAULT_AGREEMENT_THRESHOLD
+) -> tuple[list[Consolidated], list[tuple[int, int]]]:
+    """Turn N samples' candidates into consolidated propositions + the polarity-twin pairs (G1.14).
+
+    Polarity-aware clustering (so a 3-assert / 2-negate split yields a 0.6 cluster and a 0.4
+    cluster, never one 1.0 cluster), then **twin detection**: any two clusters of opposite polarity
+    whose medoids' cosine ≥ ``threshold`` are the same affirmative claim asserted in one partition
+    and negated in another. Both halves are flagged ``polarity_unstable`` (→ ``provisional``); each
+    keeps its own distinct-sample agreement (the instability is recorded as a negative signal, not
+    by collapsing the two). Returns the consolidated list (cluster order) and the twin pairs as
+    index pairs into that list (for the extract ``Action`` / Trial A5).
+    """
+    clusters = cluster_candidates_partitioned(candidates, threshold=threshold)
+    canon = [canonical_of(cluster) for cluster in clusters]
+    unstable = [False] * len(clusters)
+    twins: list[tuple[int, int]] = []
+    for i in range(len(clusters)):
+        for j in range(i + 1, len(clusters)):
+            if canon[i].polarity != canon[j].polarity and (
+                _cosine(canon[i].embedding, canon[j].embedding) >= threshold
+            ):
+                unstable[i] = unstable[j] = True
+                twins.append((i, j))
+    consolidated = [
+        Consolidated(
+            canonical=canon[k],
+            agreement=agreement_of(clusters[k], n_samples=n_samples),
+            polarity_unstable=unstable[k],
+        )
+        for k in range(len(clusters))
+    ]
+    return consolidated, twins
+
+
 def agreement_of(cluster: list[Candidate], *, n_samples: int) -> float:
     """Agreement ∈ [0, 1] for a cluster = fraction of the N samples that produced this claim.
 

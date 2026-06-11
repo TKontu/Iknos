@@ -41,9 +41,10 @@ agreement clustering — both currently silent-wrong on real inputs), two
 silent-staleness closures (G1.15 prompt-hash cache key, G1.16 embedding-model
 identity), a robustness batch (G1.17), the structured-table contract slot (G1.18,
 time-sensitive while the wire schema is on a branch), and the RRF fusion decision
-(G1.19). G1.13 slice 1 + G1.14 jump the queue: they are cheap and stop silent data
-corruption; do them **before** any further perception-layer tuning and before Trial
-A5 fits thresholds.
+(G1.19). **G1.13 slice 1 + G1.14 are now shipped** — the two cheap critical fixes that
+stop silent data corruption (over-long-document refusal; polarity-aware agreement with
+twin quarantine), landed before any further perception-layer tuning and before Trial A5
+fits thresholds. G1.15 (prompt-hash cache key) + G1.16 (embedding-model column) are next.
 
 ## Current implementation (baseline)
 
@@ -267,12 +268,13 @@ returns a zero vector; `persist_spans` skips those dense rows; the content is
 "silent false negative" §5.1 warns about. Segmentation similarity past the cutoff is
 likewise undefined. Two slices, shippable independently:
 
-- [ ] **Slice 1 — fail-loud guard (do first; tiny).** In `embed_document`, detect
-      truncation (tokenize without truncation and compare length, or check
-      `seq_len == max_length`) and raise a new `DocumentTooLongError` (same
-      pattern/placement as `DocumentResegmentationError`). No partial index may be
-      written. Unit test: text tokenizing past the limit raises; text under it does
-      not. This converts silent data loss into a loud refusal until Slice 2 lands.
+- [x] **Slice 1 — fail-loud guard (do first; tiny).** `embed_document` now tokenizes
+      **without** truncation and raises `DocumentTooLongError` (`core/embeddings.py`,
+      same fail-loud pattern as `DocumentResegmentationError`) when the true token
+      count exceeds `MAX_MODEL_TOKENS` (8192) — before any forward pass, so no partial
+      index is written. The decision is a pure `_raise_if_truncated` (unit-tested over/
+      at/under the limit without loading the model). Silent data loss → loud refusal
+      until Slice 2 lands.
 - [ ] **Slice 2 — overlapping macro-windows ("late chunking over windows").**
       Embed consecutive max-length windows with a fixed token overlap (start at
       1024; make it a constant, not config). `DocumentContext` becomes a list of
@@ -304,29 +306,27 @@ exists to catch — and `canonical_of` makes the persisted polarity a sample-
 distribution coin flip. The `Candidate` dataclass already carries the fields; they
 are just unused for identity.
 
-- [ ] **Hard-partition before clustering:** run cosine clustering only *within*
-      groups of identical `(polarity, epistemic_class)`. Modality stays soft (it
-      varies legitimately across phrasings); polarity and epistemic class are
-      identity. Implement as a `groupby` wrapper around the existing
-      `cluster_candidates` — keep the inner algorithm untouched.
-- [ ] **Cross-polarity instability is a negative signal, not noise:** after
-      partitioned clustering, detect **polarity twins** — clusters in opposite
-      polarity partitions whose representatives' cosine ≥ threshold. For twins:
-      each side's `agreement` stays its own distinct-sample fraction of N (so
-      3-assert/2-negate → 0.6 / 0.4, never 1.0), both canonical propositions are
-      marked `provisional` (reason: polarity-unstable), and the twin pairing is
-      recorded in the extract `Action.outputs` for Trial A5.
-- [ ] **Degenerate-sampling guard (review P4):** fail config validation (or warn
-      loudly at `Propositionizer` construction) when `LLM_EXTRACT_SAMPLES > 1`
-      while sampling temperature is 0 — N greedy samples are (near-)identical and
-      agreement is trivially 1.0 while measuring nothing.
-- [ ] **Tests (pure, hand-built vectors):** near-identical asserted+negated
-      candidates land in separate clusters whose agreements sum to ≤ 1; twin
-      detection sets `provisional` on both; same-polarity candidates cluster as
-      before; the temperature guard fires.
-- [ ] **Ordering note for Trial A5:** land this **before** A5 fits
-      `PROP_AGREEMENT_THRESHOLD` — fitting the threshold against the polarity-blind
-      clusterer bakes the bug into the calibration.
+- [x] **Hard-partition before clustering:** `consistency.cluster_candidates_partitioned`
+      groups candidates by identical `(polarity, epistemic_class)` and runs the untouched
+      greedy-against-representative `cluster_candidates` *within* each group. Modality stays
+      soft; polarity and epistemic class are identity. Deterministic group order (sorted).
+- [x] **Cross-polarity instability is a negative signal, not noise:**
+      `consistency.consolidate_samples` detects **polarity twins** — two clusters of opposite
+      polarity whose medoids' cosine ≥ threshold. Each side keeps its own distinct-sample
+      `agreement` (3-assert/2-negate → 0.6 / 0.4, never 1.0), both canonical propositions are
+      set `provisional` (OR-folded in the verify pass so a faithful verdict cannot clear it),
+      and the twin pairing is recorded in the extract `Action.outputs` (`polarity_twins`) for
+      Trial A5.
+- [x] **Degenerate-sampling guard (review P4):** `Propositionizer.__init__` already fails
+      loud when `n_samples > 1` under a greedy (temperature 0, no top_p) regime — retained,
+      tested (`test_multi_sample_rejects_greedy_sampling`).
+- [x] **Tests (pure, hand-built vectors):** asserted+negated near-identical candidates land
+      in separate clusters (agreements sum ≤ 1); twin detection sets `provisional` on both and
+      surfaces the pair; same-polarity candidates cluster as before; distinct opposite-polarity
+      claims are not twinned; the temperature guard fires. (`test_consistency.py`,
+      `test_proposition.py`.)
+- [x] **Ordering note for Trial A5:** landed **before** A5 fits `PROP_AGREEMENT_THRESHOLD`,
+      so the threshold is calibrated against the polarity-aware clusterer.
 
 ### G1.15 — Cache key: hash the actual prompt + schema, not a hand-bumped constant (§6.1) *(review A4)*
 
@@ -461,11 +461,12 @@ more work than adding the slot now.
    perception-hardening core (consistency *and* verification).
 3. ~~**G1.7 content-addressed cache** (core)~~ — ✅ #25: version-aware per-span
    idempotency (`core/cache.py`, migration `0006`). Cross-doc reuse is G1.7b.
-4. **G1.13 slice 1 (truncation guard) + G1.14 (polarity-aware clustering +
-   temperature guard)** — ← **next**: small, stop silent corruption; G1.14 must
-   precede Trial A5 threshold fitting.
-5. **G1.15 (prompt-hash cache key) + G1.16 (embedding-model column)** — two small
-   silent-staleness closures; G1.15 triggers one loud full re-extraction.
+4. ~~**G1.13 slice 1 (truncation guard) + G1.14 (polarity-aware clustering +
+   temperature guard)**~~ — ✅ the two critical correctness fixes: `embed_document`
+   refuses over-long documents (`DocumentTooLongError`); multi-sample clustering is
+   polarity-partitioned with twin quarantine. Landed before Trial A5 threshold fitting.
+5. **G1.15 (prompt-hash cache key) + G1.16 (embedding-model column)** — ← **next**: two
+   small silent-staleness closures; G1.15 triggers one loud full re-extraction.
 6. **G1.18 (table payload in wire contract)** — while the MinerU wire schema is
    still on a branch / before the service adapter hardens.
 7. **G1.13 slice 2 (windowed embedding)** — before the MinerU service starts
@@ -500,7 +501,7 @@ more work than adding the slot now.
 - [ ] A document **longer than the embedding context** ingests with full dense
       coverage — no silent truncation, no zero vectors in pgvector; window layout
       auditable from the segment Action (G1.13).
-- [ ] Mixed-polarity extractions can never report full agreement; a
+- [x] Mixed-polarity extractions can never report full agreement; a
       polarity-unstable span yields `provisional` propositions (G1.14).
 - [ ] A prompt-template edit alone invalidates the extraction cache (G1.15); an
       embedding-model swap is refused, not silently mixed (G1.16).

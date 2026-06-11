@@ -99,7 +99,7 @@ async def test_infer_span_maps_propositions_to_target_span():
         embed_return=[[1.0, 0.0], [0.0, 1.0]],
     )
 
-    results = await p._infer_span(asyncio.Semaphore(2), spans, index=1, raw_text=raw)
+    results, _twins = await p._infer_span(asyncio.Semaphore(2), spans, index=1, raw_text=raw)
 
     assert [r.text for r in results] == [
         "Smith argued the budget was insufficient.",
@@ -122,7 +122,7 @@ async def test_infer_span_empty_returns_no_results_and_skips_embedding():
     spans = [_span(doc, 0, 13)]
     p = _propositionizer(llm_return={"propositions": []}, embed_return=[])
 
-    results = await p._infer_span(asyncio.Semaphore(2), spans, index=0, raw_text=raw)
+    results, _twins = await p._infer_span(asyncio.Semaphore(2), spans, index=0, raw_text=raw)
 
     assert results == []
     p.substrate.embed_passages.assert_not_called()
@@ -181,7 +181,7 @@ async def test_infer_span_populates_epistemic_fields_and_routing():
         embed_return=[[1.0, 0.0], [0.0, 1.0]],
     )
 
-    results = await p._infer_span(asyncio.Semaphore(2), spans, index=1, raw_text=raw)
+    results, _twins = await p._infer_span(asyncio.Semaphore(2), spans, index=1, raw_text=raw)
 
     judgement, observation = results
     assert judgement.epistemic_class is EpistemicClass.JUDGEMENT
@@ -348,13 +348,42 @@ async def test_multi_sample_clusters_and_scores_agreement() -> None:
         n_samples=3,
     )
 
-    results = await p._infer_span(asyncio.Semaphore(4), spans, index=0, raw_text=raw)
+    results, _twins = await p._infer_span(asyncio.Semaphore(4), spans, index=0, raw_text=raw)
 
     assert p.llm.guided_complete.call_count == 3  # the extractor was sampled N times
     p.substrate.embed_passages.assert_called_once()  # one batched pass over all candidates
     assert [r.text for r in results] == ["A", "B"]
     assert results[0].agreement == pytest.approx(2 / 3)  # A: 2 of 3 samples
     assert results[1].agreement == pytest.approx(1 / 3)  # B: 1 of 3 → unstable
+
+
+@pytest.mark.asyncio
+async def test_multi_sample_polarity_twin_quarantines_both_sides() -> None:
+    # 5 samples wavering on the sign of one claim: 3 assert it, 2 negate it. Polarity-aware
+    # clustering (G1.14) must not report agreement 1.0; both sides are quarantined (provisional)
+    # and the twin pairing surfaces for the extract Action.
+    doc = uuid.uuid4()
+    raw = "The bearing failed under load."
+    spans = [_span(doc, 0, len(raw))]
+    p = _multi_propositionizer(
+        sample_returns=[
+            {"propositions": [{"text": "The bearing failed.", "polarity": "asserted"}]},
+            {"propositions": [{"text": "The bearing failed.", "polarity": "asserted"}]},
+            {"propositions": [{"text": "The bearing failed.", "polarity": "asserted"}]},
+            {"propositions": [{"text": "The bearing failed.", "polarity": "negated"}]},
+            {"propositions": [{"text": "The bearing failed.", "polarity": "negated"}]},
+        ],
+        embed_return=[[1.0, 0.0]] * 5,  # all near-identical: cosine cannot tell sign apart
+        n_samples=5,
+    )
+
+    results, twins = await p._infer_span(asyncio.Semaphore(4), spans, index=0, raw_text=raw)
+
+    assert len(results) == 2
+    assert sorted(r.agreement for r in results) == pytest.approx([0.4, 0.6])  # never 1.0
+    assert all(r.provisional is True for r in results)  # both quarantined
+    assert len(twins) == 1
+    assert set(twins[0]) == {r.id for r in results}  # the pair links the two propositions
 
 
 @pytest.mark.asyncio
@@ -365,7 +394,7 @@ async def test_single_sample_leaves_agreement_null() -> None:
     spans = [_span(doc, 0, len(raw))]
     p = _propositionizer(llm_return={"propositions": [{"text": "A"}]}, embed_return=[[1.0, 0.0]])
 
-    results = await p._infer_span(asyncio.Semaphore(2), spans, index=0, raw_text=raw)
+    results, _twins = await p._infer_span(asyncio.Semaphore(2), spans, index=0, raw_text=raw)
 
     assert p.n_samples == 1
     assert results[0].agreement is None

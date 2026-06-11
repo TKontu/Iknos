@@ -29,9 +29,7 @@ from iknos.core.cache import extraction_content_hash
 from iknos.core.consistency import (
     DEFAULT_AGREEMENT_THRESHOLD,
     Candidate,
-    agreement_of,
-    canonical_of,
-    cluster_candidates,
+    consolidate_samples,
 )
 from iknos.core.embeddings import EmbeddingSubstrate
 from iknos.core.llm import LLMClient
@@ -238,19 +236,23 @@ class Propositionizer:
 
     async def _infer_span(
         self, sem: asyncio.Semaphore, spans: list[Span], index: int, raw_text: str
-    ) -> list[PropositionResult]:
-        """Extract one span's propositions, scoring each by cross-sample agreement (G1.3).
+    ) -> tuple[list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]]]:
+        """Extract one span's propositions, scoring each by cross-sample agreement (G1.3/G1.14).
 
-        Samples the extractor ``n_samples`` times, embeds every candidate, then clusters
-        semantically-equivalent extractions; each cluster becomes one proposition carrying its
-        medoid's text+operators and the fraction of samples that produced it (``agreement``). No
-        DB access — concurrent-phase safe. The semaphore wraps each *individual* sample call (not
-        the whole span), so the N samples of one span share the global budget with every other
-        in-flight call and never deadlock by holding an outer permit while awaiting inner ones —
-        the same permit discipline as ``_verify_all``.
+        Samples the extractor ``n_samples`` times, embeds every candidate, then consolidates
+        semantically-equivalent extractions **within each ``(polarity, epistemic_class)``
+        partition** (G1.14 — cosine cannot tell a claim from its negation); each cluster becomes
+        one proposition carrying its medoid's text+operators and the fraction of samples that
+        produced it (``agreement``). No DB access — concurrent-phase safe. The semaphore wraps each
+        *individual* sample call (not the whole span), so the N samples of one span share the global
+        budget with every other in-flight call and never deadlock by holding an outer permit while
+        awaiting inner ones — the same permit discipline as ``_verify_all``.
 
-        n_samples=1 short-circuits the clustering (1:1 candidate→proposition, ``agreement`` null),
-        so single-pass behavior is byte-identical to pre-G1.3.
+        Returns ``(results, twin_pairs)`` where ``twin_pairs`` are ``(id, id)`` proposition pairs
+        the sampler wavered the *sign* of (polarity twins, G1.14) — both flagged ``provisional`` and
+        recorded on the extract ``Action``. n_samples=1 short-circuits the clustering (1:1
+        candidate→proposition, ``agreement`` null, no twins), so single-pass behavior is
+        byte-identical to pre-G1.3.
         """
         target = spans[index]
         _, context_text = build_context(spans, index, raw_text, self.context_window)
@@ -269,7 +271,7 @@ class Propositionizer:
             (s_idx, pos, p) for s_idx, props in enumerate(samples) for pos, p in enumerate(props)
         ]
         if not flat:
-            return []
+            return [], []
 
         # One batched torch forward pass over every candidate (off the event loop so concurrent
         # LLM calls keep flowing). The medoid's vector is reused at persist time — no re-embed.
@@ -291,37 +293,44 @@ class Propositionizer:
             for (s_idx, pos, p), v in zip(flat, vectors, strict=True)
         ]
 
-        # Single-pass: no clustering — each extraction is its own proposition (agreement null),
-        # exactly as before G1.3. Multi-sample: cluster equivalent extractions and score agreement.
-        if self.n_samples == 1:
-            clusters = [[c] for c in candidates]
-        else:
-            clusters = cluster_candidates(candidates, threshold=self.agreement_threshold)
+        def _to_result(
+            canonical: Candidate, agreement: float | None, *, provisional: bool | None
+        ) -> PropositionResult:
+            return PropositionResult(
+                id=uuid.uuid4(),
+                text=canonical.text,
+                span_id=target.id,
+                document_id=target.document_id,
+                embedding=canonical.embedding,
+                polarity=canonical.polarity,
+                modality=canonical.modality,
+                attribution=canonical.attribution,
+                scope=canonical.scope,
+                epistemic_class=canonical.epistemic_class,
+                # routing derived now (G1.2); faithfulness set by the verify pass (G1.4).
+                # provisional is set here only for polarity-unstable twins (G1.14) — the
+                # verify pass OR-folds its own is_provisional() onto it, never clearing it.
+                routing=route_for(canonical.epistemic_class),
+                agreement=agreement,
+                provisional=provisional,
+            )
 
-        results: list[PropositionResult] = []
-        for cluster in clusters:
-            canonical = canonical_of(cluster)
-            agreement = (
-                agreement_of(cluster, n_samples=self.n_samples) if self.n_samples > 1 else None
-            )
-            results.append(
-                PropositionResult(
-                    id=uuid.uuid4(),
-                    text=canonical.text,
-                    span_id=target.id,
-                    document_id=target.document_id,
-                    embedding=canonical.embedding,
-                    polarity=canonical.polarity,
-                    modality=canonical.modality,
-                    attribution=canonical.attribution,
-                    scope=canonical.scope,
-                    epistemic_class=canonical.epistemic_class,
-                    # Derived now (G1.2); faithfulness/provisional set by the verify pass (G1.4).
-                    routing=route_for(canonical.epistemic_class),
-                    agreement=agreement,
-                )
-            )
-        return results
+        # Single-pass: no clustering — each extraction is its own proposition (agreement null, no
+        # polarity twins possible), exactly as before G1.3.
+        if self.n_samples == 1:
+            results = [_to_result(c, None, provisional=None) for c in candidates]
+            return results, []
+
+        # Multi-sample: polarity-aware consolidation + twin detection (G1.14).
+        consolidated, twin_idx = consolidate_samples(
+            candidates, n_samples=self.n_samples, threshold=self.agreement_threshold
+        )
+        results = [
+            _to_result(c.canonical, c.agreement, provisional=True if c.polarity_unstable else None)
+            for c in consolidated
+        ]
+        twin_pairs = [(results[i].id, results[j].id) for i, j in twin_idx]
+        return results, twin_pairs
 
     async def _verify_all(
         self,
@@ -353,8 +362,11 @@ class Propositionizer:
             # factor 1.0 ⇒ faithfulness == the verify component (unchanged from G1.4/G1.5).
             agreement = r.agreement if r.agreement is not None else 1.0
             faith = combine_faithfulness(verify_component, agreement)
+            # OR-fold: a polarity-unstable proposition (G1.14) stays provisional even if the
+            # verifier finds it faithful — the instability is an independent quarantine reason.
+            provisional = is_provisional(faith) or bool(r.provisional)
             # PropositionResult is frozen — rebuild with the scored fields, never mutate.
-            scored = replace(r, faithfulness=faith, provisional=is_provisional(faith))
+            scored = replace(r, faithfulness=faith, provisional=provisional)
             return scored, verdict
 
         async def verify_group(
@@ -393,6 +405,7 @@ class Propositionizer:
         content_hash: str,
         results: list[PropositionResult],
         verdicts: "list[_VerifyOut] | None" = None,
+        twins: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     ) -> uuid.UUID:
         """Persist one span's propositions + edges + indexes + Action in a single transaction.
 
@@ -460,6 +473,10 @@ class Propositionizer:
             extract_outputs["agreements"] = [
                 {"proposition": str(r.id), "agreement": r.agreement} for r in results
             ]
+            # Polarity twins (G1.14): the sampler wavered the sign of a claim — record the
+            # pairing so Trial A5 can score it and the quarantine reason is auditable.
+            if twins:
+                extract_outputs["polarity_twins"] = [{"a": str(a), "b": str(b)} for a, b in twins]
 
         action_id = await record_action(
             session,
@@ -572,10 +589,19 @@ class Propositionizer:
         # concurrency. Same permit discipline as the verify fan-out below.
         sem = asyncio.Semaphore(self.concurrency)
 
-        async def infer(i: int) -> tuple[int, list[PropositionResult]]:
-            return i, await self._infer_span(sem, spans, i, raw_text)
+        async def infer(
+            i: int,
+        ) -> tuple[int, list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]]]:
+            results, twins = await self._infer_span(sem, spans, i, raw_text)
+            return i, results, twins
 
-        inferred = await asyncio.gather(*(infer(i) for i in pending))
+        inferred_raw = await asyncio.gather(*(infer(i) for i in pending))
+        # Twins are carried alongside the per-span hash for persistence; the verify fan-out
+        # below operates only on (index, results), so split them out here (G1.14).
+        twins_by_index: dict[int, list[tuple[uuid.UUID, uuid.UUID]]] = {
+            i: twins for i, _, twins in inferred_raw
+        }
+        inferred = [(i, results) for i, results, _ in inferred_raw]
 
         # Phase 2b: independent verification (G1.4) — another DB-free LLM call, so it runs
         # in the concurrent phase under the same budget. Absent verifier → verdicts stay
@@ -603,6 +629,7 @@ class Propositionizer:
                     hash_by_index[i],
                     results,
                     verdicts,
+                    twins_by_index.get(i),
                 )
             )
         return action_ids
