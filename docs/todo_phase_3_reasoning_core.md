@@ -8,7 +8,8 @@ off-the-shelf system packages this — it is the substance of the project.
 **Architecture refs:** §12 (two-layer model), §8 (decisions, staged build 1–2), §7.1
 (edge confidence), §6 (`deduce`, `induce`).
 
-**Status — 🟡 G3.1 + G3.2 shipped (Layer A, in-memory).** Well-founded support is
+**Status — 🟡 G3.1 + G3.2 shipped (Layer A, in-memory); G3.5 + G3.6 shipped (Layer B
+semiring decision + confidence valuation, in-memory).** Well-founded support is
 implemented as the **definitional least-fixpoint** (`well_founded_support`, exposed as
 `RecomputeOracle`) over an abstract derivation graph — pure, in-memory, correct on
 acyclic *and* cyclic graphs — in `core/truth_maintenance.py`, with the §12 must-pass
@@ -22,8 +23,12 @@ sequences (1000 snapshots), exactly as planned. What remains of Layer A (**G3.3*
 **clingo/ASP** path for **non-monotonic / stratified-negation** rules, SCC-scoped DRed as
 a performance refinement, and the *persisted* (`WITH RECURSIVE` / DBSP) path — all of
 which need the **Phase 2 adapter** (active-subgraph selection + AGE/UUID→`DerivationGraph`
-mapping), still open. Also open: Layer B confidence (semiring decision + Viterbi/Gödel
-fixpoint), the `deduce`/`induce` operators, and `SAME_AS`-component aggregation. See
+mapping), still open. Layer B is now in
+memory too: the semiring is **decided (G3.5: Gödel `max-min` default)** and the
+**foundedness-gated confidence least-fixpoint** ships (**G3.6: `core/confidence.py::valuate`**,
+cycle-convergent; incremental-on-delta deferred). Still open: the Phase-2 adapter (G3.4)
+feeding both layers real AGE data, the `deduce`/`induce` operators (G3.8), and
+`SAME_AS`-component aggregation (G3.7). See
 `gap_phase_3_reasoning_core.md` for the increment-by-increment build plan.
 
 ## Layer A — truth maintenance over a commutative group (owns retraction)
@@ -64,7 +69,7 @@ fixpoint), the `deduce`/`induce` operators, and `SAME_AS`-component aggregation.
 
 ## Layer B — confidence valuation over an absorptive semiring (owns strength)
 
-- [ ] **Semiring decision first (Phase-3-entry, before any Layer B code; §12, review
+- [x] **Semiring decision first (Phase-3-entry, before any Layer B code; §12, review
       A6).** Viterbi `max-·` has a structural **depth bias**: confidence decays
       geometrically with derivation depth (five 0.9 steps → 0.59 regardless of
       evidence quality), so deep derivations are punished and acceptability-band
@@ -74,26 +79,41 @@ fixpoint), the `deduce`/`induce` operators, and `SAME_AS`-component aggregation.
       both semirings over it, and decide with eyes open. If Viterbi is chosen, the
       §11.2 banding must be made depth-aware (note the extra machinery in the
       decision record). Both are absorptive/ω-continuous, so cycle convergence is
-      unaffected either way.
-- [ ] Confidence as a **least fixpoint** over the chosen semiring — Viterbi
+      unaffected either way. *(G3.5 — **decided: Gödel `max-min` is the Layer B
+      default** (depth-neutral → no depth-aware banding needed). `core/confidence.py`
+      ships the `Semiring` algebra + `VITERBI`/`GODEL`/`DEFAULT_SEMIRING`; the
+      depth-bias fixture + semiring laws are in `tests/unit/test_confidence_semiring.py`.
+      Viterbi retained as a value for future probability-like boxes. The valuation
+      **engine** is G3.6.)*
+- [x] Confidence as a **least fixpoint** over the chosen semiring — Viterbi
       `([0,1], max, ·, 0, 1)`: multiply along a rule body, max across alternative
       derivations (best-derivation confidence); or Gödel `max-min` (ordinal,
-      depth-neutral).
-- [ ] Compute only over nodes Layer A certifies as **well-founded**-supported (so an
-      unfounded cycle never receives a confidence — foundedness gates scoring).
+      depth-neutral). *(G3.6 — `core/confidence.py::valuate`, Kleene ascent, generic over
+      `Semiring`, default `GODEL`.)*
+- [x] Compute only over nodes Layer A certifies as **well-founded**-supported (so an
+      unfounded cycle never receives a confidence — foundedness gates scoring). *(G3.6 —
+      `valuate` indexes only derivations whose head **and** whole body are in the certified
+      `supported` set; `test_unfounded_cycle_never_receives_a_confidence`.)*
 - [ ] Recompute incrementally on the **delta-affected sub-graph** Layer A reports.
-- [ ] Verify convergence on **cyclic** derivation graphs (absorptive + ω-continuous →
-      saturates, no inflation). **Never** use the sum-product semiring here.
+      *(Open. G3.6 ships the **definitional full recompute** — the Layer B analogue of
+      G3.1's `RecomputeOracle`; the incremental engine pairs with Layer A delta reporting +
+      the G3.4 adapter. Full recompute is the MVP (§13); revisit only if latency misses SLA.)*
+- [x] Verify convergence on **cyclic** derivation graphs (absorptive + ω-continuous →
+      saturates, no inflation). **Never** use the sum-product semiring here. *(G3.6 —
+      grounded-cycle convergence test + an 80-seed fixpoint-equation check on random cyclic
+      graphs; sum-product is deliberately not offered.)*
 
 ## Two-layer integration
 
-- [ ] Clean interface: Layer A decides membership → Layer B scores it. Two annotations,
-      never merged (§12). *(Layer A side in place — G3.1 defines the `SupportOracle`
+- [x] Clean interface: Layer A decides membership → Layer B scores it. Two annotations,
+      never merged (§12). *(Both sides now in place — G3.1 defines the `SupportOracle`
       contract returning the certified well-founded set; G3.2's `IncrementalOracle`
-      satisfies the same contract (and exposes `support_count` for the "by how many
-      derivations" question). Layer B is the open consumer.)*
-- [ ] Confirm idempotent confidence is *not* subtracted; retraction lives only in the
-      group/count layer.
+      satisfies it (and exposes `support_count`); **G3.6's `valuate` consumes that set** and
+      returns the `[0,1]` confidence over exactly it (`base_confidence`/`strength` as side
+      maps, never merged into the count). `test_valuate_scores_exactly_the_layer_a_certified_set`.)*
+- [x] Confirm idempotent confidence is *not* subtracted; retraction lives only in the
+      group/count layer. *(G3.6 — `valuate` is a pure fixpoint with no subtraction;
+      retraction is entirely Layer A's DRed/count layer. `test_idempotent_rerun_is_stable`.)*
 - [ ] **Aggregate evidence over `SAME_AS` components (§5.2):** support counts and
       confidence accrue to the canonical component, not the raw node. A **merge/split**
       (assert/retract `SAME_AS`) is a belief-revision trigger — re-run Layer A/B over the
@@ -114,10 +134,13 @@ fixpoint), the `deduce`/`induce` operators, and `SAME_AS`-component aggregation.
       retracts it; retracting one of several does not.
 - [ ] **Well-founded support holds:** an ungrounded `DERIVED_FROM` cycle retracts fully
       when its external base support is removed; a grounded cycle is kept.
-- [ ] Confidence is computed by Layer B and recomputed only on the affected sub-graph;
-      an unfounded cycle never receives a confidence.
-- [ ] A cyclic derivation test converges (Layer B) **and** is correctly founded/unfounded
-      (Layer A).
+- [~] Confidence is computed by Layer B and recomputed only on the affected sub-graph;
+      an unfounded cycle never receives a confidence. *(G3.6 — computed by Layer B and the
+      unfounded cycle gets no confidence; "only on the affected sub-graph" (incremental) is
+      the deferred Layer B-incremental piece.)*
+- [x] A cyclic derivation test converges (Layer B) **and** is correctly founded/unfounded
+      (Layer A). *(G3.6 `test_cyclic_valuation_converges_to_a_gated_fixpoint` over Layer A's
+      certified set; grounded vs unfounded cycle handling is the G3.1/G3.2 + G3.6 seam.)*
 - [ ] **Composed-loop termination:** the retraction feedback loop (REFUTES → retract →
       Layer A → Layer B → QBAF → …) runs with an **iteration bound + oscillation
       detection**; on non-convergence the unstable sub-region is surfaced as a finding,

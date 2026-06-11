@@ -27,8 +27,8 @@ for every faster engine that follows.
 | **G3.2** | **Layer A incremental engine** — `IncrementalOracle`: Counting (integer support-count) + semi-naive insertion + **DRed** retraction; correct on acyclic *and* cyclic positive-Horn graphs; randomized diff-test vs `RecomputeOracle` | G3.1 | **shipped (this increment)** |
 | G3.3 | **Cyclic/recursive completeness** — **clingo/ASP** foundedness for non-monotonic / stratified-negation rules; SCC detection to scope DRed over-deletion (perf); persisted `WITH RECURSIVE` / DBSP path | G3.2, G3.4 | planned |
 | G3.4 | **Phase 2 adapter** — select the *active* subgraph (`valid_to` null, active boxes, `SAME_AS`-canonicalized components) and map AGE/UUID ids ↔ `NodeId`; feed Layer A | Phase 2, G2.3 | planned |
-| G3.5 | **Layer B semiring decision** — the Phase-3-entry fixture (deep vs shallow chain, multi-path) deciding **Viterbi `max-·` vs Gödel `max-min`** *before* any Layer B code (§12, review A6) | — | planned |
-| G3.6 | **Layer B confidence valuation** — least fixpoint over the chosen semiring, computed only over Layer-A-certified nodes; incremental on the delta region; cycle-convergent | G3.5, G3.2 | planned |
+| **G3.5** | **Layer B semiring decision** — the Phase-3-entry fixture (deep vs shallow chain, multi-path) deciding **Viterbi `max-·` vs Gödel `max-min`** *before* any Layer B code (§12, review A6) | — | **shipped (this increment)** |
+| **G3.6** | **Layer B confidence valuation** — least fixpoint over the chosen semiring, computed only over Layer-A-certified nodes; cycle-convergent (incremental-on-delta deferred) | G3.5, G3.2 | **shipped (this increment)** |
 | G3.7 | **`SAME_AS`-component aggregation** — support/confidence accrue to the canonical component; merge/split is a belief-revision trigger re-running A/B on the affected component (§5.2) | G3.2, G3.6, G2.3 | planned |
 | G3.8 | **Derivation operators** — `deduce` (→ `DeductiveConclusion`) and `induce` (→ provisional `InductiveConclusion`), `DERIVED_FROM` + provenance, each emitting an `Action` (§6, §10.2) | G3.4 | planned |
 | G3.9 | **Composed-loop termination** — iteration bound + oscillation detection on REFUTES→retract→A→B→QBAF; non-convergence surfaced as a finding (§12, §7.2) | Phase 4 | planned |
@@ -111,6 +111,113 @@ clean.
 - **SCC-scoped DRed** (G3.3) — DRed currently over-deletes the full forward-reachable set;
   scoping over-deletion to the affected SCC is a performance refinement, not a correctness
   one.
+
+## G3.5 — Layer B semiring decision (this increment)
+
+**The decision (recorded, eyes open): Gödel `max-min` is the Layer B default.** §12
+mandates this be settled by a fixture *before* any valuation engine, because the choice is
+epistemic — under Viterbi "confidence" partly measures derivation *depth*; under Gödel it
+measures the *weakest link*. Switching later re-scores every conclusion and invalidates any
+fitted §11.2 band thresholds, so it is decided first.
+
+**What shipped.** `core/confidence.py` — the **algebra only**, not the engine (G3.6):
+
+- **`Semiring`** — a frozen `(carrier=[0,1], ⊕=plus across alternative derivations,
+  ⊗=times along a rule body, zero, one)`. Operations are stored as plain binary functions
+  so distinct algebras are *values* (`VITERBI` and `GODEL` differ only in `times`), and the
+  G3.6 engine selects one **at a seam** rather than branching on a kind. `combine_body` /
+  `combine_alternatives` fold with the right identities (`one` for an empty/axiom body,
+  `zero` for a node with no satisfied derivation).
+- **`VITERBI = ([0,1], max, ·, 0, 1)`** and **`GODEL = ([0,1], max, min, 0, 1)`**;
+  **`DEFAULT_SEMIRING = GODEL`**. Viterbi is *retained* (not deleted) for any future
+  box whose degrees are genuinely probability-like rather than ordinal (§12's
+  parenthetical) — the choice stays reversible at the seam.
+
+**The fixture (`tests/unit/test_confidence_semiring.py`, DB-free), demonstrating the bias
+numerically so the decision is not a default:**
+
+- **Depth bias, headline case.** Certain base facts, every derivation step a 0.9-confidence
+  `DERIVED_FROM` edge (§12's "five 0.9-confidence steps"). Deep chain (5 steps) vs shallow
+  (1 step): **Viterbi** → deep `= 0.9**5 ≈ 0.590` *strictly weaker* than shallow `= 0.9`
+  despite identical evidence quality (deep, careful derivation punished); **Gödel** → both
+  `= 0.9`, depth-neutral. This divergence *is* the decision.
+- **Weakest-link.** A chain with one weak (0.4) edge then strong (0.99) edges: Gödel pins
+  the whole chain at `0.4` regardless of depth; Viterbi keeps eroding past the bottleneck.
+- **Multi-path.** `⊕ = max` keeps the best derivation under *both* semirings (foundedness —
+  *which* paths exist — is Layer A's job; Layer B only scores).
+- **The laws G3.6's cyclic fixpoint relies on**, over a sample grid: identities,
+  commutativity/associativity (`⊗` up to float rounding — products are not bit-exact
+  associative), **`⊕` idempotence** (`a ⊕ a = a`) and **absorption** (`a ⊕ (a ⊗ b) = a`,
+  since `a ⊗ b ≤ a` on `[0,1]`) — the two properties that make the confidence least fixpoint
+  **converge on cyclic `DERIVED_FROM` graphs without inflation** — plus `[0,1]` closure and
+  monotonicity (`⊗` never strengthens, `⊕` never weakens). The **sum-product** semiring is
+  deliberately *not* offered (double-counts, diverges on cycles unless derivations are
+  provably independent — §12).
+
+ruff + mypy(`src/iknos`) clean; 311 unit tests pass.
+
+**Consequence for G3.6.** The valuation engine is written once, generic over `Semiring`,
+defaulting to `GODEL`. Because Gödel is depth-neutral, the §11.2 acceptability banding does
+**not** need the depth-aware machinery a Viterbi choice would have forced.
+
+**Deferred (the engine, not this decision):** the cycle-convergent confidence **least
+fixpoint** over the chosen semiring — gated on Layer A's certified set, incremental on the
+delta region Layer A reports — is **G3.6**. This increment is the algebra + the recorded
+decision only.
+
+## G3.6 — Layer B confidence valuation (this increment)
+
+**What shipped.** `core/confidence.py::valuate` — the Layer B engine: the **least fixpoint**
+of confidence over the chosen semiring, computed **only over the Layer-A-certified
+`supported` set** handed in (the two-layer seam — Layer A decides *membership*, Layer B
+scores it). Returns `{node: confidence}` for exactly the supported nodes. Generic over a
+`Semiring`, defaulting to `GODEL` (the G3.5 decision), so Viterbi is a one-argument swap.
+
+**The valuation.** A node's confidence is `⊕` (best derivation) over its grounds:
+base-fact evidence confidence (`base_confidence[node]`, missing ⇒ `one`), and per
+derivation `strength[d] ⊗ (⊗ body antecedents)` — the `DERIVED_FROM` edge strength (§7.1,
+missing ⇒ `one`) times the body product. Confidences and edge strengths arrive as **side
+maps keyed by the same `NodeId`/`Derivation` values Layer A uses** — Layer A's structures
+are *not* mutated to carry strength (foundedness doesn't depend on it, and `Derivation`
+equality keys the G3.2 diff), and the G3.4 adapter will populate both maps from AGE.
+
+**Design decisions taken up front:**
+
+- **Foundedness gates confidence (§12), structurally.** Only derivations whose head *and
+  whole body* are in `supported` are indexed, so an **unfounded cycle — absent from
+  `supported` — is never scored**, even though Layer B *would* converge on it. Membership,
+  decided first by Layer A, is what keeps the cycle out; convergence is not foundedness.
+- **Cycle-convergent by construction, not by tuning.** Kleene ascent (Jacobi iteration)
+  from `zero`; `⊕` idempotent + the semiring absorptive (`a ⊕ (a ⊗ b) = a`) + ω-continuous
+  ⇒ iterates are monotone, bounded by `one`, and reach the least fixpoint on acyclic **and**
+  cyclic graphs — a grounded cycle *saturates* at its direct grounding instead of inflating.
+  The loop is **bounded** (`len(supported)+2`, a safe ceiling since Jacobi propagates one
+  edge/round and cycles add none); exceeding it — which an absorptive/ω-continuous `⊕`
+  cannot — **raises rather than hangs**, the inner-layer analogue of §12's iteration bound.
+
+**Tests (`tests/unit/test_confidence_valuation.py`, DB-free).** Conjunction (weakest link)
+/ disjunction (best derivation) / base seeding / empty-body axiom; the §12 headline —
+**unfounded cycle gets no confidence**, grounded cycle converges to its grounding; the G3.5
+decision *through the real engine* (Gödel depth-neutral, Viterbi compounds); the two-layer
+seam (scores exactly `well_founded_support`); and the strong gates — a **randomized
+diff-test vs an independent memoized-recursion oracle on acyclic graphs** (60 seeds × both
+semirings) and a **fixpoint-equation check on random cyclic graphs** (80 seeds × both
+semirings, where tree enumeration is infinite but the fixpoint equation is a valid oracle).
+ruff + mypy(`src/iknos`) clean; 325 unit tests pass.
+
+**Deferred (documented seams, not regressions):**
+
+- **Incremental-on-delta valuation** — §12 / the todo want Layer B recomputed only over the
+  delta sub-graph Layer A reports as changed. This increment is the **definitional full
+  recompute** (the Layer B analogue of G3.1's `RecomputeOracle`); the incremental engine
+  (analogue of G3.2's `IncrementalOracle`) pairs with Layer A's delta reporting and the
+  G3.4 wiring. The active subgraph is small per investigation, so full recompute is the
+  correct MVP (§13: revisit only if latency misses SLA).
+- **The adapter** that supplies real `base_confidence` (`EVIDENCED_BY` strength) and
+  `strength` (`DERIVED_FROM` edge confidence) from AGE is **G3.4**; `valuate` is pure and
+  takes them as arguments.
+- **`SAME_AS`-component aggregation** (G3.7) — support/confidence accrue to the canonical
+  component; a merge/split re-runs A/B on the affected component.
 
 ## Phase risks / decisions (carried from §12, §13)
 
