@@ -131,3 +131,24 @@ analysis), §9 (working set assembly), principle 8.
 - Working-set size must stay in-memory for subgraph extraction (§6 load-bearing
   assumption) — watch graph size; in-DB analytics only if it ever breaks.
 - Cyclic-region presentation policy is undecided — settle here (§13).
+
+## Leads / next-best-move layer (§11.3 — merged from `archive/todo_ingest.md` 2026-06-11)
+
+- [ ] **Move projection (internal):** derive the candidate-move list (corroborate /
+      find-contradiction / deduce / expand / retrieve targets) as an ephemeral
+      projection over the open-trace set — recomputed, never persisted beyond the
+      §10.1 log when a move executes.
+- [ ] **Inquiry sub-Tasks (external):** `Task.kind = inquiry` (acquire a document,
+      commission a test, interview), reusing `DECOMPOSES_INTO` + `answer_state`; no
+      epistemic node, no truth-state, no `EVIDENCED_BY` (the firewall, §11.3).
+- [ ] **Ranking:** §11.1 VoI extended to **VoI-per-unit-cost** (EVSI under budget) —
+      one signal, three consumers (re-inference budget, review queue, lead list);
+      inquiry costs are expert-/pack-supplied. Generator is **type-conditioned** by
+      `Task.type` (normative → obtain the governing standard; causal → find a refuter).
+- [ ] **Inert until accepted:** a `proposed` lead must not widen retrieval or
+      candidate scope (§11.2's decomposition caution applied to leads).
+- [ ] **Calibration log:** predicted-vs-realized VoI per move-*type* (slow per-type
+      prior, credited only on proximate cause), fed back like §10.3.
+- [ ] **Loop closure:** an accepted inquiry's outcome re-enters through ordinary
+      ingest at *revise* — no special ingest path (§6.1 cache/version policies cover
+      re-entry).
