@@ -215,3 +215,52 @@ class PropositionLexicalIndex(Base):
         index=True,
     )
     lexemes: Mapped[str] = mapped_column(TSVECTOR, nullable=False)
+
+
+class BaselineChunk(Base):
+    """Fixed-size chunk index for the E1 **plain-RAG baseline** (Trial V4) — NOT the iknos pipeline.
+
+    This table is the baseline's own dense index, deliberately separate from
+    ``document_embeddings``/``proposition_embeddings``: the baseline chunks documents into naive
+    fixed-token windows (``baselines/chunking.py``), embeds each through the shared substrate
+    seam, and retrieves top-k by cosine — none of the segmentation/proposition machinery. It is
+    declared in this ORM module only so the migrations autogenerate-drift gate (CI_MIGRATIONS.md)
+    sees it; the baseline code reaches it via ``iknos.db``, never the reverse.
+
+    ``document_id`` is the baseline's own id for a source document (no FK to ``document_content``
+    — a baseline run need not populate the pipeline's tables). ``(document_id, chunk_index,
+    model)`` is unique so re-ingesting a document under the same model is idempotent.
+    """
+
+    __tablename__ = "baseline_chunks"
+    __table_args__ = (
+        Index(
+            "uq_baseline_chunks_doc_index_model",
+            "document_id",
+            "chunk_index",
+            "model",
+            unique=True,
+        ),
+        # HNSW ANN index — a fair baseline retrieves efficiently (R4 mirror). k-NN must order by
+        # `<=>` (vector_cosine_ops) to use it; the retrieval query in baselines/rag.py does.
+        Index(
+            "ix_baseline_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+    model: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Embedding model id — the ANN vector-space identity (G1.16)."
+    )
