@@ -97,6 +97,18 @@ class Settings(BaseSettings):
     # *inside* this budget per attempt in the MinerU client.
     parser_timeout_s: float = Field(300.0, alias="PARSER_TIMEOUT_S")
 
+    # Embedding inference (R10). The bge-m3 substrate loads the model into the calling process by
+    # default; an empty embeddings_base_url is the "no service" signal → the in-process local
+    # backend (byte-identical to before). A non-empty URL routes embedding through a separate
+    # hosted service (the same swappable-service edge as the LLM/parser), so torch does not have to
+    # live in the ingest worker. embedding_model is the served model identity (the G1.16
+    # vector-space guard — a vector index holds exactly one model's vectors).
+    embeddings_base_url: str = Field("", alias="EMBEDDINGS_BASE_URL")
+    embedding_model: str = Field("BAAI/bge-m3", alias="EMBEDDING_MODEL")
+    # Wall-clock budget for one embedding request (seconds). Generous like the parser: embedding a
+    # multi-window document is several forward passes; retries (transport/5xx only) sit inside it.
+    embeddings_timeout_s: float = Field(300.0, alias="EMBEDDINGS_TIMEOUT_S")
+
     # Candidate-generation embedding k-NN: in-memory exact cosine (default) vs the pgvector
     # `<=>` push-down (V9, §5.1). The in-memory path is the recall **oracle** the §8 gate
     # measures any ANN index against, so it stays the default; the push-down uses the R4 HNSW
