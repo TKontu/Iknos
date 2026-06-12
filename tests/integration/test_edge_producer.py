@@ -219,6 +219,99 @@ async def test_produce_writes_signed_edges_with_separated_strength_and_significa
     assert result.is_finding is False
 
 
+async def test_corroborate_scopes_to_one_hypothesis_and_records_envelope_action(
+    session: AsyncSession,
+) -> None:
+    """G4.5 §12 entry point: ``corroborate(h)`` gathers only *h*'s evidence and records its own
+    Action wrapping the edge-judge Action — a second hypothesis in the same box is untouched."""
+    await bootstrap_session(session)
+    box = case_box("g45-corroborate", "1", "test", 0.8)
+    await _put_box(session, box)
+
+    # Two hypotheses, each with its **own** actor so the structural funnel scopes candidates per
+    # hypothesis: corroborate(h) must judge h's facts only, never h2's.
+    actor_h = await _put_actor(session, box.id)
+    actor_h2 = await _put_actor(session, box.id)
+    h = await _put_node(session, "Hypothesis", box.id, statement=_HYP, confidence=0.5)
+    h2 = await _put_node(
+        session, "Hypothesis", box.id, statement="An unrelated hypothesis", confidence=0.5
+    )
+    f_support = await _put_node(session, "Fact", box.id, statement=_SUPPORT, confidence=0.9)
+    f_refute = await _put_node(session, "Fact", box.id, statement=_REFUTE, confidence=0.9)
+    f_other = await _put_node(session, "Fact", box.id, statement=_SUPPORT2, confidence=0.9)
+
+    for n in (h, f_support, f_refute):
+        await _involves(session, node=n, entity=actor_h)
+    for n in (h2, f_other):
+        await _involves(session, node=n, entity=actor_h2)
+    # Provenance for the high-stakes REFUTES (V7) + credibility chains.
+    await _evidence_proposition(session, fact=f_support)
+    await _evidence_proposition(session, fact=f_refute)
+    await _evidence_proposition(session, fact=f_other)
+    await session.commit()
+
+    judge = EdgeJudge(
+        _ScriptedLLM(
+            {
+                _SUPPORT: JudgedSign.SUPPORTS,
+                _REFUTE: JudgedSign.REFUTES,
+                _SUPPORT2: JudgedSign.SUPPORTS,
+            }
+        ),
+        n_samples=3,
+    )
+    res = await EdgeProducer(judge).corroborate(session, h)
+
+    # Scoped to h: supporters/refuters split, and h2 gets nothing.
+    assert {e.evidence for e in res.supporters} == {str(f_support)}
+    assert {e.evidence for e in res.refuters} == {str(f_refute)}
+    assert len(await _edges_into(session, h, "SUPPORTS")) == 1
+    assert len(await _edges_into(session, h, "REFUTES")) == 1
+    assert await _edges_into(session, h2, "SUPPORTS") == []  # the other hypothesis untouched
+
+    # The corroborate envelope Action names h, splits the evidence, and references the edge-judge
+    # Action it drove — without replacing it (edge provenance stays under actor='edge-judge').
+    co = await session.execute(
+        text("SELECT inputs, outputs FROM actions WHERE actor='corroborate'")
+    )
+    inputs, outputs = co.one()
+    assert inputs["hypothesis"] == str(h)
+    assert set(outputs["supporters"]) == {str(f_support)}
+    assert set(outputs["refuters"]) == {str(f_refute)}
+    assert len(outputs["edge_actions"]) == 1
+    ej = await session.execute(
+        text("SELECT count(*) FROM actions WHERE actor='edge-judge' AND inputs->>'hypothesis'=:h"),
+        {"h": str(h)},
+    )
+    assert ej.scalar_one() == 1
+    assert res.action_id is not None and res.is_finding is False
+
+
+async def test_corroborate_with_no_candidates_still_records_an_action(
+    session: AsyncSession,
+) -> None:
+    """A hypothesis with no candidate evidence is an auditable "looked, gathered nothing" — the
+    operator still emits its Action (never an invisible run), with empty evidence lists."""
+    await bootstrap_session(session)
+    box = case_box("g45-empty", "1", "test", 0.8)
+    await _put_box(session, box)
+    h = await _put_node(session, "Hypothesis", box.id, statement=_HYP, confidence=0.5)
+    await session.commit()
+
+    judge = EdgeJudge(_ScriptedLLM({}), n_samples=3)
+    res = await EdgeProducer(judge).corroborate(session, h)
+
+    assert res.supporters == () and res.refuters == ()
+    assert res.production.edges == ()
+    co = await session.execute(
+        text("SELECT outputs FROM actions WHERE actor='corroborate' AND inputs->>'hypothesis'=:h"),
+        {"h": str(h)},
+    )
+    outputs = co.scalar_one()
+    assert outputs["supporters"] == [] and outputs["refuters"] == []
+    assert outputs["edge_actions"] == []
+
+
 async def test_produce_quarantines_a_provisional_sourced_refutes(session: AsyncSession) -> None:
     """V7 / §3.1, end to end on real AGE: a Fact whose source Proposition is provisional drives a
     REFUTES; the gate drops the edge from the plan (no REFUTES persisted) and records it on the

@@ -199,7 +199,19 @@ record in `archive/review_2026-06-11_planned_architecture_assessment.md`.
       Proposition → `missing_provenance`); a quarantined edge is dropped from the plan
       and surfaced as a `QuarantineRecord` on the result + `Action.outputs.quarantined`,
       never aborting the batch. `qbaf_adapter.py` untouched.)*
-- [ ] `corroborate` operator: hypothesis → gather supporting/refuting evidence.
+- [x] `corroborate` operator: hypothesis → gather supporting/refuting evidence.
+      *(G4.5 — `EdgeProducer.corroborate(session, hypothesis_id)`: the §12 named entry
+      point. Composes the existing pieces — the G4.2 candidate funnel → the §8 edge
+      judge/producer — scoped to one hypothesis (filters the pool to its candidates),
+      reusing the same `_judge_plan_persist` path `produce` does (no judgment divergence),
+      and records the operator's own `corroborate` Action as an **envelope** over the
+      per-hypothesis edge-judge Action(s) — never a replacement, so edge provenance stays
+      under `edge-judge`. Returns a `CorroborateResult` (supporters/refuters split +
+      `is_finding` forwarding the §7.2 sign-instability signal). Atomic (edges + judge
+      Actions + envelope commit together); records even on no candidates (auditable
+      "looked, gathered nothing"). No new machinery — the value is the named §12 seam the
+      composed loop + `find-contradiction` build on. **Open:** a hypothesis-scoped funnel
+      (today the full funnel runs then filters — investigation-scale exact cosine, fine).)*
 - [~] `find-contradiction` operator + **ensemble gate** (multi-sample LLM + symbolic +
       temporal agreement) required before any `REFUTES` (§7.2). *(G4.5 slice 1 —
       `core/ensemble_gate.py`: the **refuted-flip authoriser**, the pure decision algebra over the
