@@ -89,11 +89,14 @@ calls the G3.9 `stabilize` driver, so the `REFUTES → retract → Layer A → L
 QBAF → gate` feedback loop has no executable path and no test — and with the
 symbolic channel ABSTAINing, `DEFAULT_GATE` withholds every automated `refuted`
 flip, so the differentiator capability is currently *correct-but-non-functional*.
-After the lockdown: **W1** (the composed-loop orchestrator) and **W2** (the
-synthetic §8 end-to-end fixture) land before Phase 5 and before the G4.6 run is
-meaningful; **W3** records the interim refutation-gate decision eyes-open instead
-of by default. Specs in *Open task specs* below; findings record in
-`archive/review_2026-06-11_planned_architecture_assessment.md`.
+After the lockdown: **W1 (the composed-loop orchestrator) shipped** —
+`core/revision_loop.py` drives `stabilize` over the retracted-node set
+(load-once / pure-loop / persist-once), so an *authorised* refutation now retracts
+and re-adjudicates to a fixpoint, and a non-converged region is surfaced as a §13
+finding. **W2** (the synthetic §8 end-to-end fixture) lands next, before Phase 5 and
+before the G4.6 run is meaningful; **W3** records the interim refutation-gate
+decision eyes-open instead of by default. Specs in *Open task specs* below; findings
+record in `archive/review_2026-06-11_planned_architecture_assessment.md`.
 
 ## Candidate generation (§5.1) — which pairs to assess
 
@@ -476,7 +479,7 @@ side of the seam:
 Do not: flip the default; remove the in-memory path (it is the oracle); touch
 `funnel` or the structural stage.
 
-### W1 — composed-loop orchestrator (the missing spine) *(needs V7+V8; 2026-06-11 assessment, P1)*
+### W1 — composed-loop orchestrator (the missing spine) *(needs V7+V8; P1) — shipped*
 
 The pure cores are individually verified, but nothing owns the cross-layer control
 flow: `core/composed_loop.py::stabilize` (G3.9) is implemented, tested, and never
@@ -503,6 +506,28 @@ fixture surfaces `is_finding` with the unstable region; `stabilize` is the only
 loop driver (grep: no ad-hoc retry loops around `qbaf_adapter`). Do not: build
 the symbolic/temporal channel producers here (W3 / later G4.5); add
 incrementality beyond the existing delta loads.
+
+**Shipped** (commit `feat(reasoning): W1 …`). Design recorded so it is not
+re-litigated: because `stabilize` is **pure/synchronous** but the graph work is
+async, the loop is **load-once → run the pure step in memory over the
+retracted-node set → persist-once at the fixpoint**, so `stabilize` stays the sole
+driver and the iteration touches no DB. The step uses the pure cores
+(`support_and_confidence` for A/B, `assemble_baf`/`adjudicate` for the QBAF — *not*
+the async `qbaf_adapter.evaluate`, which reads graph confidence; the loop feeds the
+recomputed Layer B confidence as the QBAF base in-memory and writes it back on
+convergence). Two injectable seams (the user-confirmed fork): `decide` (gate
+decisions — the LLM/symbolic/temporal channels live outside; W2 injects decisions
+through the real `authorise`) and `revise` (the §12 retraction policy; **default**:
+retract each authorised-refuted hypothesis). Persistence runs **only on
+CONVERGED** — `persist_verdicts` (V8 filter) + retractions (`valid_to`) + the Layer
+B confidence write-back (a node that lost grounding is written **0**, not left
+stale); a non-converged loop commits nothing and is returned as the finding.
+Shared graph loaders were extracted to module functions (`load_evidential_edges`,
+`load_base_fact_ids`, `load_derived_rows`) so the loop re-assembles the *same*
+active subgraph the adapters do. Tests: unit (pure step — A/B-propagation,
+gate-gated retraction, convergence, oscillation, divergence) + integration
+(authorised refutation retracts the supporting fact → c dropped → fixpoint; the
+unauthorised case held with `pending_refutation`).
 
 ### W2 — synthetic end-to-end fixture: the §8 experiment in test form *(needs W1; 2026-06-11 assessment, P1)*
 

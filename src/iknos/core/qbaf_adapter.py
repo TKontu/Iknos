@@ -253,6 +253,38 @@ def adjudicate(
     )
 
 
+async def load_evidential_edges(session: object) -> list[EvidenceRow]:
+    """All current ``SUPPORTS``/``REFUTES`` edges between current nodes, with sign+strength.
+
+    One query per relationship type (AGE matches a single label per pattern, as in
+    ``load_reasoning_nodes``); the ``sign`` comes from which type matched (the canonical source of
+    direction), so the edge's stored ``sign`` property need not be re-read. Shared module-level read
+    (like ``load_reasoning_nodes`` / ``load_hypothesis_ids``) so the revision loop (W1) consumes the
+    *same* evidential-edge definition the adapter does — the active subgraph cannot diverge.
+    """
+    from iknos.db.age import execute_cypher, unquote_agtype
+
+    rows: list[EvidenceRow] = []
+    for rel, sign in (("SUPPORTS", EdgeSign.SUPPORTS), ("REFUTES", EdgeSign.REFUTES)):
+        raw = await execute_cypher(
+            session,  # type: ignore[arg-type]
+            f"MATCH (s)-[r:{rel}]->(t) "
+            "WHERE s.valid_to IS NULL AND t.valid_to IS NULL AND r.valid_to IS NULL "
+            "RETURN s.id, t.id, r.strength",
+            returns="sid agtype, tid agtype, strength agtype",
+        )
+        for sid, tid, strength in raw:
+            rows.append(
+                EvidenceRow(
+                    source=unquote_agtype(sid),
+                    target=unquote_agtype(tid),
+                    sign=sign,
+                    strength=_num(strength, default=1.0),
+                )
+            )
+    return rows
+
+
 # The reason string stamped on a held refutation — the §13 finding handle a reader greps for.
 PENDING_REFUTATION_REASON = "ensemble_gate_pending"
 
@@ -327,39 +359,14 @@ class QbafAdapter:
         return await load_hypothesis_ids(session)
 
     async def _load_evidential_edges(self, session: object) -> list[EvidenceRow]:
-        """All current ``SUPPORTS``/``REFUTES`` edges between current nodes, with sign+strength.
-
-        One query per relationship type (AGE matches a single label per pattern, as in
-        ``load_reasoning_nodes``); the ``sign`` comes from which type matched (the canonical
-        source of direction), so the edge's stored ``sign`` property need not be re-read.
-        """
-        from iknos.db.age import execute_cypher, unquote_agtype
-
-        rows: list[EvidenceRow] = []
-        for rel, sign in (("SUPPORTS", EdgeSign.SUPPORTS), ("REFUTES", EdgeSign.REFUTES)):
-            raw = await execute_cypher(
-                session,  # type: ignore[arg-type]
-                f"MATCH (s)-[r:{rel}]->(t) "
-                "WHERE s.valid_to IS NULL AND t.valid_to IS NULL AND r.valid_to IS NULL "
-                "RETURN s.id, t.id, r.strength",
-                returns="sid agtype, tid agtype, strength agtype",
-            )
-            for sid, tid, strength in raw:
-                rows.append(
-                    EvidenceRow(
-                        source=unquote_agtype(sid),
-                        target=unquote_agtype(tid),
-                        sign=sign,
-                        strength=_num(strength, default=1.0),
-                    )
-                )
-        return rows
+        """Deprecated alias — delegates to the shared :func:`load_evidential_edges`."""
+        return await load_evidential_edges(session)
 
     async def load_inputs(self, session: object) -> AdjudicationInput:
         """Read the active evidential subgraph and assemble the QBAF inputs (BAF + base map)."""
         active_box_ids = await load_active_box_ids(session)
         nodes = await load_reasoning_nodes(session)
-        edges = await self._load_evidential_edges(session)
+        edges = await load_evidential_edges(session)
         return assemble_baf(nodes, edges, active_box_ids=active_box_ids)
 
     async def evaluate(
