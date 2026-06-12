@@ -425,42 +425,48 @@ class MeronymyInducer:
         direct: list[DirectPartOf],
     ) -> uuid.UUID:
         """Persist one proposition's ``directPartOf`` edges + an ``induce`` Action (one txn)."""
-        from iknos.db.age import merge_edge
+        from iknos.db.age import atomic_write, merge_edge
 
         now = datetime.now(UTC)
-        for d in direct:
-            await merge_edge(
+        # W7: this proposition's directPartOf edges + its induce Action as one unit (per-proposition
+        # isolation in induce_box is preserved — each proposition commits or rolls back on its own).
+        async with atomic_write(session):
+            for d in direct:
+                await merge_edge(
+                    session,
+                    src_id=d.child,
+                    dst_id=d.parent,
+                    label="directPartOf",
+                    props=direct_part_of_props(
+                        box=box,
+                        meronymy_type=d.meronymy_type,
+                        provenance=AttachmentProvenance.INDUCED,
+                        confidence=INDUCED_CONFIDENCE,
+                        now=now,
+                    ),
+                )
+            action_id = await record_action(
                 session,
-                src_id=d.child,
-                dst_id=d.parent,
-                label="directPartOf",
-                props=direct_part_of_props(
-                    box=box,
-                    meronymy_type=d.meronymy_type,
-                    provenance=AttachmentProvenance.INDUCED,
-                    confidence=INDUCED_CONFIDENCE,
-                    now=now,
-                ),
+                actor="meronymy-inducer",
+                action_type="induce",
+                inputs={
+                    "proposition": str(item.proposition_id),
+                    "box": str(box),
+                    "schema_version": PARTWHOLE_SCHEMA_VERSION,
+                },
+                outputs={
+                    "direct_part_of": [
+                        {
+                            "child": str(d.child),
+                            "parent": str(d.parent),
+                            "type": str(d.meronymy_type),
+                        }
+                        for d in direct
+                    ]
+                },
+                model=self.llm.model,
+                sampling=self.sampling,
             )
-        action_id = await record_action(
-            session,
-            actor="meronymy-inducer",
-            action_type="induce",
-            inputs={
-                "proposition": str(item.proposition_id),
-                "box": str(box),
-                "schema_version": PARTWHOLE_SCHEMA_VERSION,
-            },
-            outputs={
-                "direct_part_of": [
-                    {"child": str(d.child), "parent": str(d.parent), "type": str(d.meronymy_type)}
-                    for d in direct
-                ]
-            },
-            model=self.llm.model,
-            sampling=self.sampling,
-        )
-        await session.commit()
         return action_id
 
     async def _rebuild_closure(
@@ -491,23 +497,25 @@ class MeronymyInducer:
 
         closure, cyclic = transitive_closure(edges)
         if closure:
-            from iknos.db.age import merge_edge
+            from iknos.db.age import atomic_write, merge_edge
 
             now = datetime.now(UTC)
-            for descendant, ancestor in closure:
-                await merge_edge(
-                    session,
-                    src_id=descendant,
-                    dst_id=ancestor,
-                    label="partOf",
-                    props=part_of_props(
-                        box=box,
-                        provenance=AttachmentProvenance.INDUCED,
-                        confidence=INDUCED_CONFIDENCE,
-                        now=now,
-                    ),
-                )
-            await session.commit()
+            # W7: the closure rebuild is its own unit — all partOf edges land together or not at all
+            # (no Action: the closure is structurally idempotent, derived from the directPartOf).
+            async with atomic_write(session):
+                for descendant, ancestor in closure:
+                    await merge_edge(
+                        session,
+                        src_id=descendant,
+                        dst_id=ancestor,
+                        label="partOf",
+                        props=part_of_props(
+                            box=box,
+                            provenance=AttachmentProvenance.INDUCED,
+                            confidence=INDUCED_CONFIDENCE,
+                            now=now,
+                        ),
+                    )
         return len(closure), cyclic
 
     async def induce_box(self, session: AsyncSession, box: uuid.UUID) -> InduceResult:

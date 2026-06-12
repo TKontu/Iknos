@@ -9,6 +9,8 @@ the body is wrapped in a dollar-quoted SQL string so its single-quoted Cypher li
 no SQL escaping. The risk it guards: a body that closes the quote early and injects raw SQL.
 """
 
+import pytest
+
 from iknos.db.age import _build_cypher_sql, _dollar_quote_tag
 
 _RETURNS = "result agtype"
@@ -65,3 +67,39 @@ def test_assembly_is_pure_and_needs_no_config() -> None:
     a = _build_cypher_sql("iknos", "RETURN 1", _RETURNS)
     b = _build_cypher_sql("iknos", "RETURN 1", _RETURNS)
     assert a == b
+
+
+# --- atomic_write: the W7 dual-write transaction discipline (commit/rollback bracket) ---
+
+
+@pytest.mark.asyncio
+async def test_atomic_write_commits_once_on_clean_exit() -> None:
+    from unittest.mock import AsyncMock
+
+    from iknos.db.age import atomic_write
+
+    session = AsyncMock()
+    async with atomic_write(session) as yielded:
+        assert yielded is session  # yields the same session, just the commit/rollback bracket
+    session.commit.assert_awaited_once()
+    session.rollback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_atomic_write_rolls_back_and_reraises_on_failure() -> None:
+    from unittest.mock import AsyncMock
+
+    from iknos.db.age import atomic_write
+
+    session = AsyncMock()
+
+    class _BoomError(RuntimeError):
+        pass
+
+    with pytest.raises(_BoomError):
+        async with atomic_write(session):
+            await session.execute("first write")  # a write lands in the buffer ...
+            raise _BoomError("second write failed")  # ... then a later write fails
+    # The whole unit rolls back (no orphaned Action/vertex) and the error propagates.
+    session.rollback.assert_awaited_once()
+    session.commit.assert_not_called()

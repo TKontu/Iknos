@@ -365,7 +365,7 @@ class Extractor:
         Returns the extract Action id. Commits — one short transaction per fact, like the
         proposition layer's ``_persist``.
         """
-        from iknos.db.age import merge_edge, merge_vertex
+        from iknos.db.age import atomic_write, merge_edge, merge_vertex
 
         prop = item.proposition
         now = datetime.now(UTC)
@@ -380,63 +380,65 @@ class Extractor:
             # interest_alignment left None (the per-claim alignment pass is a later seam).
             sensitivity=seed_sensitivity(await self._span_sensitivities(session, item.span_ids)),
         )
-        await merge_vertex(session, "Fact", fact_to_props(fact))
+        # W7: Fact vertex + entity vertices + INVOLVES/EVIDENCED_BY edges + the Action as one unit —
+        # a failed edge can never leave a committed extract Action pointing at a half-built Fact.
+        async with atomic_write(session):
+            await merge_vertex(session, "Fact", fact_to_props(fact))
 
-        # Entities as fresh Actor/Object vertices (no dedup, G2.3), with role-tagged INVOLVES.
-        for e in entities:
-            await merge_vertex(
-                session,
-                _AGE_LABEL[e.kind],
-                {"id": str(e.id), "box": str(box.id), "label": e.label, "type": e.type},
-            )
+            # Entities as fresh Actor/Object vertices (no dedup, G2.3), with role-tagged INVOLVES.
+            for e in entities:
+                await merge_vertex(
+                    session,
+                    _AGE_LABEL[e.kind],
+                    {"id": str(e.id), "box": str(box.id), "label": e.label, "type": e.type},
+                )
+                await merge_edge(
+                    session,
+                    src_id=fact.id,
+                    dst_id=e.id,
+                    label="INVOLVES",
+                    props={"role": str(e.role), "box": str(box.id)},
+                )
+
+            # Provenance (§10.2): Fact -> its Proposition and -> each source Span.
             await merge_edge(
                 session,
                 src_id=fact.id,
-                dst_id=e.id,
-                label="INVOLVES",
-                props={"role": str(e.role), "box": str(box.id)},
-            )
-
-        # Provenance (§10.2): Fact -> its Proposition and -> each source Span.
-        await merge_edge(
-            session,
-            src_id=fact.id,
-            dst_id=prop.id,
-            label="EVIDENCED_BY",
-            props={"box": str(box.id)},
-        )
-        for sid in item.span_ids:
-            await merge_edge(
-                session,
-                src_id=fact.id,
-                dst_id=sid,
+                dst_id=prop.id,
                 label="EVIDENCED_BY",
                 props={"box": str(box.id)},
             )
+            for sid in item.span_ids:
+                await merge_edge(
+                    session,
+                    src_id=fact.id,
+                    dst_id=sid,
+                    label="EVIDENCED_BY",
+                    props={"box": str(box.id)},
+                )
 
-        action_id = await record_action(
-            session,
-            actor=EXTRACTOR_ACTOR,
-            action_type="extract",
-            inputs={
-                "proposition": str(prop.id),
-                "spans": [str(s) for s in item.span_ids],
-                "box": str(box.id),
-                "schema_version": EXTRACT_SCHEMA_VERSION,
-            },
-            outputs={
-                "fact": str(fact.id),
-                "actors": [str(e.id) for e in entities if e.kind is NodeKind.ACTOR],
-                "objects": [str(e.id) for e in entities if e.kind is NodeKind.OBJECT],
-                "involves": [f"{fact.id}->{e.id}" for e in entities],
-                "evidenced_by": (
-                    [f"{fact.id}->{prop.id}"] + [f"{fact.id}->{s}" for s in item.span_ids]
-                ),
-            },
-            model=self.llm.model,
-            sampling=self.sampling,
-        )
-        await session.commit()
+            action_id = await record_action(
+                session,
+                actor=EXTRACTOR_ACTOR,
+                action_type="extract",
+                inputs={
+                    "proposition": str(prop.id),
+                    "spans": [str(s) for s in item.span_ids],
+                    "box": str(box.id),
+                    "schema_version": EXTRACT_SCHEMA_VERSION,
+                },
+                outputs={
+                    "fact": str(fact.id),
+                    "actors": [str(e.id) for e in entities if e.kind is NodeKind.ACTOR],
+                    "objects": [str(e.id) for e in entities if e.kind is NodeKind.OBJECT],
+                    "involves": [f"{fact.id}->{e.id}" for e in entities],
+                    "evidenced_by": (
+                        [f"{fact.id}->{prop.id}"] + [f"{fact.id}->{s}" for s in item.span_ids]
+                    ),
+                },
+                model=self.llm.model,
+                sampling=self.sampling,
+            )
         return action_id
 
     async def extract_propositions(

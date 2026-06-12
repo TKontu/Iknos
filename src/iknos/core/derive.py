@@ -281,7 +281,7 @@ class Deriver:
         annotations, the ``DERIVED_FROM`` edges (one group id, the step strength), and the
         provenance-bearing ``Action`` — committing atomically.
         """
-        from iknos.db.age import merge_edge, merge_vertex
+        from iknos.db.age import atomic_write, merge_edge, merge_vertex
 
         subgraph = await self.adapter.load_active(session)
 
@@ -305,39 +305,41 @@ class Deriver:
             temporal=BitemporalFields(ingested_at=now, valid_from=now),
             # sensitivity left at the lattice origin — lub propagation over premises is §9.1.
         )
-        await merge_vertex(session, _AGE_LABEL[proposal.kind], conclusion_to_props(conclusion))
-
         group = uuid.uuid4()
-        edge_props = derivation_edge_props(
-            box=box.id, group=group, strength=proposal.strength, now=now
-        )
-        for pid in proposal.premise_ids:
-            await merge_edge(
-                session, src_id=cid, dst_id=pid, label="DERIVED_FROM", props=edge_props
-            )
+        # W7: conclusion vertex + DERIVED_FROM edges + the Action commit as one unit — a failed
+        # edge write can never leave a committed Action pointing at a half-written derivation.
+        async with atomic_write(session):
+            await merge_vertex(session, _AGE_LABEL[proposal.kind], conclusion_to_props(conclusion))
 
-        spans = await self._premise_spans(session, proposal.premise_ids)
-        action_id = await record_action(
-            session,
-            actor="deriver",
-            action_type=str(proposal.kind),
-            inputs={
-                "premises": [str(p) for p in proposal.premise_ids],
-                "spans": spans,
-                "box": str(box.id),
-                "strength": proposal.strength,
-                "kind": str(proposal.kind),
-                "schema_version": DERIVE_SCHEMA_VERSION,
-            },
-            outputs={
-                "conclusion": str(cid),
-                "derivation_group": str(group),
-                "derived_from": [f"{cid}->{p}" for p in proposal.premise_ids],
-                "support_count": support_count,
-                "confidence": confidence,
-            },
-        )
-        await session.commit()
+            edge_props = derivation_edge_props(
+                box=box.id, group=group, strength=proposal.strength, now=now
+            )
+            for pid in proposal.premise_ids:
+                await merge_edge(
+                    session, src_id=cid, dst_id=pid, label="DERIVED_FROM", props=edge_props
+                )
+
+            spans = await self._premise_spans(session, proposal.premise_ids)
+            action_id = await record_action(
+                session,
+                actor="deriver",
+                action_type=str(proposal.kind),
+                inputs={
+                    "premises": [str(p) for p in proposal.premise_ids],
+                    "spans": spans,
+                    "box": str(box.id),
+                    "strength": proposal.strength,
+                    "kind": str(proposal.kind),
+                    "schema_version": DERIVE_SCHEMA_VERSION,
+                },
+                outputs={
+                    "conclusion": str(cid),
+                    "derivation_group": str(group),
+                    "derived_from": [f"{cid}->{p}" for p in proposal.premise_ids],
+                    "support_count": support_count,
+                    "confidence": confidence,
+                },
+            )
         return DerivationResult(
             conclusion_id=cid,
             action_id=action_id,

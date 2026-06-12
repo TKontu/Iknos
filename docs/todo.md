@@ -273,16 +273,26 @@ cite a gap file by name resolve there):
       `test_config.py` (defaults without env; env overrides; no DB on import).
       Pure where the module is pure; integration tests keep owning round-trips;
       don't chase coverage into ORM/type modules.
-- [ ] **W7 — dual-write transaction discipline** *(2026-06-11 architecture
-      assessment, P7 — **land before Phase 5**, see that file's entry criteria)*.
-      Graph writes (raw Cypher via `execute_driver_sql`) and relational writes
-      (ORM) share one session, but no call site has a rollback discipline: a
-      failed Fact write after a persisted `Action` leaves the audit log pointing
-      at an artifact that does not exist — breaking §10.2 point auditability
-      (principle 9) precisely where it must hold. One transactional wrapper
-      (context manager) covering graph write + relational write + `Action`
-      append; operators adopt it; rollback tests inject a failure between the
-      writes and assert no orphaned `Action` and no orphaned vertex.
+- [x] **W7 — dual-write transaction discipline** *(2026-06-11 architecture assessment, P7 —
+      Phase-5 entry criterion)* *(shipped)*. `db/age.py::atomic_write(session)` is the wrapper —
+      an `@asynccontextmanager` that commits the bracketed writes together on clean exit and
+      **rolls the whole unit back on any exception** before re-raising (no orphaned `Action`, no
+      orphaned vertex, no half-written edge set). It lives beside the graph-write helpers operators
+      already import and stays DB-free on import (no engine), unlike `db/session.py`. Adopted in the
+      §6 graph operators that commit: `derive._propose`, `extract._persist`, `resolve.resolve_box`,
+      `anchor.anchor_box`, `component_aggregate._revise`, and `partwhole` — where it also **fixes
+      the genuine multi-commit hazard**: `_persist_direct` (per-proposition isolation preserved) and
+      `_rebuild_closure` are each their own atomic unit instead of an unbracketed internal commit.
+      Tests: `test_age_cypher.py` (commit-once / rollback-and-reraise on a mock); integration
+      `test_atomic_write.py` (a failure injected *between* a graph write and the `Action` rolls both
+      back — no orphaned vertex, no orphaned `Action`; the success direction commits both).
+      **Remaining mechanical adoptions** (already single-commit / orphan-safe today — `atomic_write`
+      only adds the rollback-on-mid-failure hardening, identical pattern): `reference.bind_proposition`,
+      `edge_producer.produce_edges` (keep its single-transaction-for-all-plans semantics on wrap),
+      `reembed` (ORM-only). `proposition.py` already hand-rolls the discipline (per-span
+      try/`_persist`/except-rollback) — the reference implementation `atomic_write` generalizes; the
+      "caller owns transaction" operators (`domain/loader`, `boxes/registry`, `reference_corpus`,
+      `ingest`) correctly defer the commit to a caller that should wrap with `atomic_write`.
 - [ ] **W8 — Cypher chokepoint + serde round-trips** *(assessment, P10)*. ~140
       call sites interpolate labels/edge types/ids/timestamps into f-string
       Cypher outside the `db/age.py` helpers — safe today (values come from
