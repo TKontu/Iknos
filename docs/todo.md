@@ -254,7 +254,7 @@ cite a gap file by name resolve there):
 
 ## Maintenance backlog *(opportunistic — no phase gate; merged from R12/V11)*
 
-- [ ] **R12 — Action metrics (observability floor).** Migration: `ALTER TABLE
+- [x] **R12 — Action metrics (observability floor).** Migration: `ALTER TABLE
       actions ADD COLUMN metrics JSONB NOT NULL DEFAULT '{}'::jsonb`; `record_action`
       accepts optional `metrics`. Populate from the instrumented paths:
       `core/llm.py` returns usage (prompt/completion tokens) alongside the parsed
@@ -262,7 +262,16 @@ cite a gap file by name resolve there):
       completion_tokens, n_samples, cache_hit}`; parse/segment Actions get
       `{duration_ms, n_spans, n_skipped_whitespace}`. `time.monotonic()` deltas;
       absent usage → keys omitted, never zeroed. Cost discipline (§6.1) and Trials
-      A/C consume these numbers.
+      A/C consume these numbers. *(Shipped: #103 the column + instrumentation; the
+      2026-06-12 review residual PR fixed the segment Action's `duration_ms` to
+      include the dominant embed/split/segment stage cost — it previously timed the
+      persist write alone, attributing the embedding cost to no Action — and added the
+      missing payload tests, parse + segment metrics asserted on persisted Action rows.
+      Deliberately NOT changed: the G1.7b replay Action still omits `duration_ms` —
+      its only cost is a re-embed documented as negligible next to the skipped LLM
+      call, and recording it would muddy the `cache_hit ⇒ ~zero extractor cost`
+      signal; a distinct `embed_duration_ms` is the right fix iff replays ever
+      dominate, a scale concern.)*
 - [~] **V11 — unit tests for untested infrastructure modules** *(in progress —
       domain-loader result-builder tests #64, `_build_cypher_sql` seam + assembly
       tests #65, `GRAPH_NAME` identifier validation + tests #66 shipped)*. Check
