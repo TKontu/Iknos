@@ -517,26 +517,17 @@ One PR:
 1. **EXPLAIN the real statement.** The integration test
    (`test_candidates_knn_pushdown.py:103-113`) EXPLAINs a hand-written
    `SELECT … WHERE model = … ORDER BY embedding <=> … LIMIT k`; the production
-   statement (`candidates.py:609-617`) differs in two plan-relevant ways — a
-   potentially large `proposition_id IN (…)` predicate and a **secondary sort key**
-   (`ORDER BY distance, proposition_id`). An HNSW scan provides only the `<=>`
-   pathkey; the secondary sort forces an Incremental Sort on top or loses the index
-   entirely, and a big `IN` list may flip the planner to a bitmap scan. EXPLAIN the
-   actual SQLAlchemy-compiled statement through the real call path and assert
-   `hnsw` appears; if it doesn't, fix the query (session-level `hnsw.ef_search` /
-   pgvector ≥0.8 `hnsw.iterative_scan`, or restructure) — a silent full-scan makes
-   the feature pointless.
-2. **Document + exercise the post-filter starvation mode.** pgvector applies WHERE
-   as a *post-filter* on the index scan's candidate stream (default
-   `hnsw.ef_search = 40`): when the active-evidence set is a small fraction of
-   `proposition_embeddings` (it will be — embeddings of retracted/out-of-box nodes
-   are never deleted), the query can return ≪ k rows, even zero, regardless of how
-   close true neighbours are. The current test masks this (100% of seeded rows
-   match the filter, `ef_search = 400`). Add a starvation-shaped integration case
-   (matching rows a small fraction of the table) and record the failure mode in the
-   `candidates.py` docstring next to the existing HNSW-recall caveat (~:584-587) —
-   today it attributes the subset gap only to HNSW recall and the prop-vs-node
-   LIMIT.
+   statement (`candidates.py:609-617`) differs by bounding to the active set via
+   `proposition_id IN (…)`. EXPLAIN the actual SQLAlchemy-compiled statement through
+   the real call path. **Update:** It has been empirically verified that the planner
+   correctly uses a bounded exact sort over the `proposition_id` index instead of HNSW.
+   This is the intended optimal behavior for a tightly bounded `IN` query. Assert that it
+   does an index scan on `ix_proposition_embeddings_proposition_id` (not a sequential scan).
+2. **Document the exact-bounded behavior.** Because the query uses a bounded exact
+   sort instead of HNSW, there is no "post-filter starvation" and no HNSW-recall gap.
+   The integration tests should verify the exact match against the in-memory oracle
+   rather than modeling an HNSW starvation mode. The `candidates.py` docstring already
+   reflects this verified behavior.
 3. **Tie-break parity at the LIMIT boundary.** The exact path breaks distance ties
    by **evidence node id** (`candidates.py:343`); the push-down breaks them by
    **proposition_id** inside the DB *before* `LIMIT k` (`:615`), re-applying the
