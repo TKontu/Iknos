@@ -276,3 +276,43 @@ def test_funnel_unions_structural_and_embedding_sources() -> None:
     assert by_key[("F1", "H")].shared_entities == frozenset({"actorA"})
     # The embedding-only pair survives under the recall-first UNION default.
     assert ("F2", "H") in by_key
+
+
+# --- V14: the push-down query stays index-eligible + keeps the G1.16 guard (DB-free shape check) -
+
+
+def _compiled_pushdown_sql() -> str:
+    import uuid
+
+    from sqlalchemy.dialects import postgresql
+
+    from iknos.core.candidates import knn_pushdown_stmt
+
+    stmt = knn_pushdown_stmt(
+        model="bge-m3", query_vector=[0.1, 0.2, 0.3, 0.4], evidence_uuids=[uuid.uuid4()], k=8
+    )
+    return str(stmt.compile(dialect=postgresql.dialect())).lower()
+
+
+def test_pushdown_query_orders_by_bare_cosine_distance() -> None:
+    # The push-down sorts the IN-bounded active set by `<=>` only; node-level determinism is the
+    # caller's Python re-sort, so a secondary ORDER BY column is unnecessary. This guards the real
+    # (compiled) statement, model-free, against a re-introduced proposition-level sort key.
+    sql = _compiled_pushdown_sql()
+    assert "<=>" in sql, (
+        "push-down must use the `<=>` cosine operator (the vector_cosine_ops opclass)"
+    )
+    order_by = sql.split("order by", 1)[1]
+    order_by = order_by.split("limit", 1)[0]
+    # Exactly one ordering term: the `<=>` distance. No comma-separated secondary key.
+    assert "," not in order_by, f"ORDER BY has an unexpected secondary key: {order_by!r}"
+    assert "<=>" in order_by
+
+
+def test_pushdown_query_keeps_the_g116_model_guard_and_evidence_filter() -> None:
+    # Dropping `WHERE model = :model` would compare vectors across embedding spaces (G1.16); the
+    # `proposition_id IN (...)` clause restricts the k-NN to the active evidence set. Both must
+    # survive in the compiled SQL — a regression here is a silent correctness bug, not a crash.
+    sql = _compiled_pushdown_sql()
+    assert "proposition_embeddings.model =" in sql, "G1.16 model guard missing from the query"
+    assert "proposition_id in (" in sql, "evidence-set IN filter missing from the query"
