@@ -193,7 +193,10 @@ async def _seed_refuted(session: AsyncSession, name: str) -> uuid.UUID:
     """A hypothesis the QBAF computes a structural ``refuted`` for (net attack, no support)."""
     box = case_box(name, "1", "test", 0.8)
     await _put_box(session, box)
-    h = await _put_hypothesis(session, box.id, confidence=0.5)
+    # Base 0.3 (not 0.5): with the attack it computes REFUTED, and once the attacker is retracted
+    # the no-evidence base falls *below* the supported threshold → UNSUPPORTED, not SUPPORTED — the
+    # documented no-active-evidence case (cf. test_adjudicate_unsupported_hypothesis).
+    h = await _put_hypothesis(session, box.id, confidence=0.3)
     f = await _put_fact(session, box.id, confidence=1.0)
     await _put_evidence(session, source=f, target=h, box=box.id, label="REFUTES", strength=0.9)
     await session.commit()
