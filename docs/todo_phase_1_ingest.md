@@ -511,19 +511,21 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
 
 ### From the 2026-06-11 architecture assessment *(W-tasks; findings record in `archive/review_2026-06-11_planned_architecture_assessment.md`)*
 
-- [ ] **G1.23 (W5) — enforce nonzero sampling temperature when `n_samples > 1`.**
-      §3.1 is explicit: "Multi-sample also requires nonzero sampling temperature,
-      or N identical samples make agreement trivially perfect; **the configuration
-      must enforce this, not document it**." The shipped defaults are
-      `temperature: 0.0` (`core/proposition.py`, `core/extract.py`,
-      `core/verify.py`) with no guard — a multi-sample run today returns
-      agreement = 1.0 vacuously, silently inflating faithfulness. Add constructor
-      validation on the multi-sample extraction/verify paths: `n_samples > 1`
-      with `temperature == 0` raises at construction. **Exemption (by design):**
-      the G4.3 edge judge derives its sample diversity from the per-sample
-      permutation at temperature 0 — document the exemption where the guard
-      lives, so nobody "fixes" the judge. Tests: construction raises; `n=1, T=0`
-      passes; the guard trips with zero LLM calls.
+- [x] **G1.23 (W5) — enforce nonzero sampling temperature when `n_samples > 1`** *(shipped)*.
+      §3.1: "Multi-sample also requires nonzero sampling temperature, or N identical samples make
+      agreement trivially perfect; **the configuration must enforce this, not document it**." The
+      rule is now a single source of truth — `consistency.require_sampling_diversity(n_samples,
+      sampling)` raises at construction when `n_samples > 1` and `temperature <= 0` (and `top_p`
+      cannot rescue it — nucleus sampling is moot once decoding is greedy at temperature 0, so the
+      pre-existing `top_p` escape hatch in the `Propositionizer` guard is closed). `Propositionizer`
+      calls it; a future multi-sample verify path reuses it via the `label` arg rather than
+      re-deriving the check (`core/extract.py`/`core/verify.py` are single-call, so there is no
+      multi-sample path to guard there yet). **Exemption (by design):** the G4.3 edge judge runs
+      `n_samples > 1` at temperature 0 on purpose — its diversity comes from a per-sample input
+      *permutation*, not temperature — so it deliberately does **not** call this guard; documented
+      in `require_sampling_diversity`'s docstring so nobody "fixes" the judge. Tests: construction
+      raises (greedy + `top_p` too) with **zero** LLM calls; `n=1, T=0` passes; `n>1, T>0` passes;
+      the `label` surfaces for the verify path.
 - [x] **G1.24 (W6) — context span identity in the extraction cache key** *(shipped with G1.22,
       one re-key)*. `extraction_content_hash` now takes the **ordered** `context_span_ids` (the
       spans `build_context` fronts the window with), so a re-segmentation that changes the K-span

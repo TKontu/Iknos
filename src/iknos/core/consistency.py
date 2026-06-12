@@ -15,7 +15,9 @@ a plain dot product) and is unit-testable with hand-built toy vectors, exactly l
 algebra in ``types/epistemic.py``.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from iknos.types.epistemic import Attribution, EpistemicClass, Modality, Polarity
 
@@ -23,6 +25,35 @@ from iknos.types.epistemic import Attribution, EpistemicClass, Modality, Polarit
 # for the agreement count. Tunable — Trial A5 fits it against a labeled corpus (single-pass
 # vs multi-sample). bge-m3 vectors are normalized, so this is a dot-product threshold.
 DEFAULT_AGREEMENT_THRESHOLD: float = 0.86
+
+
+def require_sampling_diversity(
+    n_samples: int, sampling: Mapping[str, Any], *, label: str = "multi-sample extraction"
+) -> None:
+    """Fail loud at construction if a multi-sample regime cannot actually diversify (§3.1, G1.23).
+
+    §3.1 is explicit: *"Multi-sample also requires nonzero sampling temperature, or N identical
+    samples make agreement trivially perfect; the configuration must enforce this, not document
+    it."* With ``n_samples > 1``, a temperature of 0 is greedy (argmax) decoding — every sample is
+    **identical**, so cross-sample agreement is vacuously 1.0 and silently inflates faithfulness
+    (and ``top_p`` cannot rescue it: nucleus sampling has no effect once decoding is greedy). So
+    ``n_samples > 1`` requires ``temperature > 0``. ``n_samples == 1`` (the single-pass default) is
+    unconstrained — there is no agreement signal to fake. The single source of truth for the rule,
+    called from every temperature-driven multi-sample constructor (extraction today; a future
+    multi-sample verify path reuses it rather than re-deriving the check).
+
+    **Exemption (by design).** The G4.3 edge judge runs ``n_samples > 1`` at temperature 0 *on
+    purpose* — it draws its sample diversity from a per-sample **permutation of the inputs**, not
+    from sampling temperature, so its agreement signal is real. That path deliberately does **not**
+    call this guard, and must not be "fixed" to: its diversity source is orthogonal to temperature.
+    """
+    if n_samples < 1:
+        raise ValueError(f"n_samples must be >= 1, got {n_samples!r}")
+    if n_samples > 1 and sampling.get("temperature", 0) <= 0:
+        raise ValueError(
+            f"{label} (n_samples={n_samples}) needs temperature>0 — at temperature 0 every sample "
+            f"is identical and cross-sample agreement is vacuously 1.0; got {dict(sampling)!r}"
+        )
 
 
 @dataclass(frozen=True)
