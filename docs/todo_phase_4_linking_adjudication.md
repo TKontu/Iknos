@@ -21,8 +21,9 @@ algebra over the LLM/symbolic/temporal channels that authorises a persisted `ref
 gate's **consumer-filter landed (V8, `persist_verdicts`)** — a structural `refuted` is held
 at its prior state + `pending_refutation` unless an authorising `GateDecision` is supplied,
 so `refuted` is unreachable through the writer without the gate;
-`corroborate`/`find-contradiction` operators + the gate's channel producers
-(rest of G4.5) and the validation gate (G4.6) open.**
+`corroborate`/`find-contradiction` operators + the gate's **temporal** channel producer
+(rest of G4.5; the **symbolic** producer landed in W3, `core/symbolic_gate.py`) and the
+validation gate (G4.6) open.**
 G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
 the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
 conservative default, both retained at the seam), the `solve` bounded fixpoint (acyclic-exact,
@@ -99,8 +100,11 @@ finding. **W2 (the synthetic §8 end-to-end fixture) shipped** —
 fact retracts a supporting fact, the unfounded cycle drops while the grounded one stays
 byte-stable, `hb` flips **only** through the gate (held → `pending_refutation`; authorised
 → refuted), and a crafted mutual-`REFUTES` region is surfaced as a §13 finding that
-commits nothing — a permanent regression suite. **W3** records the interim refutation-gate
-decision eyes-open instead of by default. Specs in *Open task specs* below; findings
+commits nothing — a permanent regression suite. **W3 (the interim refutation-gate decision)
+shipped** — decided eyes-open as **option (a)**: `core/symbolic_gate.py` ships the minimal
+clingo/ASP consistency producer for the gate's required SYMBOLIC channel, so `DEFAULT_GATE`
+is now functional (an automated `refuted` flip is reachable on real LLM + symbolic agreement;
+a symbolic dissent vetoes), no longer correct-but-dead. Specs in *Open task specs* below; findings
 record in `archive/review_2026-06-11_planned_architecture_assessment.md`.
 
 ## Candidate generation (§5.1) — which pairs to assess
@@ -294,7 +298,7 @@ the G4.6 run), with **W3** decided alongside the G4.5 channel-producer work, and
 **R4 → V9** (gate ANN infrastructure — with the gate trials).
 Migrations: set `down_revision` to the actual head (`alembic heads`) — numbering in
 older specs is stale. **Safety lockdown complete: R8/R9/V7/V8 all shipped. W1
-shipped; W1/W2 shipped, next: W3.**
+shipped; the composed-loop spine W1/W2/W3 all shipped.**
 
 ### R8 — `provisional` boolean → `provisional_reasons` set — ✅ **shipped**
 
@@ -599,7 +603,31 @@ Accept: green on the ephemeral AGE DB with zero LLM calls; red if any layer seam
 (A → B → QBAF → gate → persist) is rewired without it noticing. Do not:
 substitute it for V1–V3.
 
-### W3 — interim refutation-gate decision (clingo producer vs explicit LLM-only) *(2026-06-11 assessment, P3)*
+### W3 — interim refutation-gate decision (clingo producer vs explicit LLM-only) *(2026-06-11 assessment, P3)* — ✅ **shipped (option a)**
+
+*Decided eyes-open (confirmed with the user): **option (a) — ship the minimal clingo
+symbolic-channel producer**, shipped as `feat/w3-symbolic-gate-clingo`. `core/symbolic_gate.py`
+is the pure clingo/ASP consistency engine over a typed `SymbolicQuery` (the analogue of the pure
+`qbaf.py`/`subjective_logic.py` cores before their AGE adapters): `check_consistency` runs the
+"is the hypothesis ∧ the refuter logically inconsistent under the box's rules?" test — **UNSAT →
+CONTRADICTORY → AFFIRM**, related-but-**SAT → CONSISTENT → DISSENT** (the veto guard the channel
+exists for), **unrelated / already-inconsistent → ABSTAIN** (honest insufficiency, never a
+disguised dissent). The encoding closes **transitively** through the sub-region's rules, which is
+why clingo earns its place over a two-atom set test. `symbolic_channel_for(query)` produces the
+`ChannelSignal` a consumer passes straight into `authorise_from_panel(..., symbolic=…)`, so
+`DEFAULT_GATE`'s required SYMBOLIC channel is now wired and an automated `refuted` flip is reachable
+on genuine LLM + symbolic agreement. The atom **identity** (which propositions are "the same claim",
+so opposite polarity is a `P`/`¬P` twin) is the embedding twin-cluster the perception layer already
+computes (`core/consistency.py`, G1.14); the DB adapter that builds a `SymbolicQuery` from the
+active sub-region is the documented consuming seam (the `find-contradiction` operator). `clingo>=5.8`
+added to `pyproject.toml`/`uv.lock`. Tests (`tests/unit/test_symbolic_gate.py`, clingo not mocked):
+the verdict table incl. the transitive case + the attribution guards, and — the W3 requirement —
+**which gate is in force**: with the real symbolic channel wired, `DEFAULT_GATE` now AUTHORISES on
+LLM+symbolic AFFIRM, a symbolic DISSENT vetoes, a symbolic ABSTAIN still withholds, and the
+no-symbolic-signal default stays safe-by-default. `ensemble_gate.symbolic_channel()` remains that
+ABSTAIN seam (its docstring now points to the real producer). **Note:** option (b)'s
+`LLM_ONLY_GATE` is retained at the seam; the gate choice is a value, so a deployment can still opt
+into it explicitly.*
 
 With `SYMBOLIC` required and its producer unwired (ABSTAIN), `DEFAULT_GATE`
 withholds **every** automated `refuted` flip — safe-by-default per principle 6,

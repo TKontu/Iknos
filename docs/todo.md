@@ -141,21 +141,22 @@ work is **not** further feature slices but the gate assets themselves: the plant
 corpus (V1), gold labels + second annotator (V2 — the longest-lead item in the
 project), the metrics harness (V3), and the E1 baseline rigs (V4–V6) — specs in
 `todo_trials.md`. The safety lockdown R8→R9→V7→V8 (quarantine + ensemble filter)
-must land before the remaining G4.5 slices — **R8/R9/V8 shipped; only V7
-(quarantine enforcement at the edge producer) remains** — specs in
+must land before the remaining G4.5 slices — **complete: R8/R9/V7/V8 all
+shipped** — specs in
 `todo_phase_4_linking_adjudication.md` *Open task specs*. Gate infrastructure
 (R10/R11 out-of-process embeddings + job queue; R4/V9 ANN) lands before the trials
 run — **R4 (HNSW indexes) shipped; V9 (k-NN push-down + recall measurement) next.**
 
-**And the loop itself is unproven (2026-06-11 architecture assessment, W1/W2/W3).**
-Nothing calls the G3.9 `stabilize` driver, so the
-`REFUTES → retract → A → B → QBAF → gate` feedback path has never executed — every
-correctness guarantee rests on per-layer unit tests, and with the symbolic channel
-ABSTAINing the default gate withholds every automated `refuted` flip (the
-differentiator is currently non-functional end to end). The composed-loop
-orchestrator (**W1**) and the synthetic §8 end-to-end fixture (**W2**) are gate
-prerequisites alongside V1–V6, and the interim refutation-gate choice (**W3**) is
-decided eyes-open, not by default — specs in `todo_phase_4_*.md` *Open task specs*.
+**The composed loop now runs as a system (2026-06-11 architecture assessment,
+W1/W2/W3 — all shipped).** The `REFUTES → retract → A → B → QBAF → gate` feedback
+path is owned by `core/revision_loop.py` (**W1**), driven by the G3.9 `stabilize`
+driver; the synthetic §8 end-to-end fixture (**W2**, `test_revision_loop_e2e.py`)
+proves the mechanics on real AGE with zero LLM calls; and the interim refutation-gate
+choice (**W3**) was decided eyes-open as **option (a): ship the minimal clingo
+symbolic-channel producer** (`core/symbolic_gate.py`), so `DEFAULT_GATE`'s required
+SYMBOLIC channel is now wired and an automated `refuted` flip is reachable on genuine
+LLM + symbolic agreement (no longer non-functional). Specs in `todo_phase_4_*.md`
+*Open task specs*.
 The assessment also gates Phase 5 entry (see `todo_phase_5_*.md`) and adds
 G1.23/G1.24, W7/W8/W11, the C3 W9 amendment, and the E2 de-scoping ladder (W10).
 Findings record: `archive/review_2026-06-11_planned_architecture_assessment.md`.
@@ -171,7 +172,9 @@ into the owning phase/gap doc as an active task.
 
 | Deferred item | Recorded in | Trigger — re-open when… | Status |
 |---|---|---|---|
-| Quarantine enforcement (G1.6/R9) | `todo_phase_4_*.md` *Open task specs* | a `REFUTES` creation site exists | **FIRED** (G4.3 slice 3) → active as R8→R9→V7 (**R8/R9 shipped; V7 next**) |
+| Quarantine enforcement (G1.6/R9) | `todo_phase_4_*.md` *Open task specs* | a `REFUTES` creation site exists | **CLOSED** — R8→R9→V7 all shipped (V7 #77; edge producer enforces §3.1) |
+| Ensemble-gate SYMBOLIC channel producer (W3) | `todo_phase_4_*.md` *Open task specs* (W3), `core/ensemble_gate.py` docstring | the differentiator must auto-refute (gate-trial window / G4.6) | **CLOSED** — W3 chose option (a): clingo producer shipped (`core/symbolic_gate.py`) |
+| Ensemble-gate TEMPORAL channel producer (§7.4) | `core/ensemble_gate.py` docstring (`temporal_channel`) | a time-sensitive sub-domain needs the bitemporal-overlap veto, or `STRICT_GATE` is adopted | waiting (later G4.5 / Phase 5 bitemporal) |
 | Ensemble-gate-only `refuted` flip (§7.2) | `todo_phase_4_*.md` *Open task specs* (V8) | any consumer writes `Hypothesis.state` | **FIRED** (G4.4 `persist_verdicts`) → **V8 shipped** |
 | pgvector ANN index + k-NN push-down | `todo_phase_4_*.md` *Open task specs* (R4/V9), `core/candidates.py` docstring | k-NN runs beyond working-set scale, or the gate measures recall | **FIRED** (gate is next) → **R4 shipped; V9 next** |
 | Out-of-process embeddings + job queue (R10/R11) | `todo_trials.md` *Gate prerequisites* | first real multi-document corpus ingest | **FIRED** (V1 corpus is that ingest) → land before gate trials |
