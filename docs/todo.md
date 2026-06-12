@@ -141,10 +141,11 @@ work is **not** further feature slices but the gate assets themselves: the plant
 corpus (V1), gold labels + second annotator (V2 — the longest-lead item in the
 project), the metrics harness (V3), and the E1 baseline rigs (V4–V6) — specs in
 `todo_trials.md`. The safety lockdown R8→R9→V7→V8 (quarantine + ensemble filter)
-must land before the remaining G4.5 slices — specs in
+must land before the remaining G4.5 slices — **R8/R9/V8 shipped; only V7
+(quarantine enforcement at the edge producer) remains** — specs in
 `todo_phase_4_linking_adjudication.md` *Open task specs*. Gate infrastructure
 (R10/R11 out-of-process embeddings + job queue; R4/V9 ANN) lands before the trials
-run.
+run — **R4 (HNSW indexes) shipped; V9 (k-NN push-down + recall measurement) next.**
 
 **And the loop itself is unproven (2026-06-11 architecture assessment, W1/W2/W3).**
 Nothing calls the G3.9 `stabilize` driver, so the
@@ -171,8 +172,8 @@ into the owning phase/gap doc as an active task.
 | Deferred item | Recorded in | Trigger — re-open when… | Status |
 |---|---|---|---|
 | Quarantine enforcement (G1.6/R9) | `todo_phase_4_*.md` *Open task specs* | a `REFUTES` creation site exists | **FIRED** (G4.3 slice 3) → active as R8→R9→V7 (**R8/R9 shipped; V7 next**) |
-| Ensemble-gate-only `refuted` flip (§7.2) | `todo_phase_4_*.md` *Open task specs* (V8) | any consumer writes `Hypothesis.state` | **FIRED** (G4.4 `persist_verdicts`) → active as V8 |
-| pgvector ANN index + k-NN push-down | `todo_phase_4_*.md` *Open task specs* (R4/V9), `core/candidates.py` docstring | k-NN runs beyond working-set scale, or the gate measures recall | **FIRED** (gate is next) → active as R4→V9 |
+| Ensemble-gate-only `refuted` flip (§7.2) | `todo_phase_4_*.md` *Open task specs* (V8) | any consumer writes `Hypothesis.state` | **FIRED** (G4.4 `persist_verdicts`) → **V8 shipped** |
+| pgvector ANN index + k-NN push-down | `todo_phase_4_*.md` *Open task specs* (R4/V9), `core/candidates.py` docstring | k-NN runs beyond working-set scale, or the gate measures recall | **FIRED** (gate is next) → **R4 shipped; V9 next** |
 | Out-of-process embeddings + job queue (R10/R11) | `todo_trials.md` *Gate prerequisites* | first real multi-document corpus ingest | **FIRED** (V1 corpus is that ingest) → land before gate trials |
 | G1.10 Part B — RAPTOR summary levels | `todo_phase_1_ingest.md` *Open work* | coarse-to-fine candidate stage (§5.1 stage 3) or retrieval needs coarse levels | waiting |
 | G1.11 — box scoping on dense/sparse indexes | `todo_phase_1_ingest.md` *Open work* | first hybrid-retrieval consumer (Phase 6 `retrieve`) | waiting |
