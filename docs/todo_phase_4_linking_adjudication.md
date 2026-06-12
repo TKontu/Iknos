@@ -77,8 +77,8 @@ R8 → R9 → V7 (quarantine enforcement in the edge producer) → V8 (the
 wired to the slice-1 `authorise` and holding un-authorised flips as a
 `pending_refutation` finding) — because the REFUTES creation site exists with
 §3.1 quarantine unenforced, and `persist_verdicts` still writes whatever state
-it is given. **Status: R8, R9 and V8 shipped; only V7 (the edge-producer
-quarantine enforcement) remains in the lockdown chain.** And before G4.6 can run at all: the **gate assets** V1 (planted
+it is given. **Status: the safety lockdown is complete — R8, R9, V7 and V8 all
+shipped; the edge producer now enforces §3.1 quarantine at the write.** And before G4.6 can run at all: the **gate assets** V1 (planted
 corpus), V2 (gold labels — longest lead, start the annotator recruitment now),
 V3 (metrics harness), plus the E1 baselines V4–V6 — specs in `todo_trials.md`.
 The lockdown specs are in *Open task specs* below.
@@ -180,12 +180,16 @@ record in `archive/review_2026-06-11_planned_architecture_assessment.md`.
       per-model recalibration (the fitted consistency→correctness curve, identity until G4.6) and
       tier-differentiated significance (the `SignificancePolicy` is uniform until G4.6 calibrates
       it).)*
-- [ ] **Quarantine enforcement at the edge-creation site (V7, needs R8+R9):** a
+- [x] **Quarantine enforcement at the edge-creation site (V7, needs R8+R9):** a
       provisional-sourced `REFUTES` (or sole-support `SUPPORTS`) is dropped from the
       plan and recorded on the `Action` as `quarantined` — never persisted, never a
       silent skip (§3.1). The judge still sees the evidence; quarantine gates the
-      *write*. *Must land before the remaining G4.5 slices.*
-      (spec in *Open task specs* below.)
+      *write*. *(Shipped, `#77`: `plan_hypothesis` derives `edge_stakes` per would-be
+      edge and calls `assert_not_quarantined`; `_load_provisional_reasons` inherits the
+      union of the evidence node's `EVIDENCED_BY` `Proposition` reasons (a node with no
+      Proposition → `missing_provenance`); a quarantined edge is dropped from the plan
+      and surfaced as a `QuarantineRecord` on the result + `Action.outputs.quarantined`,
+      never aborting the batch. `qbaf_adapter.py` untouched.)*
 - [ ] `corroborate` operator: hypothesis → gather supporting/refuting evidence.
 - [~] `find-contradiction` operator + **ensemble gate** (multi-sample LLM + symbolic +
       temporal agreement) required before any `REFUTES` (§7.2). *(G4.5 slice 1 —
@@ -284,7 +288,8 @@ G4.5 slices), then **W1 → W2** (the composed-loop spine — before Phase 5 and
 the G4.6 run), with **W3** decided alongside the G4.5 channel-producer work, and
 **R4 → V9** (gate ANN infrastructure — with the gate trials).
 Migrations: set `down_revision` to the actual head (`alembic heads`) — numbering in
-older specs is stale. **R8/R9 shipped (next: V7).**
+older specs is stale. **Safety lockdown complete: R8/R9/V7/V8 all shipped. W1
+shipped; next: W2.**
 
 ### R8 — `provisional` boolean → `provisional_reasons` set — ✅ **shipped**
 
@@ -365,7 +370,21 @@ docstring states the call contract: every path that creates a `REFUTES`, or a
 writing. Tests (`test_quarantine.py`): the three-row truth table; importable
 without `DATABASE_URL`.
 
-### V7 — quarantine enforcement in the edge producer *(needs R8+R9)*
+### V7 — quarantine enforcement in the edge producer *(needs R8+R9)* — ✅ **shipped**
+
+*Shipped as `fix/v7-quarantine-edge-producer` (`#77`), to spec. Extracted as the
+V7-only slice onto current main — R8 (`#72`)/R9 (`#73`) having merged separately, the
+combined `#67` was unmergeable (its own R8/R9 commits conflicted with the merged ones)
+and was closed/superseded. `_load_provisional_reasons` resolves each evidence node's
+reasons as the **union** over its `EVIDENCED_BY` `Proposition`s (a node with none →
+`MISSING_PROVENANCE` + a warning); pure `edge_stakes` marks any `REFUTES` and a
+sole-support `SUPPORTS` `HIGH` (count taken **before** drops, so dropping one supporter
+can't promote another to "sole"); `plan_hypothesis` calls `assert_not_quarantined` per
+would-be edge and on raise drops it, recording a `QuarantineRecord` on the result +
+`Action.outputs.quarantined`. Result rows are built from the **planned** edges so a
+dropped edge is never reported persisted. `qbaf_adapter.py` untouched (V8). Unit stakes
+table + plan-level drop + end-to-end produce; integration provisional→fact→produce→no
+`REFUTES` edge + Action carries `quarantined`.*
 
 `core/edge_producer.py` is the live `SUPPORTS`/`REFUTES` creation site and never
 consults provisional state. Read the module docstring + `plan_hypothesis` /
