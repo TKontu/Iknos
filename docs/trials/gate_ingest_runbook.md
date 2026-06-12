@@ -1,8 +1,10 @@
 # Gate-corpus dry-run ingest — runbook (Trial C / §6.1)
 
 The reproducible recipe for `scripts/run_gate_ingest.py`: ingest all ten
-`tests/fixtures/gate_corpus/` documents through the **real R11 job queue** + **R10 embedding
-seam**, then sanity-read the result into a report under `docs/trials/`.
+`tests/fixtures/gate_corpus/` documents through the **real R11 job queue**, then sanity-read the
+result into a report under `docs/trials/`. The R11 ingest job embeds **in-process** (it constructs
+`EmbeddingSubstrate` directly); the R10 out-of-process embedding seam is not yet wired into the job
+(see Prerequisites).
 
 ## Status: NOT YET RUN (2026-06-12)
 
@@ -46,9 +48,12 @@ proposition columns of the report.
 
 - **Database** at Alembic `head` (creates the AGE graph + label indexes **and** the procrastinate
   job tables; both are present in a `head` DB — verified: `procrastinate_jobs` et al. exist).
-- **Embedding backend (R10).** Either in-process bge-m3 (`EMBEDDINGS_BASE_URL` empty — torch in the
-  worker; CPU works but is slow for d08's many windows) or a hosted embedding service
-  (`EMBEDDINGS_BASE_URL=http://…`). The worker reloads the model per document today.
+- **Embedding backend: in-process bge-m3.** The R11 ingest job (`iknos.jobs.app`) constructs
+  `EmbeddingSubstrate` in-process (torch in the worker; CPU works but is slow for d08's many
+  windows), reloading the model per document. **`EMBEDDINGS_BASE_URL` is not yet effective for this
+  run**: the R10 `make_embedding_backend` out-of-process seam is not wired into the ingest job
+  (`core.ingest` does not yet take the backend protocol), so setting it has no effect until the core
+  lane wires it in. The report header states which backend the worker actually used.
 - **No LLM needed for ingest itself**; needed only for the (separate) propositionization step.
 
 ## Recipe (against a fresh, isolated DB)
@@ -73,13 +78,16 @@ DATABASE_URL=$DATABASE_URL .venv/bin/python -m scripts.run_gate_ingest \
 ## What the report contains
 
 - per-document **span** counts (graph `Span` vertices) and **embedding rows by level**
-  (`document_embeddings`), plus the count of document-level **windows** (`span_id IS NULL`);
+  (`document_embeddings`), plus the document-level **window count** read from the segment `Action`'s
+  `inputs.windowing.count` (the layout the pipeline records — *not* `span_id IS NULL` rows, a slot
+  the pipeline never writes);
 - the **d08 multi-window check** (G1.13): d08 must show > 1 document window — the load-bearing tail
   fact lives in the final 10% of its >8,192-token text;
 - **proposition / faithfulness / provisional** counts (zero until propositionization runs);
-- **R12 Action cost/duration**: detected reflectively. R12 has **not** merged (the `actions` table
-  has no duration/cost columns), so per-document cost/duration are omitted; they are the §6.1 /
-  Trial C numbers and will appear once R12 ships and the runner reads the new columns.
+- **per-document ingest duration** from R12 Action metrics. R12 (#103) **has merged**: it added the
+  `actions.metrics` JSONB column with `duration_ms` as a *key* (not a top-level column), so the
+  runner sums each document's parse+segment `metrics.duration_ms` into the report. Token/cost keys
+  are LLM-stage and absent from this perception-only ingest.
 
 ## Fixing what the dry run breaks
 
