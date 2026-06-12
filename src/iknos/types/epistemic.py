@@ -201,6 +201,41 @@ def merge_provisional_reasons(*groups: Iterable[str | ProvisionalReason]) -> lis
     return sorted(merged)
 
 
+# The faithfulness-axis reasons (:func:`provisional_reasons_for`). Mutually exclusive — a
+# proposition is at most one of "assessed-and-low" / "unassessed" — and **re-derived** whenever
+# faithfulness is (re)assessed: a verify-backfill (G1.22) that completes a previously-unassessed
+# faithfulness replaces ``UNASSESSED_FAITHFULNESS`` with the now-assessed reason. This is *not* a
+# violation of the "never cleared" discipline: that discipline forbids one producer clearing
+# *another* axis's reason; the faithfulness axis legitimately owns and re-derives its own.
+_FAITHFULNESS_AXIS_REASONS: frozenset[ProvisionalReason] = frozenset(
+    {ProvisionalReason.LOW_FAITHFULNESS, ProvisionalReason.UNASSESSED_FAITHFULNESS}
+)
+
+
+def reassess_faithfulness_reasons(
+    existing: Iterable[str | ProvisionalReason],
+    faithfulness: float | None,
+    *,
+    threshold: float = _FAITHFULNESS_PROVISIONAL_THRESHOLD,
+) -> list[str]:
+    """Recompute a proposition's reason set after its faithfulness is (re)assessed (R8/G1.22).
+
+    The faithfulness-axis reasons (:data:`_FAITHFULNESS_AXIS_REASONS`) are dropped from ``existing``
+    and re-derived from the new ``faithfulness`` via :func:`provisional_reasons_for`; **non**-axis
+    reasons (a G1.14 ``POLARITY_UNSTABLE`` twin, a Phase-2 ``UNRESOLVED_REFERENCE``) are preserved
+    untouched. This is the verify-backfill update: a span extracted with no verifier carries
+    ``UNASSESSED_FAITHFULNESS``; once the verifier later runs, that reason is *replaced* (not merely
+    OR-folded) by the assessed result — ``UNASSESSED`` is the one reason that must clear once
+    grounding is actually assessed. Contrast the add-only fold
+    (``core/proposition._with_faithfulness_reason``) used when no faithfulness-axis reason is set.
+    """
+    axis = {str(r) for r in _FAITHFULNESS_AXIS_REASONS}
+    preserved = (str(r) for r in existing if str(r) not in axis)
+    return merge_provisional_reasons(
+        preserved, provisional_reasons_for(faithfulness, threshold=threshold)
+    )
+
+
 def decode_provisional_reasons(value: Any) -> list[str]:
     """Decode a persisted ``provisional_reasons`` property into a ``list[str]``.
 

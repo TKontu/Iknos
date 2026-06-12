@@ -5,6 +5,8 @@ extraction output changes. So every input dimension is pinned to independently m
 (determinism + sensitivity), exactly like ``test_ingest.py`` does for ``span_content_hash``.
 """
 
+import pytest
+
 from iknos.core.cache import (
     canonical_json_sha256,
     extraction_content_hash,
@@ -14,12 +16,12 @@ from iknos.core.cache import (
 _BASE = {
     "target_text": "The bearing failed under load.",
     "context_text": "The pump ran for 9000 hours.",
+    "context_span_ids": ["11111111-1111-1111-1111-111111111111"],
     "model": "BAAI/extractor-v1",
     "schema_version": 1,
     "prompt_sha": "a" * 64,
     "schema_sha": "b" * 64,
     "sampling": {"temperature": 0.0, "n_samples": 1},
-    "verifier": None,
 }
 
 
@@ -88,30 +90,29 @@ def test_n_samples_changes_hash() -> None:
     assert _hash(sampling={"temperature": 0.0, "n_samples": 3}) != _hash()
 
 
-# --- verifier signature ---
+# --- context span identity (G1.24) ---
 
 
-def test_enabling_verifier_changes_hash() -> None:
-    # Toggling the verifier on changes the derived faithfulness → must invalidate.
-    assert _hash(verifier={"model": "verifier-v1", "schema_version": 1}) != _hash()
+def test_context_span_ids_change_hash() -> None:
+    # G1.24: a re-segmentation that swaps which spans front the window re-keys even when the
+    # rendered context_text is held fixed — the span set is keyed explicitly, not inferred.
+    assert _hash(context_span_ids=["22222222-2222-2222-2222-222222222222"]) != _hash()
 
 
-def test_verifier_model_changes_hash() -> None:
-    assert _hash(verifier={"model": "verifier-v2", "schema_version": 1}) != _hash(
-        verifier={"model": "verifier-v1", "schema_version": 1}
-    )
+def test_context_span_id_order_changes_hash() -> None:
+    # The context window is an ordered sequence, so reordering the same spans is a different key
+    # (unlike the order-insensitive sampling dict) — it changes what the model reads first.
+    two = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"]
+    assert _hash(context_span_ids=two) != _hash(context_span_ids=list(reversed(two)))
 
 
-def test_verifier_schema_version_changes_hash() -> None:
-    assert _hash(verifier={"model": "verifier-v1", "schema_version": 2}) != _hash(
-        verifier={"model": "verifier-v1", "schema_version": 1}
-    )
+def test_verifier_is_not_in_the_key() -> None:
+    # G1.22: the extractor's output is independent of the verifier, so the verifier signature is
+    # not an extraction input — a verifier toggle/upgrade must NOT invalidate the extraction key
+    # (it drives verify-backfill instead). The function rejects a `verifier` kwarg entirely.
 
-
-def test_verifier_prompt_sha_changes_hash() -> None:
-    # G1.15: a reworded verifier prompt re-derives faithfulness → must invalidate.
-    base_v = {"model": "verifier-v1", "schema_version": 1, "prompt_sha": "a" * 64}
-    assert _hash(verifier={**base_v, "prompt_sha": "z" * 64}) != _hash(verifier=base_v)
+    with pytest.raises(TypeError):
+        extraction_content_hash(**{**_BASE, "verifier": {"model": "v"}})  # type: ignore[arg-type]
 
 
 # --- shared hashing helpers (the G1.15 canonicalization primitives) ---
