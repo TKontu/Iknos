@@ -2,13 +2,16 @@
 live Postgres+AGE.
 
 Complements the no-op idempotency assertion in ``test_proposition_layer.py`` with the cases the
-versioned key adds: (1) a span re-run under a *changed* pipeline (model / verifier) is **cascade
+versioned key adds: (1) a span re-run under a *changed extractor* (model) is **cascade
 re-extracted** — its superseded propositions + their dense/lexical index rows purged, the new ones
 written, the swap audited — instead of silently serving the stale extraction or orphaning rows
 (G1.7r); (1b) with cascade **disabled** the same change fails loud with no partial writes (the
 conservative G1.7 mode); (1c) a stale span whose propositions already feed downstream nodes is
 **refused** (``CascadeDependentsError``) rather than orphaning them; (2) two different spans with
-*identical* text both materialize — the soundness guard that the key is per-span, not pure content.
+*identical* text both materialize — the soundness guard that the key is per-span, not pure content;
+(3) toggling the **verifier** — *not* an extraction input since G1.22 — is a no-op for extraction
+and triggers **verify-backfill** (the existing propositions are verified in place, zero extractor
+calls, zero purges), not a cascade re-extraction.
 
 LLM + embedding substrate mocked (no vLLM / model download); spans are hand-created, as in the
 sibling proposition-layer test.
@@ -181,10 +184,12 @@ async def test_cascade_disabled_fails_loud_no_writes(session: AsyncSession) -> N
     assert await _extract_action_count(session, span) == 1
 
 
-async def test_toggling_verifier_cascade_reextracts(session: AsyncSession) -> None:
-    """The verifier signature is in the key, so enabling the verifier on an already-extracted span
-    invalidates it (its faithfulness would otherwise never be computed) — and cascade re-extracts
-    it, now with a verify Action behind the new proposition's faithfulness."""
+async def test_toggling_verifier_backfills_without_reextraction(session: AsyncSession) -> None:
+    """G1.22: the verifier is no longer an extraction input, so enabling it on an already-extracted
+    span is a **no-op for extraction** and a **verify-backfill** — the existing proposition is
+    verified in place (same id, never purged), its faithfulness completed, and a verify Action
+    recorded, with **zero extractor LLM calls**. (Pre-G1.22 this was a full cascade re-extraction;
+    repinned deliberately.)"""
     await bootstrap_session(session)
     raw = "The bearing failed under load."
     doc_id, span = await _seed_one_span_doc(session, raw)
@@ -192,12 +197,17 @@ async def test_toggling_verifier_cascade_reextracts(session: AsyncSession) -> No
     await _propositionizer().propositionize_document(session, doc_id, [span], raw)
     [old_id] = list(await _prop_ids(session, span))
 
-    await _attach_verifier(_propositionizer()).propositionize_document(session, doc_id, [span], raw)
+    upgraded = _attach_verifier(_propositionizer())
+    await upgraded.propositionize_document(session, doc_id, [span], raw)
 
-    new_ids = await _prop_ids(session, span)
-    assert len(new_ids) == 1 and old_id not in new_ids  # re-extracted, old purged
-    assert await _index_counts(session, doc_id) == (1, 1)  # no orphaned index rows
-    # The re-extraction recorded a verify Action this time (faithfulness now has a verdict).
+    # No re-extraction: the extractor LLM was never called and the proposition kept its id.
+    assert upgraded.llm.guided_complete.await_count == 0  # zero extractor calls
+    assert await _prop_ids(session, span) == {old_id}  # same node, never purged
+    assert await _index_counts(session, doc_id) == (1, 1)  # no orphaned/duplicated index rows
+
+    # The verifier ran (backfill) and recorded exactly one verify Action.
+    assert upgraded.verifier is not None
+    assert upgraded.verifier.llm.guided_complete.await_count == 1
     verify_actions = await session.execute(
         text(
             "SELECT count(*) FROM actions WHERE actor = 'verifier' "
@@ -206,6 +216,41 @@ async def test_toggling_verifier_cascade_reextracts(session: AsyncSession) -> No
         {"sid": str(span.id)},
     )
     assert verify_actions.scalar_one() == 1
+
+    # Faithfulness was completed in place on the existing node (entailed → 1.0).
+    rows = await execute_cypher(
+        session,
+        f"MATCH (p:Proposition {cypher_map({'id': old_id})}) RETURN p.faithfulness",
+        returns="faith agtype",
+    )
+    assert float(str(rows[0][0]).strip('"')) == pytest.approx(1.0)
+
+
+async def test_reverify_under_same_verifier_is_a_noop(session: AsyncSession) -> None:
+    """G1.22: a second run with the *same* verifier identity neither re-extracts nor re-verifies —
+    the span is already verified under this identity, so no new extract or verify Action lands."""
+    await bootstrap_session(session)
+    raw = "The bearing failed under load."
+    doc_id, span = await _seed_one_span_doc(session, raw)
+
+    first = _attach_verifier(_propositionizer())
+    await first.propositionize_document(session, doc_id, [span], raw)
+
+    second = _attach_verifier(_propositionizer())
+    report = await second.propositionize_document(session, doc_id, [span], raw)
+
+    assert report.action_ids == []  # extraction no-op
+    assert second.llm.guided_complete.await_count == 0  # no re-extraction
+    assert second.verifier is not None
+    assert second.verifier.llm.guided_complete.await_count == 0  # no re-verification
+    verify_actions = await session.execute(
+        text(
+            "SELECT count(*) FROM actions WHERE actor = 'verifier' "
+            "AND inputs->>'target_span' = :sid"
+        ),
+        {"sid": str(span.id)},
+    )
+    assert verify_actions.scalar_one() == 1  # still just the original
 
 
 async def test_cascade_refuses_when_propositions_have_dependents(session: AsyncSession) -> None:

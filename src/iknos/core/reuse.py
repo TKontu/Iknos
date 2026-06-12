@@ -83,11 +83,18 @@ class ReusableExtraction:
     ``source_span_id``/``source_action_id`` identify the original extraction so the replay's
     ``reused_from`` pointer keeps the audit chain (and the original verify ``Action`` behind the
     reused faithfulness) reachable. ``propositions`` may be empty (a cached empty extraction).
+
+    ``source_verify_sig`` (G1.22) is the verify-stage identity the source was *cleanly* verified
+    under (``{model, schema_version, prompt_sha, schema_sha}``), or ``None`` if the source was never
+    verified (extracted with no verifier, or its verification degraded). The replay copies the
+    source's faithfulness only when this matches the reusing run's current verifier; otherwise the
+    copied score is stale and the span is queued for verify-backfill (``core/proposition.py``).
     """
 
     source_span_id: uuid.UUID
     source_action_id: uuid.UUID
     propositions: list[CachedProposition]
+    source_verify_sig: dict[str, Any] | None = None
 
 
 def _reasons_from_props(props: dict[str, Any]) -> list[str]:
@@ -138,6 +145,32 @@ def _cached_proposition_from_props(props: dict[str, Any]) -> CachedProposition:
     )
 
 
+async def _source_verify_sig(session: AsyncSession, source_span_id: str) -> dict[str, Any] | None:
+    """The verify-stage identity the source span was *cleanly* verified under, or ``None`` (G1.22).
+
+    Reads ``verify_sig`` off the source span's newest verify ``Action``. That field is present only
+    when the whole span verified without a degraded proposition (``proposition.py::
+    _record_verify_action``), so ``None`` correctly covers both "never verified" and "verification
+    degraded" — in either case the reusing run must not trust a copied faithfulness across a
+    verifier change.
+    """
+    # Select the whole ``inputs`` jsonb column (decodes to a Python dict) rather than an
+    # ``inputs->'verify_sig'`` sub-expression, whose driver typing is unspecified — the same
+    # discipline as :func:`find_reusable_extraction` below.
+    row = await session.execute(
+        text(
+            "SELECT inputs FROM actions WHERE actor = 'verifier' "
+            "AND inputs->>'target_span' = :sid ORDER BY timestamp DESC LIMIT 1"
+        ),
+        {"sid": source_span_id},
+    )
+    inputs = row.scalar_one_or_none()
+    if inputs is None:
+        return None
+    sig: dict[str, Any] | None = inputs.get("verify_sig")
+    return sig
+
+
 async def find_reusable_extraction(
     session: AsyncSession, content_hash: str
 ) -> ReusableExtraction | None:
@@ -179,6 +212,7 @@ async def find_reusable_extraction(
             source_span_id=uuid.UUID(source_span),
             source_action_id=uuid.UUID(str(action_id)),
             propositions=[],
+            source_verify_sig=await _source_verify_sig(session, source_span),
         )
 
     # UUIDs are a safe charset to inline into the Cypher body (no escaping); mirrors
@@ -202,4 +236,5 @@ async def find_reusable_extraction(
         source_span_id=uuid.UUID(source_span),
         source_action_id=uuid.UUID(str(action_id)),
         propositions=propositions,
+        source_verify_sig=await _source_verify_sig(session, source_span),
     )

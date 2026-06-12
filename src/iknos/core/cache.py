@@ -2,11 +2,22 @@
 
 The propositionizer's idempotency must skip a span only when re-running it would reproduce the
 *same* extraction, and re-extract when anything that shaped the output changed — a different LLM,
-a reworded prompt / schema, a different sampling regime, the verifier toggled on or off, or a
-changed context window. Keying on the span id alone (the pre-G1.7 behaviour) cannot see any of
-that: it would serve a stale extraction after a model upgrade. This module turns the *extraction
+a reworded prompt / schema, a different sampling regime, or a changed context window (its text
+*and* which spans produced it). Keying on the span id alone (the pre-G1.7 behaviour) cannot see any
+of that: it would serve a stale extraction after a model upgrade. This module turns the *extraction
 inputs* into a single hash that the idempotency check compares against the one stored on the span's
 prior extract ``Action`` (see ``core/proposition.py``).
+
+G1.22: the **verifier is deliberately *not* an extraction input** — the extractor's output does not
+depend on it, so folding the verifier signature into this key (the pre-G1.22 behaviour) meant a
+verifier toggle/upgrade tripped a full re-extraction instead of a cheap re-verify. Verification is
+now keyed as its own per-proposition stage (``core/proposition.py``: the verify ``Action``'s
+``verify_sig``), so a verifier change drives **verify-backfill**, never re-extraction.
+
+G1.24: the ordered context ``span_id``s are an input alongside the rendered ``context_text`` — a
+re-segmentation that changes *which* K spans form the context window must re-key even if the
+concatenated text looks similar, so the cache identity is deterministic on ingest identity rather
+than on textual coincidence.
 
 Deliberately **pure**: no DB, no torch, no LLM — hand-built inputs in, a hex digest out, so it is
 unit-testable in isolation, exactly like ``core/consistency.py`` and ``types/epistemic.py``. The
@@ -52,12 +63,12 @@ def extraction_content_hash(
     *,
     target_text: str,
     context_text: str,
+    context_span_ids: list[str],
     model: str,
     schema_version: int,
     prompt_sha: str,
     schema_sha: str,
     sampling: dict[str, Any],
-    verifier: dict[str, Any] | None,
 ) -> str:
     """SHA-256 over the extraction inputs — the pipeline-version discriminator.
 
@@ -65,6 +76,12 @@ def extraction_content_hash(
         target_text: the span text the extractor decomposes (the source of the claims).
         context_text: the preceding-window text shown to the model for reference resolution;
             included because changing the window changes the prompt and so can change the output.
+        context_span_ids: the **ordered** ids of the spans that produced ``context_text`` (G1.24).
+            The rendered text alone cannot distinguish a re-segmentation that changed *which* spans
+            front the window from one that did not — two different span sets can render
+            textually-similar context — so the span identity is keyed explicitly: cache identity is
+            deterministic on ingest identity, not on textual coincidence. Order matters (the window
+            is a sequence), so it is kept as a list, not a set.
         model: the extractor model id (``LLMClient.model``); recorded on ``Action.model`` too.
         schema_version: ``EXTRACT_SCHEMA_VERSION`` — a *semantic* version of the output shape.
             Since G1.15 it no longer carries invalidation alone (``prompt_sha``/``schema_sha`` do);
@@ -77,10 +94,10 @@ def extraction_content_hash(
             output schema invalidates even without a version bump. Key-order-insensitive.
         sampling: the decoding regime (temperature, top_p, ``n_samples`` …); a different regime
             yields a different extraction and a different agreement signal, so it is in the key.
-        verifier: ``None`` when no verifier is configured, else
-            ``{"model", "schema_version", "prompt_sha", "schema_sha"}``; toggling or changing the
-            verifier (model, prompt, or schema) changes the derived ``faithfulness``, so it must
-            invalidate the cache. The dict is opaque here — its SHAs are computed by ``verify.py``.
+
+    The verifier signature is **not** an input (G1.22): the extractor's output is independent of the
+    verifier, so verification is keyed as its own stage (``core/proposition.py``) and a verifier
+    change drives verify-backfill, not re-extraction.
 
     Inputs only — never the derived propositions/embeddings (cf. ``span_content_hash``,
     ``DomainPack.content_hash``): non-deterministic float drift must not change the digest.
@@ -88,11 +105,11 @@ def extraction_content_hash(
     payload = {
         "target_text": target_text,
         "context_text": context_text,
+        "context_span_ids": context_span_ids,
         "model": model,
         "schema_version": schema_version,
         "prompt_sha": prompt_sha,
         "schema_sha": schema_sha,
         "sampling": sampling,
-        "verifier": verifier,
     }
     return canonical_json_sha256(payload)

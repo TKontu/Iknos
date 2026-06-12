@@ -17,6 +17,7 @@ concurrently; each span's writes commit in their own short transaction.
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field, replace
@@ -47,10 +48,12 @@ from iknos.types.epistemic import (
     ProvisionalReason,
     Routing,
     combine_faithfulness,
+    decode_provisional_reasons,
     faithfulness_from_verdict,
     legacy_provisional,
     merge_provisional_reasons,
     provisional_reasons_for,
+    reassess_faithfulness_reasons,
     route_for,
 )
 from iknos.types.nodes import Span
@@ -720,20 +723,26 @@ class Propositionizer:
         return prop_ids, edge_ids
 
     async def _build_replay_results(
-        self, span: Span, reusable: ReusableExtraction
+        self, span: Span, reusable: ReusableExtraction, verify_sig: dict[str, Any] | None
     ) -> list[PropositionResult]:
         """Mint fresh :class:`PropositionResult`s from a cached extraction (G1.7b), for a new span.
 
         Each cached proposition becomes a new node: a new id, this span's provenance, the cached
-        epistemic fields + faithfulness/agreement copied verbatim, and a **freshly computed**
-        embedding. The vector is re-derived under the current substrate rather than copied from the
-        source proposition because ``content_hash`` does *not* pin the embedding model (only the LLM
+        epistemic fields + agreement copied verbatim, and a **freshly computed** embedding. The
+        vector is re-derived under the current substrate rather than copied from the source
+        proposition because ``content_hash`` does *not* pin the embedding model (only the LLM
         extractor) — re-embedding keeps the ANN space single-model by construction (G1.16) and the
         local forward pass is negligible next to the LLM call this replay skips. Empty cache → no
-        results (a cached empty extraction). The faithfulness-axis reason is re-folded
-        (:func:`_with_faithfulness_reason`) so a replay of a never-verified source (null
-        faithfulness) carries ``UNASSESSED_FAITHFULNESS`` (G1.21) exactly as a fresh degraded
-        ingest would — a quarantine is never silently dropped on replay.
+        results (a cached empty extraction).
+
+        **Faithfulness (G1.22).** The source's faithfulness is copied **only when the source's
+        verify-stage identity matches the reusing run's current verifier** (``verify_sig``): a match
+        means re-verifying would reproduce the same verdict, so the copy is sound. Otherwise the
+        copied score is stale (a different/absent verifier now), so faithfulness is reset to null
+        and the faithfulness reason re-derived to ``UNASSESSED_FAITHFULNESS``
+        (:func:`reassess_faithfulness_reasons`); the verify-backfill pass then completes it under
+        the current verifier (or it stays unassessed if there is none). Either way a quarantine is
+        never silently dropped on replay.
         """
         if not reusable.propositions:
             return []
@@ -741,27 +750,39 @@ class Propositionizer:
         vectors = await asyncio.to_thread(
             self.substrate.embed_passages, [c.text for c in reusable.propositions]
         )
-        return [
-            _with_faithfulness_reason(
-                PropositionResult(
-                    id=uuid.uuid4(),
-                    text=c.text,
-                    span_id=span.id,
-                    document_id=span.document_id,
-                    embedding=v,
-                    polarity=c.polarity,
-                    modality=c.modality,
-                    attribution=c.attribution,
-                    scope=c.scope,
-                    epistemic_class=c.epistemic_class,
-                    routing=c.routing,
-                    faithfulness=c.faithfulness,
-                    provisional_reasons=c.provisional_reasons,
-                    agreement=c.agreement,
+        verify_matches = reusable.source_verify_sig == verify_sig
+        results: list[PropositionResult] = []
+        for c, v in zip(reusable.propositions, vectors, strict=True):
+            if verify_matches:
+                # Identity matches → trust the copied faithfulness; re-fold the faithfulness reason
+                # (a copied null still lands UNASSESSED via G1.21).
+                faithfulness = c.faithfulness
+                reasons = c.provisional_reasons
+            else:
+                # Stale under the current verifier → unassess and queue for backfill.
+                faithfulness = None
+                reasons = reassess_faithfulness_reasons(c.provisional_reasons, None)
+            results.append(
+                _with_faithfulness_reason(
+                    PropositionResult(
+                        id=uuid.uuid4(),
+                        text=c.text,
+                        span_id=span.id,
+                        document_id=span.document_id,
+                        embedding=v,
+                        polarity=c.polarity,
+                        modality=c.modality,
+                        attribution=c.attribution,
+                        scope=c.scope,
+                        epistemic_class=c.epistemic_class,
+                        routing=c.routing,
+                        faithfulness=faithfulness,
+                        provisional_reasons=reasons,
+                        agreement=c.agreement,
+                    )
                 )
             )
-            for c, v in zip(reusable.propositions, vectors, strict=True)
-        ]
+        return results
 
     async def _persist_replay(
         self,
@@ -778,11 +799,12 @@ class Propositionizer:
 
         The reuse twin of :meth:`_persist`: same node/edge/index writes (shared
         :meth:`_write_propositions`), but the extract ``Action`` carries a ``reused_from`` pointer
-        instead of being a fresh LLM extraction, and **no verify Action is recorded** — the reused
-        ``faithfulness``/``provisional`` were already verified on the source proposition (the
-        verifier signature is in ``content_hash``), and the pointer keeps that original verify
-        ``Action`` one hop away. ``content_hash`` is still stored, so the *next* run sees this span
-        as already-extracted (a true no-op), exactly like a fresh extraction. When
+        instead of being a fresh LLM extraction, and **no verify Action is recorded here**: when
+        the source's verify identity matched the current verifier the reused faithfulness is sound
+        and ``reused_verify_sig`` records that (so the verify-backfill pass leaves the span alone);
+        when it did not match, the caller already reset faithfulness to unassessed and the backfill
+        pass verifies the span and records its own verify Action (G1.22). ``content_hash`` is still
+        stored, so the *next* run sees this span as already-extracted (a true no-op). When
         ``purge_existing`` is set, the span's superseded propositions are purged in this txn first
         (cascade re-extraction whose replacement happens to be a reuse-replay, G1.7r). Returns the
         Action id.
@@ -799,24 +821,32 @@ class Propositionizer:
         replay_outputs: dict[str, object] = {"propositions": prop_ids, "edges": edge_ids}
         if superseded:
             replay_outputs["superseded"] = superseded  # G1.7r cascade audit (as in _persist)
+        replay_inputs: dict[str, Any] = {
+            "target_span": str(span_id),
+            "context_spans": context_span_ids,
+            # G1.7 idempotency key — identical to a fresh extraction's, so a re-run no-ops.
+            "content_hash": content_hash,
+            "schema_version": EXTRACT_SCHEMA_VERSION,
+            # G1.7b: these propositions were replayed from a prior identical-pipeline extraction
+            # rather than re-running the LLM. The pointer keeps the audit chain — and the
+            # original verify Action behind the reused faithfulness — one hop away.
+            "reused_from": {
+                "span": str(reusable.source_span_id),
+                "action": str(reusable.source_action_id),
+            },
+        }
+        # G1.22: this replay copied the source's faithfulness only because the source's verify-stage
+        # identity matched the current verifier (the caller nulled it otherwise — see
+        # _build_replay_results). Recording it lets _span_verify_identity treat the replayed span as
+        # verified-under-this-sig without a verify Action, so the verify-backfill pass leaves it
+        # alone (the spec's "replay copies faithfulness only when verify identity matches").
+        if reusable.source_verify_sig is not None:
+            replay_inputs["reused_verify_sig"] = reusable.source_verify_sig
         action_id = await record_action(
             session,
             actor="propositionizer",
             action_type="extract",
-            inputs={
-                "target_span": str(span_id),
-                "context_spans": context_span_ids,
-                # G1.7 idempotency key — identical to a fresh extraction's, so a re-run no-ops.
-                "content_hash": content_hash,
-                "schema_version": EXTRACT_SCHEMA_VERSION,
-                # G1.7b: these propositions were replayed from a prior identical-pipeline extraction
-                # rather than re-running the LLM. The pointer keeps the audit chain — and the
-                # original verify Action behind the reused faithfulness — one hop away.
-                "reused_from": {
-                    "span": str(reusable.source_span_id),
-                    "action": str(reusable.source_action_id),
-                },
-            },
+            inputs=replay_inputs,
             outputs=replay_outputs,
             model=self.llm.model,
             sampling=extract_sampling,
@@ -900,60 +930,310 @@ class Propositionizer:
         # faithfulness-gate metric (Trial A5) straight from actions.outputs. Skip when there
         # are no propositions to verify (empty span).
         if verdicts:
-            assert self.verifier is not None
-            # A None verdict is a degraded-mode entry (G1.17 R2): the verifier was unavailable for
-            # that proposition, so faithfulness/provisional stayed null and the failure is recorded
-            # here (rather than crashing the batch) — the Action stays the faithfulness audit trail.
-            verdict_rows: list[dict[str, Any]] = []
-            for r, v in zip(results, verdicts, strict=True):
-                if v is None:
-                    verdict_rows.append(
-                        {
-                            "proposition": str(r.id),
-                            "verifier_unavailable": True,
-                            "faithfulness": r.faithfulness,
-                            "provisional_reasons": r.provisional_reasons,
-                        }
-                    )
-                else:
-                    verdict_rows.append(
-                        {
-                            "proposition": str(r.id),
-                            "entailment": v.entailment,
-                            "polarity_preserved": v.polarity_preserved,
-                            "modality_preserved": v.modality_preserved,
-                            "attribution_preserved": v.attribution_preserved,
-                            "faithfulness": r.faithfulness,
-                            "provisional_reasons": r.provisional_reasons,
-                        }
-                    )
-            await record_action(
-                session,
-                actor="verifier",
-                action_type="verify",
-                inputs={"target_span": str(span_id), "propositions": prop_ids},
-                outputs={"verdicts": verdict_rows},
-                model=self.verifier.llm.model,
-                sampling=self.verifier.sampling,
-            )
+            await self._record_verify_action(session, span_id, prop_ids, results, verdicts)
 
         await session.commit()
         return action_id
 
-    def _pipeline_hash(
-        self, spans: list[Span], index: int, raw_text: str, verifier_sig: dict[str, Any] | None
-    ) -> str:
+    async def _record_verify_action(
+        self,
+        session: AsyncSession,
+        span_id: uuid.UUID,
+        prop_ids: list[str],
+        results: list[PropositionResult],
+        verdicts: "list[_VerifyOut | None]",
+    ) -> None:
+        """Record one span's verify ``Action`` — shared by inline verify and backfill (G1.22).
+
+        The decomposed verdict rows are the faithfulness audit trail (Trial A5). A ``None`` verdict
+        is a degraded-mode entry (G1.17 R2): the verifier was unavailable for that proposition, so
+        its faithfulness stayed null and the failure is recorded rather than crashing the batch.
+
+        The current :meth:`_verify_sig` is stamped on the Action **only when every proposition
+        verified cleanly** — a degraded run (any verifier-unavailable proposition) omits it, so
+        :meth:`_span_verify_identity` reports the span as not-yet-verified under this identity and a
+        later run re-verifies it (verify-backfill retries transient verifier failures). No commit —
+        the caller owns the transaction boundary.
+        """
+        assert self.verifier is not None
+        verdict_rows: list[dict[str, Any]] = []
+        for r, v in zip(results, verdicts, strict=True):
+            if v is None:
+                verdict_rows.append(
+                    {
+                        "proposition": str(r.id),
+                        "verifier_unavailable": True,
+                        "faithfulness": r.faithfulness,
+                        "provisional_reasons": r.provisional_reasons,
+                    }
+                )
+            else:
+                verdict_rows.append(
+                    {
+                        "proposition": str(r.id),
+                        "entailment": v.entailment,
+                        "polarity_preserved": v.polarity_preserved,
+                        "modality_preserved": v.modality_preserved,
+                        "attribution_preserved": v.attribution_preserved,
+                        "faithfulness": r.faithfulness,
+                        "provisional_reasons": r.provisional_reasons,
+                    }
+                )
+        inputs: dict[str, Any] = {"target_span": str(span_id), "propositions": prop_ids}
+        if verdicts and all(v is not None for v in verdicts):
+            inputs["verify_sig"] = self._verify_sig()
+        await record_action(
+            session,
+            actor="verifier",
+            action_type="verify",
+            inputs=inputs,
+            outputs={"verdicts": verdict_rows},
+            model=self.verifier.llm.model,
+            sampling=self.verifier.sampling,
+        )
+
+    def _verify_sig(self) -> dict[str, Any] | None:
+        """The current verifier's stage identity, or ``None`` when no verifier is set (G1.22).
+
+        ``{model, schema_version, prompt_sha, schema_sha}`` — model + the G1.15 rendered-prompt and
+        schema digests, so a reworded or upgraded verifier has a *different* identity and reverifies
+        (verify-backfill) rather than replaying a stale verdict. This is the **verification** stage
+        key; it is deliberately *not* part of the extraction key (:meth:`_pipeline_hash`).
+        """
+        v = self.verifier
+        if v is None:
+            return None
+        return {
+            "model": v.llm.model,
+            "schema_version": v.SCHEMA_VERSION,
+            "prompt_sha": v.prompt_sha(),
+            "schema_sha": v.schema_sha(),
+        }
+
+    async def _span_verify_identity(
+        self, session: AsyncSession, span_id: uuid.UUID
+    ) -> dict[str, Any] | None:
+        """The verify-stage identity a span's current propositions were verified under, or ``None``.
+
+        Source of truth, newest-first: a ``verify`` ``Action`` for the span records the
+        ``verify_sig`` it ran under (only when the whole span verified cleanly; a degraded run omits
+        it so the span re-verifies); a G1.7b **replay** instead records ``reused_verify_sig`` on its
+        extract ``Action`` (it copied an already-verified faithfulness without re-running). ``None``
+        means never verified under any identity — the verify-backfill trigger. Compared to
+        :meth:`_verify_sig` to decide whether (re-)verification is owed (G1.22).
+        """
+        # Select the whole ``inputs`` jsonb column (decodes to a Python dict) rather than an
+        # ``inputs->'verify_sig'`` sub-expression, whose driver typing is unspecified — the same
+        # discipline as ``reuse.find_reusable_extraction``.
+        verify_row = await session.execute(
+            text(
+                "SELECT inputs FROM actions WHERE actor = 'verifier' "
+                "AND inputs->>'target_span' = :sid ORDER BY timestamp DESC LIMIT 1"
+            ),
+            {"sid": str(span_id)},
+        )
+        verify_inputs = verify_row.scalar_one_or_none()
+        if verify_inputs is not None and verify_inputs.get("verify_sig") is not None:
+            verified: dict[str, Any] = verify_inputs["verify_sig"]
+            return verified
+        extract_row = await session.execute(
+            text(
+                "SELECT inputs FROM actions WHERE actor = 'propositionizer' "
+                "AND inputs->>'target_span' = :sid ORDER BY timestamp DESC LIMIT 1"
+            ),
+            {"sid": str(span_id)},
+        )
+        extract_inputs = extract_row.scalar_one_or_none()
+        if extract_inputs is not None and extract_inputs.get("reused_verify_sig") is not None:
+            reused: dict[str, Any] = extract_inputs["reused_verify_sig"]
+            return reused
+        return None
+
+    async def backfill_verification(
+        self,
+        session: AsyncSession,
+        document_id: uuid.UUID,
+        spans: list[Span],
+        raw_text: str,
+    ) -> list[uuid.UUID]:
+        """Verify already-extracted propositions whose verify identity is stale (G1.22 entrypoint).
+
+        The decoupled verification stage. For each span whose propositions are **not** verified
+        under the current verifier (:meth:`_verify_sig` vs :meth:`_span_verify_identity`), re-run
+        the verifier over the *existing* propositions, recompute faithfulness from the stored
+        agreement, update ``faithfulness``/``provisional``(+reasons) in place, and record a verify
+        ``Action`` — **without re-running the extractor or purging anything** (the extractor's
+        output does not depend on the verifier, so a verifier toggle/upgrade is a cheap re-verify,
+        not a re-extraction). A no-op when no verifier is set (nothing can be assessed) or every
+        span is already verified under the current identity. Per-span transaction isolation
+        (G1.17 R1): one span's failure rolls back only its own update. Returns the backfilled span
+        ids. Called at the tail of :meth:`propositionize_document`, and usable alone to complete
+        faithfulness when a verifier is first enabled on a previously verifier-off corpus.
+        """
+        if self.verifier is None:
+            return []
+        sig = self._verify_sig()
+        backfilled: list[uuid.UUID] = []
+        for span in spans:
+            if await self._span_verify_identity(session, span.id) == sig:
+                continue  # already verified under the current identity — true no-op.
+            try:
+                if await self._verify_backfill_span(session, span, raw_text):
+                    backfilled.append(span.id)
+            except Exception:  # noqa: BLE001 — isolate; roll back this span and continue
+                await session.rollback()
+                logger.exception("verify-backfill failed for span %s; isolating", span.id)
+        return backfilled
+
+    async def _verify_backfill_span(self, session: AsyncSession, span: Span, raw_text: str) -> bool:
+        """Re-verify one span's existing propositions and update them in place (G1.22).
+
+        Loads the committed propositions, runs the verifier over each (degrading per-prop like
+        the inline pass, G1.17 R2 — a verifier failure leaves that atom unassessed rather than
+        crashing the batch), recomputes faithfulness from the *stored* agreement and the span's
+        parse-quality, rewrites ``faithfulness``/``provisional``(+reasons) on the node, and records
+        a verify ``Action`` in the same transaction. ``False`` (no commit) when the span has no
+        propositions (an empty extraction — nothing to verify). The faithfulness leg is
+        *re-derived* (:func:`reassess_faithfulness_reasons`), so a prior ``UNASSESSED_FAITHFULNESS``
+        is replaced by the assessed result while an independent twin reason survives.
+        """
+        assert self.verifier is not None
+        verifier = self.verifier
+        props = await self._load_span_propositions(session, span)
+        if not props:
+            return False
+        source = span_text(raw_text, span)
+        parse_quality = parse_quality_factor(worst_source_quality(span.layout))
+        sem = asyncio.Semaphore(self.concurrency)
+
+        async def verify_one(
+            r: PropositionResult,
+        ) -> tuple[PropositionResult, "_VerifyOut | None"]:
+            try:
+                async with sem:
+                    verdict = await verifier.verify_proposition(source, r)
+            except Exception as exc:  # noqa: BLE001 — degrade (R2), do not crash the backfill
+                logger.warning(
+                    "verifier unavailable for proposition %s (span %s): %s", r.id, span.id, exc
+                )
+                degraded = replace(
+                    r,
+                    faithfulness=None,
+                    provisional_reasons=reassess_faithfulness_reasons(r.provisional_reasons, None),
+                )
+                return degraded, None
+            verify_component = faithfulness_from_verdict(
+                verdict.entailment, verdict.polarity_preserved, verdict.modality_preserved
+            )
+            agreement = r.agreement if r.agreement is not None else 1.0
+            faith = combine_faithfulness(verify_component, agreement, parse_quality)
+            scored = replace(
+                r,
+                faithfulness=faith,
+                provisional_reasons=reassess_faithfulness_reasons(r.provisional_reasons, faith),
+            )
+            return scored, verdict
+
+        pairs = await asyncio.gather(*(verify_one(r) for r in props))
+        scored = [s for s, _ in pairs]
+        verdicts = [v for _, v in pairs]
+        for r in scored:
+            await self._update_proposition_faithfulness(session, r)
+        await self._record_verify_action(
+            session, span.id, [str(r.id) for r in scored], scored, verdicts
+        )
+        await session.commit()
+        return True
+
+    async def _load_span_propositions(
+        self, session: AsyncSession, span: Span
+    ) -> list[PropositionResult]:
+        """Read a span's committed propositions as :class:`PropositionResult`s (G1.22 backfill).
+
+        Only the fields verification + the in-place update need: the epistemic operators and text
+        (for the verifier), the stored ``agreement`` and existing ``provisional_reasons`` (to
+        recompute and preserve non-faithfulness reasons). The embedding is **not** read — backfill
+        rewrites faithfulness, never the vector — so it is left empty; these results are never
+        persisted through :meth:`_write_propositions`.
+        """
+        from iknos.db.age import cypher_map, execute_cypher, parse_agtype_map, unquote_agtype
+
+        rows = await execute_cypher(
+            session,
+            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(s:Span {cypher_map({'id': str(span.id)})}) "
+            "RETURN p.id, properties(p)",
+            returns="id agtype, props agtype",
+        )
+        results: list[PropositionResult] = []
+        for rid, raw in rows:
+            props = parse_agtype_map(raw)
+            results.append(
+                PropositionResult(
+                    id=uuid.UUID(unquote_agtype(rid)),
+                    text=props["text"],
+                    span_id=span.id,
+                    document_id=span.document_id,
+                    embedding=[],
+                    polarity=Polarity(props["polarity"]),
+                    modality=Modality(props["modality"]),
+                    attribution=Attribution(props["attribution"]),
+                    scope=props.get("scope", ""),
+                    epistemic_class=EpistemicClass(props["epistemic_class"]),
+                    routing=Routing(props["routing"]),
+                    faithfulness=props.get("faithfulness"),
+                    provisional_reasons=decode_provisional_reasons(
+                        props.get("provisional_reasons")
+                    ),
+                    agreement=props.get("agreement"),
+                )
+            )
+        return results
+
+    async def _update_proposition_faithfulness(
+        self, session: AsyncSession, r: PropositionResult
+    ) -> None:
+        """Rewrite a proposition node's faithfulness/provisional fields in place (G1.22 backfill).
+
+        A targeted per-property ``SET`` over the three faithfulness-derived properties only — the
+        epistemic fields, text, and indexes are untouched (the extractor output did not change, only
+        its grounding assessment). Mirrors the encoding of :meth:`_write_propositions` and the
+        in-place update in ``core/reference.py`` (the reason list is a JSON string; the legacy
+        boolean tracks non-emptiness; ``faithfulness``/``provisional`` ``null`` when unassessed).
+        """
+        from iknos.db.age import cypher_map, cypher_string_literal, execute_cypher
+
+        # json.dumps renders Cypher-valid scalar literals: a float, or `null`/`true`/`false`.
+        faith_lit = json.dumps(r.faithfulness)
+        provisional = legacy_provisional(r.faithfulness, r.provisional_reasons)
+        provisional_lit = json.dumps(provisional)
+        reasons_lit = cypher_string_literal(json.dumps(r.provisional_reasons))
+        await execute_cypher(
+            session,
+            f"MATCH (p:Proposition {cypher_map({'id': str(r.id)})}) "
+            f"SET p.faithfulness = {faith_lit}, p.provisional_reasons = {reasons_lit}, "
+            f"p.provisional = {provisional_lit}",
+        )
+
+    def _pipeline_hash(self, spans: list[Span], index: int, raw_text: str) -> str:
         """The G1.7 content-addressed idempotency key for one span's extraction (core/cache.py).
 
-        Pure (no DB): the target text, the preceding-window context the extractor actually sees,
-        and the full pipeline identity — model, schema version, sampling regime (incl. n_samples),
-        and verifier signature. Two runs that would produce the same extraction share a key.
+        Pure (no DB): the target text, the preceding-window context the extractor actually sees
+        (its text *and* the ordered ids of the spans that produced it, G1.24), and the full
+        extractor identity — model, schema version, sampling regime (incl. n_samples). Two runs
+        that would produce the same extraction share a key.
+
+        The verifier is **not** in this key (G1.22): the extractor's output is independent of it, so
+        a verifier toggle/upgrade drives verify-backfill, not re-extraction
+        (:meth:`_span_verify_identity` keys the verify stage separately).
         """
-        _, context_text = build_context(spans, index, raw_text, self.context_window)
+        context_spans, context_text = build_context(spans, index, raw_text, self.context_window)
         regime = {**self.sampling, "n_samples": self.n_samples}
         return extraction_content_hash(
             target_text=span_text(raw_text, spans[index]),
             context_text=context_text,
+            # G1.24: which spans (ordered) front the window, so a re-segmentation that changes the
+            # K-span context set re-keys even when the rendered text looks similar.
+            context_span_ids=[str(s.id) for s in context_spans],
             model=self.llm.model,
             schema_version=EXTRACT_SCHEMA_VERSION,
             # G1.15: the rendered prompt + schema themselves, so a reworded prompt re-extracts
@@ -961,7 +1241,6 @@ class Propositionizer:
             prompt_sha=EXTRACTOR_PROMPT_SHA,
             schema_sha=EXTRACTOR_SCHEMA_SHA,
             sampling=regime,
-            verifier=verifier_sig,
         )
 
     async def propositionize_document(
@@ -987,29 +1266,19 @@ class Propositionizer:
         # Phase 1: version-aware idempotency (G1.7), serial reads on the shared session. Each
         # span's pipeline content hash is compared against the one stored on its prior extract
         # Action: identical → skip (true no-op); different → the extractor model/prompt/regime/
-        # verifier changed since it was extracted, so fail loud rather than orphan the old
+        # context changed since it was extracted, so fail loud rather than orphan the old
         # propositions (cascade re-extract is still future); absent → never extracted, so either
         # *replay* a prior identical-pipeline extraction (G1.7b cross-doc reuse, below) or run the
-        # LLM. The hash is computed once here and reused at persist time so the stored key can never
-        # drift from the decision it drove.
-        verifier_sig = (
-            {
-                "model": self.verifier.llm.model,
-                "schema_version": self.verifier.SCHEMA_VERSION,
-                # G1.15: hash the verifier's actual prompt + schema too, so a reworded verifier
-                # re-derives faithfulness instead of replaying a stale verdict.
-                "prompt_sha": self.verifier.prompt_sha(),
-                "schema_sha": self.verifier.schema_sha(),
-            }
-            if self.verifier is not None
-            else None
-        )
+        # LLM. The verifier is NOT in this key (G1.22) — a verifier change drives the separate
+        # verify-backfill pass below, not re-extraction. The hash is computed once here and reused
+        # at persist time so the stored key can never drift from the decision it drove.
+        verify_sig = self._verify_sig()
         pending: list[int] = []
         to_replay: list[tuple[int, ReusableExtraction]] = []
         hash_by_index: dict[int, str] = {}
         stale: set[int] = set()  # indices whose superseded propositions must be purged (G1.7r)
         for i, s in enumerate(spans):
-            chash = self._pipeline_hash(spans, i, raw_text, verifier_sig)
+            chash = self._pipeline_hash(spans, i, raw_text)
             hash_by_index[i] = chash
             stored = await self._extracted_hash(session, s.id)
             if stored == chash:
@@ -1094,7 +1363,7 @@ class Propositionizer:
             i: int, reusable: ReusableExtraction
         ) -> tuple[int, list[PropositionResult], ReusableExtraction, BaseException | None]:
             try:
-                results = await self._build_replay_results(spans[i], reusable)
+                results = await self._build_replay_results(spans[i], reusable, verify_sig)
                 return i, results, reusable, None
             except Exception as exc:  # noqa: BLE001 — isolate; the span re-runs next time
                 logger.exception("replay failed for span %s; isolating", spans[i].id)
@@ -1156,8 +1425,9 @@ class Propositionizer:
                 )
 
         # Phase 3-replay (G1.7b): persist the replayed spans, same per-span isolation. Each records
-        # an extract Action with a reused_from pointer and no verify Action (the reused faithfulness
-        # is already verified at the source) — but the same content_hash, so a re-run no-ops.
+        # an extract Action with a reused_from pointer and no verify Action here (when the source's
+        # verify identity matched, the copied faithfulness is sound; otherwise the Phase 4 backfill
+        # below verifies it) — same content_hash, so a re-run no-ops.
         for i, results, reusable in replayed:
             context_spans, _ = build_context(spans, i, raw_text, self.context_window)
             context_ids = [str(s.id) for s in context_spans]
@@ -1180,4 +1450,13 @@ class Propositionizer:
                 failed_spans.append(
                     FailedSpan(span_id=spans[i].id, phase="persist", error=str(exc))
                 )
+
+        # Phase 4: verify-backfill (G1.22) — the decoupled verification stage. A no-op span (already
+        # extracted) whose verifier was since enabled/upgraded, or a replay whose source verify
+        # identity did not match, is verified now over its existing propositions: faithfulness is
+        # completed in place with zero extractor calls and zero purges. Freshly-verified and
+        # identity-matched spans are skipped (already verified under this identity). Verifier-off →
+        # no-op (those atoms stay UNASSESSED until a verifier is configured, G1.21).
+        await self.backfill_verification(session, document_id, spans, raw_text)
+
         return PropositionizeReport(action_ids=action_ids, failed_spans=failed_spans)
