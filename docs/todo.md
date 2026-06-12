@@ -303,17 +303,22 @@ cite a gap file by name resolve there):
       try/`_persist`/except-rollback) — the reference implementation `atomic_write` generalizes; the
       "caller owns transaction" operators (`domain/loader`, `boxes/registry`, `reference_corpus`,
       `ingest`) correctly defer the commit to a caller that should wrap with `atomic_write`.
-- [ ] **W8 — Cypher chokepoint + serde round-trips** *(assessment, P10)*. ~140
+- [~] **W8 — Cypher chokepoint + serde round-trips** *(assessment, P10)*. ~140
       call sites interpolate labels/edge types/ids/timestamps into f-string
       Cypher outside the `db/age.py` helpers — safe today (values come from
       enums/UUIDs/`isoformat()`), but convention, not construction: one future
-      call site with a user-influenced value breaks it silently. (1) A thin
+      call site with a user-influenced value breaks it silently. (1) **Open:** a thin
       query-builder over `db/age.py` (validated label/edge enums, mandatory
       value escaping through the `cypher_map` machinery); migrate the writers;
-      a CI grep gate against raw f-string Cypher outside it. (2) Round-trip
-      property tests for every manual serde pair (`Sensitivity.flatten` /
-      `from_props`, `SourceInterest`, box serde, `same_as_to_props`) so a
-      write/read format drift cannot ship without a test going red.
+      a CI grep gate against raw f-string Cypher outside it — the broadest-touch
+      slice, its own PR (the gate must land *with* the migration, else it red-flags
+      the unmigrated sites). (2) **Shipped** — `tests/unit/test_serde_roundtrips.py`:
+      Hypothesis property tests for every manual serde pair (`Sensitivity.flatten` /
+      `from_props`, the `SourceInterest` pair via box serde, box serde,
+      `same_as_to_props`), each round-tripping through `_age_stored` (the faithful
+      AGE read shape — `cypher_map` JSON-encodes list values into string properties,
+      which `from_props` must decode), so a write/read format drift cannot ship
+      without a test going red.
 - [ ] **W11 — small hardening batch** *(assessment, minor findings — one PR)*:
       embedding-model identity checked at substrate construction, not first
       write (fail before the expensive re-embed, `core/embeddings.py`);
