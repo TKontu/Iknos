@@ -421,7 +421,7 @@ clear-on-non-hold is done by **always writing `pending_refutation`** (`true` on 
 otherwise) so any non-refuted/authorised verdict lifts a prior hold. `ensemble_gate.py` and
 `classify_state` untouched; the §7.2 one-liner is backported to `architecture.md`.
 
-### R4 — HNSW indexes on both pgvector tables + distance-operator standardization
+### R4 — HNSW indexes on both pgvector tables + distance-operator standardization — **shipped**
 
 No ANN index exists on `document_embeddings`/`proposition_embeddings`. New
 migration (next free revision): `CREATE INDEX ... USING hnsw (embedding
@@ -432,7 +432,15 @@ robustness if normalization drifts. Comment both ORM columns: "k-NN must use `<=
 to hit the index." Accept: upgrade on fresh + populated DB; `EXPLAIN ... ORDER BY
 embedding <=> $1 LIMIT 10` shows the hnsw index (`SET enable_seqscan = off` on
 tiny tables); downgrade clean. Test: integration, mirroring the migration-test
-style. Do not: change the 1024 dimension; add IVFFlat.
+style. Do not: change the 1024 dimension; add IVFFlat. **Shipped** as specified
+(migration `0013_embedding_hnsw_indexes`): HNSW `vector_cosine_ops` (`m=16,
+ef_construction=64`) on both tables via `op.execute`, **mirrored in `iknos.db.orm`
+`__table_args__`** (pgvector-sqlalchemy `postgresql_using='hnsw'`) so `alembic check`
+is drift-clean; both `embedding` columns carry the `<=>` note; `tests/integration/
+test_embedding_hnsw_indexes.py` asserts the index exists + the planner uses it for a
+`<=>` k-NN. Verified end-to-end on live pgvector 0.8.2 (upgrade → EXPLAIN Index Scan →
+downgrade clean). **V9** (the push-down query + recall-vs-exact measurement) is the
+consumer that builds on it.
 
 ### V9 — pgvector k-NN push-down + recall-vs-exact measurement *(needs R4)*
 

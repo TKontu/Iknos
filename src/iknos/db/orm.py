@@ -115,6 +115,15 @@ class DocumentEmbedding(Base):
             unique=True,
             postgresql_where=text("span_id IS NOT NULL"),
         ),
+        # HNSW ANN index (R4) — mirrors migration 0013 so the autogenerate-drift gate passes.
+        # k-NN must order by `<=>` (vector_cosine_ops) to use it; see the `embedding` column.
+        Index(
+            "ix_document_embeddings_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -131,6 +140,7 @@ class DocumentEmbedding(Base):
     span_start: Mapped[int] = mapped_column(Integer, nullable=False)
     span_end: Mapped[int] = mapped_column(Integer, nullable=False)
     level: Mapped[int] = mapped_column(Integer, nullable=False)
+    # k-NN must use `<=>` (cosine) to hit the HNSW index (R4, migration 0013).
     embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
     # The embedding model that produced this vector — the ANN **vector-space identity** (G1.16).
     # Cosine across two models is meaningless, so a same-dimension model swap must be refused
@@ -152,6 +162,17 @@ class PropositionEmbedding(Base):
     """
 
     __tablename__ = "proposition_embeddings"
+    __table_args__ = (
+        # HNSW ANN index (R4) — mirrors migration 0013 so the autogenerate-drift gate passes.
+        # k-NN must order by `<=>` (vector_cosine_ops) to use it; see the `embedding` column.
+        Index(
+            "ix_proposition_embeddings_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -165,6 +186,7 @@ class PropositionEmbedding(Base):
         nullable=False,
         index=True,
     )
+    # k-NN must use `<=>` (cosine) to hit the HNSW index (R4, migration 0013).
     embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
     # The embedding model that produced this vector — the ANN vector-space identity (G1.16).
     # See DocumentEmbedding.model: a model swap is refused, not mixed into one ANN space.
