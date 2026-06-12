@@ -16,6 +16,7 @@ from iknos.core.consistency import (
     cluster_candidates,
     cluster_candidates_partitioned,
     consolidate_samples,
+    require_sampling_diversity,
 )
 from iknos.types.epistemic import Attribution, EpistemicClass, Modality, Polarity
 
@@ -206,3 +207,41 @@ def test_consolidate_distinct_claims_opposite_polarity_are_not_twins() -> None:
     consolidated, twins = consolidate_samples([a, b], n_samples=2)
     assert twins == []
     assert not any(c.polarity_unstable for c in consolidated)
+
+
+# --- multi-sample sampling-diversity guard (G1.23) ---
+
+
+def test_require_sampling_diversity_rejects_greedy_multisample() -> None:
+    # n>1 at temperature 0 → identical samples → vacuous agreement; rejected at construction.
+    with pytest.raises(ValueError, match="temperature>0"):
+        require_sampling_diversity(3, {"temperature": 0.0})
+    with pytest.raises(ValueError, match="temperature>0"):
+        require_sampling_diversity(2, {})  # missing temperature defaults to greedy
+
+
+def test_require_sampling_diversity_topp_does_not_rescue_greedy() -> None:
+    # top_p is moot at temperature 0 (decoding is argmax), so it cannot satisfy the guard.
+    with pytest.raises(ValueError, match="temperature>0"):
+        require_sampling_diversity(3, {"temperature": 0.0, "top_p": 0.9})
+
+
+def test_require_sampling_diversity_allows_nonzero_temperature() -> None:
+    require_sampling_diversity(3, {"temperature": 0.7})  # does not raise
+
+
+def test_require_sampling_diversity_single_sample_is_unconstrained() -> None:
+    # n=1 has no agreement signal to fake, so temperature 0 is fine (the single-pass default).
+    require_sampling_diversity(1, {"temperature": 0.0})
+    require_sampling_diversity(1, {})
+
+
+def test_require_sampling_diversity_rejects_nonpositive_n() -> None:
+    with pytest.raises(ValueError, match=">= 1"):
+        require_sampling_diversity(0, {"temperature": 0.7})
+
+
+def test_require_sampling_diversity_label_is_surfaced() -> None:
+    # A future multi-sample verify path reuses the guard with its own label.
+    with pytest.raises(ValueError, match="multi-sample verify"):
+        require_sampling_diversity(2, {"temperature": 0.0}, label="multi-sample verify")
