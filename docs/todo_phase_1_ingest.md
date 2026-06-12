@@ -452,17 +452,20 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
 
 ### From the ingest decision thread *(D1/D2 deltas, merged from `archive/todo_ingest.md` 2026-06-11 — the decisions now live in §3.1/§6.1/§2; these are the code changes they require)*
 
-- [ ] **G1.20 — `calibrate(agreement)` in the combiner (D1 delta).**
-      `combine_faithfulness` is shipped multiplicative with the calibration seam
-      documented but identity. Add `calibrate(agreement)` per §3.1: a mild concave /
-      Wilson-style map over the raw agreement (small-N is coarse — N=3 → {0, ⅓, ⅔, 1}),
-      identity until Trial A3 fits the per-model curve; the **raw** agreement stays the
-      persisted value (calibration at combine time only, so the curve can change
-      without rewriting stored data). Land the function + config seam before A5 fits
-      `PROP_AGREEMENT_THRESHOLD`, even while the curve is identity — the threshold must
-      be calibrated against the final code path. Tests: identity curve ⇒ behavior
-      byte-identical to today; a non-identity fixture curve moves faithfulness in the
-      conservative direction only.
+- [x] **G1.20 — `calibrate(agreement)` in the combiner (D1 delta)** *(shipped)*.
+      `types/epistemic.py::calibrate_agreement(agreement)` is the §3.1 seam — **identity**
+      now (byte-identical to pre-G1.20), with the contract documented for the Trial-A3
+      fit: a conservative (`f(a) <= a`), monotonic, concave / Wilson-style map over the
+      coarse small-N agreement (N=3 → {0, ⅓, ⅔, 1}). `combine_faithfulness` gained a
+      keyword-only `agreement_curve` seam (default `calibrate_agreement`) applied at
+      combine time *only* — so the **raw** agreement stays the persisted value
+      (`Proposition.agreement`) and refitting the curve never rewrites stored data; the
+      curve's output is range-validated (a misfit curve fails loud, never clamps). The
+      propositionizer's existing `combine_faithfulness(...)` call routes through the
+      default curve, so `PROP_AGREEMENT_THRESHOLD` (Trial A5) is fit against the final
+      code path. Tests: identity ⇒ byte-identical to the raw product; a non-identity
+      fixture curve (`a²`) moves faithfulness in the conservative direction only and does
+      not mutate the agreement it was handed; an out-of-range curve raises.
 - [x] **G1.21 — degraded-mode `null` ⇒ provisional (D2 behavior change)** *(shipped)*.
       Pre-G1.21 behavior left `provisional` **null** when the verifier is off; §3.1 now decides
       `faithfulness = null` (unassessed) ⇒ **provisional = true** with reason
