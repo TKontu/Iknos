@@ -1,0 +1,26 @@
+BEARING FAILURE ANALYSIS
+Severn Bearings Ltd — Technical Services Department
+Subject: Failed high-speed-shaft bearing, Cairn Brae WTG-14 (asset CB-GBX-03)
+Our reference: SB-FA-2024-118
+Date: 15 March 2024
+
+1. Scope
+At the request of the customer, Severn Bearings examined the failed drive-end high-speed-shaft bearing returned from turbine WTG-14. This report records our disassembly observations and our assessment of the failure mechanism. The bearing supplied to this position is our type SB-CRB-2200, a single-row cylindrical roller bearing.
+
+2. As-received condition
+The bearing was received disassembled, with the rolling elements, cage fragments and both rings bagged together. The components were cleaned in solvent before examination.
+
+3. Disassembly observations
+Disassembly showed advanced spalling across approximately 60% of the inner-ring raceway, with secondary smearing on three of the rollers. The cage was fractured in two places. The outer-ring raceway showed a single circumferential band of discoloration consistent with elevated temperature. No corrosion pitting was observed on any raceway. The roller end faces showed light scoring but no through-cracking.
+
+4. Measurements
+The radial internal clearance could not be measured on the assembled bearing because of the cage damage. Ring bore and outside-diameter measurements were within the drawing tolerance. Surface-roughness readings taken on an undamaged arc of the outer raceway were within specification.
+
+5. Assessment
+The spalling morphology — initiating sub-surface and progressing circumferentially — together with the absence of corrosion or contamination marking, is in Severn Bearings' assessment characteristic of mounting-induced preload error introduced during installation, and is not attributable to any deficiency in the bearing as supplied. A bearing mounted with excessive interference or angular misalignment will run with an elevated internal load and reach the observed damage state well within its rated life.
+
+6. Recommendation
+We recommend that the customer review the mounting procedure and the fitter's records for the most recent installation of this bearing, and verify the shaft and housing fits against our mounting drawing. Severn Bearings is able to supply a replacement to the original specification on receipt of an order.
+
+7. Reservation
+This assessment is based on examination of the returned components only. Severn Bearings has not had sight of the lubrication records, the oil analysis, or the operating data for this turbine, and our conclusion may require revision if that information indicates a different mechanism.

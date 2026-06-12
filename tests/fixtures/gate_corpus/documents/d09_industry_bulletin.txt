@@ -1,0 +1,19 @@
+DRIVETRAIN RELIABILITY BULLETIN
+Wind Drivetrain Reliability Forum — Technical Bulletin TB-2021-09
+High-Speed-Shaft Bearing Failures: Dominant Failure Modes and Investigation Guidance
+Issued 2021. Reference material for failure investigators.
+
+1. Purpose
+This bulletin summarises field experience across the operating fleet on the failure of high-speed-shaft bearings in geared wind-turbine drivetrains. It is intended as a starting framework for failure investigations, not as a diagnosis of any particular event. Investigators should treat the modes below as candidate hypotheses to be confirmed or excluded by evidence.
+
+2. Dominant failure modes
+Field experience identifies four dominant failure modes for high-speed-shaft bearings in this drivetrain class. First, loss of the lubricating film, through oil degradation, contamination, water ingress, or use of an incorrect oil grade, leading to metal-to-metal contact and surface-initiated damage. Second, mounting and preload errors introduced during installation or replacement, producing elevated internal load and early sub-surface fatigue. Third, transient overload and torque reversals from grid events or extreme gusts, which can locally overstress the raceway. Fourth, material or manufacturing non-conformance of the bearing itself, such as out-of-specification hardness, inclusions, or a counterfeit or non-approved part substituted for the specified one.
+
+3. Distinguishing the modes
+These modes leave partly overlapping evidence, and more than one can be present. Lubrication-related failures are typically preceded by oil degradation, rising temperature, and a developing vibration signature, often without a discrete alarm. Mounting errors are associated with a recent installation or replacement and with damage patterns indicating misalignment or preload. Overload leaves a signature in the load and torque history. Material non-conformance is established or excluded only by independent metallurgical examination of the failed part.
+
+4. Investigation guidance
+A sound investigation gathers, at minimum: the lubrication and oil-analysis history; the maintenance and installation record for the bearing; the load and vibration history; and an independent metallurgical examination of the failed bearing. Each candidate mode should be actively tested against this evidence — including evidence that would exclude it — rather than confirmed from a single source. Investigators are reminded that a supplier's or installer's own assessment of a failure carries an interest and should be weighed accordingly.
+
+5. Note on retraction
+Investigations not infrequently reverse an early conclusion when a record is found to be in error or a later analysis arrives. The framework above is provisional throughout an investigation; a mode favoured early on the available records may be excluded later, and the investigation file should make such reversals explicit rather than quietly overwriting the earlier view.

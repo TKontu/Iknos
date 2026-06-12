@@ -1,0 +1,23 @@
+DRIVETRAIN VIBRATION AND DUTY SURVEY — TURBINE WTG-14
+Cairn Brae Wind Farm — Condition Monitoring Group
+Survey reference: CM-2024-077
+Date of report: 5 March 2024
+Data interval reviewed: 1 March 2023 — 18 February 2024
+
+1. Purpose
+Following the high-speed-shaft bearing failure on WTG-14, the condition-monitoring group reviewed the stored vibration and operating data for the twelve months preceding the event. The purpose of this survey is to characterise the drivetrain's behaviour over that period and to document the duty the gearbox actually saw.
+
+2. Data sources
+The review used the nacelle vibration channels (main bearing, high-speed stage radial and axial), the high-speed-shaft speed signal, and the estimated shaft torque derived from generator power and speed. Data were available at ten-minute statistical resolution for the whole interval, with high-rate captures triggered on threshold events.
+
+3. Duty and loading
+Across the monitored interval the high-speed-shaft torque trace stayed within the normal operating envelope for the NDS-3 gearbox, with a maximum recorded value of 96% of nameplate torque reached briefly during a gust event in December 2023. The duty distribution was unremarkable for a site of this class: the drivetrain spent most of its hours in the mid-power band, and the survey found nothing in the torque or speed history to distinguish this turbine's duty from its neighbours. No torque reversals or transient spikes beyond the logged maximum were present in the high-rate captures.
+
+4. Vibration trend
+The high-speed-stage radial vibration was stable until late September 2023, when a slow upward trend began. The trend accelerated through January and February 2024, reaching the protection threshold at the time of failure. The signature in the final weeks — rising broadband energy with emerging bearing-defect harmonics — is consistent with a developing rolling-element bearing fault at the high-speed shaft. The non-drive-end channels did not show the same trend.
+
+5. Temperature
+The high-speed-shaft bearing temperature, where available from the gearbox sensor, tracked a few degrees above its historical band from December 2023 onward, consistent with increasing friction at the developing fault.
+
+6. Observations
+The vibration history locates the developing fault at the high-speed-shaft drive-end bearing and dates its onset to around September 2023. The duty review found the drivetrain to have operated within its normal envelope throughout; nothing in the load history is exceptional. The survey does not by itself identify the cause of the bearing fault, only its location and progression.

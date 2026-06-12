@@ -1,0 +1,20 @@
+INVESTIGATION FILE CORRECTION NOTICE
+Cairn Brae Wind Farm — WTG-14 high-speed-shaft bearing failure investigation
+Correction reference: IR-2024-031-C1
+Date: 30 May 2024
+Issued by: Investigation lead. Distribution: investigation file, OEM, bearing supplier.
+
+1. Purpose
+This notice corrects a record relied upon earlier in the WTG-14 investigation. It is issued because the correction materially changes the standing of one of the candidate causes. The earlier reports are not withdrawn, but the record corrected here is to be disregarded wherever it was used.
+
+2. The record corrected
+The maintenance-log extract dated 22 February 2024 (and the conclusions drawn from it) recorded, against turbine WTG-14, work order 4471 of 9 November 2023: "high-speed-shaft drive-end bearing (position 3) replaced". This entry was treated during the investigation as establishing that the failed bearing had been installed approximately three months before the failure, and it was the principal basis for considering an installation or mounting error as the cause.
+
+3. What was established
+On a reconciliation of the maintenance management system against the original paper work orders and the parts-issue records, it was established that work order 4471 was entered against the wrong asset. The high-speed-shaft bearing replacement that work order 4471 describes was performed on turbine WTG-07 (gearbox CB-GBX-07), not on turbine WTG-14. The parts-issue record shows the replacement bearing for work order 4471 was drawn to WTG-07. No high-speed-shaft bearing replacement was carried out on turbine WTG-14.
+
+4. Consequence
+The bearing in service on WTG-14 at the time of the failure was the original unit fitted at commissioning in 2018. It had not been removed, replaced or re-installed in the period before the failure. The installation- or mounting-error hypothesis, which rested on the existence of a recent replacement, is no longer supported by the evidence and is withdrawn as a candidate cause. The supplier's assessment (report SB-FA-2024-118), which attributed the damage to a mounting error during a recent installation, is correspondingly undermined, as there was no recent installation.
+
+5. Standing of the investigation
+With the recent-replacement record removed, the evidence pointing to a lubrication-related failure — the deferred oil change, the degraded oil observed by the technician, the substitute oil grade in use during 2023, and the absence of any material or load anomaly — is no longer competing with an installation explanation. The investigation's working conclusion is revised accordingly, and this notice is placed at the front of the investigation file.

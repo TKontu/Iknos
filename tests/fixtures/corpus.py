@@ -33,7 +33,6 @@ from typing import Any
 from iknos.types.epistemic import EpistemicClass, Polarity
 
 _CORPUS_DIR = Path(__file__).parent / "corpus"
-_MANIFEST = _CORPUS_DIR / "manifest.toml"
 
 # Sentinel gold value for a span whose polarity is *deliberately* unstable — the G1.14
 # anchor. It is NOT a ``Polarity`` member (the engine never persists "ambiguous"); it is a
@@ -69,19 +68,35 @@ class Anchor:
         Uniqueness is the contract that makes the offset meaningful — an anchor that
         matches twice does not identify a span. Both failure modes are loud.
         """
-        first = text.find(self.quote)
-        if first == -1:
-            raise ValueError(f"anchor quote not found in document: {self.quote!r}")
-        if text.find(self.quote, first + 1) != -1:
-            raise ValueError(f"anchor quote is not unique in document: {self.quote!r}")
-        return (first, first + len(self.quote))
+        return find_unique(text, self.quote)
+
+
+def find_unique(text: str, quote: str) -> tuple[int, int]:
+    """Return the unique ``[start, end)`` of ``quote`` in ``text``; raise if 0 or >1 hits.
+
+    The single definition of "an anchor identifies exactly one span" — shared by
+    :meth:`Anchor.locate`, :meth:`CorpusDocument.find_unique`, and the gate corpus's planted
+    items (``tests/fixtures/gate_corpus.py``). Both failure modes are loud: a quote that is
+    absent or matches twice does not unambiguously identify a span.
+    """
+    first = text.find(quote)
+    if first == -1:
+        raise ValueError(f"anchor quote not found in document: {quote!r}")
+    if text.find(quote, first + 1) != -1:
+        raise ValueError(f"anchor quote is not unique in document: {quote!r}")
+    return (first, first + len(quote))
 
 
 @dataclass(frozen=True)
 class CorpusDocument:
     """One corpus document: its bytes-on-disk text plus its labelled anchors.
 
-    ``role`` is the regression role:
+    ``role`` is a free-text, corpus-specific tag. The Phase-1 fixture corpus uses the three
+    regression roles below; the gate corpus (Trial V1) uses document-type roles
+    (``"incident_report"``, ``"maintenance_log"``, …) instead — the loader does not
+    constrain it.
+
+    Phase-1 regression roles:
       * ``"long_multiwindow"`` — exceeds one embedding window (G1.13). ``min_words`` is the
         floor that *guarantees* it: SentencePiece emits ≥ 1 token per whitespace word, so
         ``tokens ≥ words``; ``min_words > MAX_MODEL_TOKENS`` ⇒ the document provably spans
@@ -105,6 +120,10 @@ class CorpusDocument:
     @cached_property
     def word_count(self) -> int:
         return len(self.text.split())
+
+    def find_unique(self, quote: str) -> tuple[int, int]:
+        """Locate ``quote`` in this document's text, asserting it occurs exactly once."""
+        return find_unique(self.text, quote)
 
     def anchors_by_role(self) -> dict[str, list[Anchor]]:
         out: dict[str, list[Anchor]] = {"epistemic": [], "polarity": []}
@@ -147,15 +166,23 @@ def _anchor_from_toml(d: dict[str, Any]) -> Anchor:
     )
 
 
-def load_corpus() -> Corpus:
-    """Load the manifest + document texts into typed objects. Pure; no torch/DB/network."""
-    manifest = tomllib.loads(_MANIFEST.read_text(encoding="utf-8"))
+def load_corpus(corpus_dir: Path = _CORPUS_DIR) -> Corpus:
+    """Load a corpus's manifest + document texts into typed objects. Pure; no torch/DB/network.
+
+    ``corpus_dir`` holds a ``manifest.toml`` and a ``documents/`` subtree in the schema this
+    module documents. It defaults to the Phase-1 fixture corpus; the gate corpus (Trial V1,
+    ``tests/fixtures/gate_corpus/``) passes its own directory so the same anchor-locating,
+    quote-not-offset discipline applies to both. Sections this loader does not know about
+    (the gate corpus's ``[[planted]]`` / ``[[hypotheses]]``) are ignored here and read by
+    ``tests/fixtures/gate_corpus.py``.
+    """
+    manifest = tomllib.loads((corpus_dir / "manifest.toml").read_text(encoding="utf-8"))
     docs: list[CorpusDocument] = []
     for entry in manifest["documents"]:
         docs.append(
             CorpusDocument(
                 id=entry["id"],
-                path=_CORPUS_DIR / entry["filename"],
+                path=corpus_dir / entry["filename"],
                 role=entry["role"],
                 title=entry["title"],
                 media_type=entry.get("media_type", "text/plain"),

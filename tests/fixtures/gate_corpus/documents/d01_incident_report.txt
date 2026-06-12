@@ -1,0 +1,26 @@
+INCIDENT REPORT — WTG-14 GEARBOX HIGH-SPEED-SHAFT BEARING FAILURE
+Cairn Brae Wind Farm — Asset CB-GBX-03 (gearbox, turbine WTG-14)
+Report reference: IR-2024-031
+Date of report: 20 February 2024
+Prepared by: Site Reliability Engineer, Cairn Brae O&M
+
+1. Summary
+On 18 February 2024 at approximately 03:40, turbine WTG-14 tripped on high drivetrain vibration. On inspection the high-speed-shaft bearing at the drive end was found to have failed, with the rolling elements seized and the cage destroyed. The turbine was taken offline and the gearbox (asset CB-GBX-03) isolated pending investigation. There were no injuries and no secondary fire.
+
+2. Event sequence
+The SCADA record shows drivetrain vibration rising over the final ninety minutes of operation before the protection threshold was reached. No low-lubrication alarm was recorded in the controller event log prior to the failure. The turbine was brought to a controlled stop by the remote operations centre; the local technician confirmed the rotor was stationary before entering the nacelle.
+
+3. Initial inspection findings
+The drive-end high-speed-shaft bearing (the unit the site refers to as the HSS bearing) had disintegrated. The inner ring raceway was heavily spalled and discoloured, consistent with elevated operating temperature in the period before failure. The non-drive-end bearing on the same shaft was intact. Metal particles were present throughout the high-speed stage and the oil filter was found blocked.
+
+4. Lubrication
+The gear-oil sample drawn after the failure was dark and carried a burnt odour. No water ingress was detected in the post-failure oil sample. A laboratory analysis of the sample has been commissioned and is reported separately. It is possible that the damage initiated at the drive-end roller path, although this could not be confirmed from the recovered fragments.
+
+5. Service history
+At the time of failure the high-speed-shaft bearing was understood by the site team to be the original unit fitted at commissioning in 2018, and no replacement had been carried out on this gearbox since. This understanding is based on the work-order history held at the site and is being cross-checked against the central maintenance management system.
+
+6. Immediate actions
+The gearbox has been isolated and tagged out. Samples of the failed bearing and the gear oil have been retained for forensic and laboratory examination. The OEM (Nordhelm Drivetrain Systems) and the bearing supplier (Severn Bearings Ltd) have been notified and asked to contribute to the investigation.
+
+7. Open questions for the investigation
+Why did the bearing fail without a preceding lubrication alarm? Was the lubricant in specification and in good condition? Was the bearing the correct part, correctly installed? Was the drivetrain subjected to abnormal loading? These questions are carried forward into the root-cause investigation.

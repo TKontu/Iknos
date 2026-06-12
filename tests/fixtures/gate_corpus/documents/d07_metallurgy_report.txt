@@ -1,0 +1,23 @@
+METALLURGICAL EXAMINATION REPORT
+Hartstone Materials Laboratory — independent test house
+Subject: Inner ring from failed high-speed-shaft bearing, Cairn Brae WTG-14
+Laboratory reference: HML-2024-2207
+Date: 2 April 2024
+
+1. Material submitted
+One inner ring recovered from the failed drive-end high-speed-shaft bearing was submitted for metallurgical examination. The objective was to characterise the ring material, heat treatment and sub-surface condition, independently of the bearing supplier.
+
+2. Chemical composition
+A sample was removed from an undamaged segment of the ring and analysed by optical emission spectrometry. The composition was: carbon 0.98%, chromium 1.45%, manganese 0.34%, silicon 0.24%, with the balance iron and residual elements within normal limits. This composition corresponds to a high-carbon chromium bearing steel of the 100Cr6 / AISI 52100 class.
+
+3. Hardness
+Sub-surface examination of the inner ring gave a hardness of 61 HRC at the working depth, falling to 59 HRC at the core, measured by Vickers indentation converted to the Rockwell C scale. The hardness profile is uniform around the circumference of the undamaged arc.
+
+4. Microstructure
+Metallographic sections were prepared, polished and etched in nital. The matrix is a fine tempered martensite with uniformly distributed fine spheroidised carbides and a retained-austenite content estimated at 8% by image analysis. No abnormal grain growth, decarburised layer, or non-metallic inclusion clustering was observed. The microstructure is that of a correctly through-hardened and tempered bearing steel.
+
+5. Sub-surface condition at the failure
+Sections taken through the spalled region show sub-surface initiation of the fatigue cracking at a depth consistent with the Hertzian shear maximum for a rolling-contact load, propagating to the surface to produce the observed spalls. The initiation sites are not associated with material defects, inclusions or prior cracks.
+
+6. Conclusions
+The inner-ring material is a high-carbon chromium bearing steel, correctly through-hardened and tempered to a hardness and microstructure consistent with the drawing specification for this class of bearing. No material or heat-treatment non-conformance was found. The failure initiated sub-surface by rolling-contact fatigue, in a material that meets specification; the metallurgy indicates the failure was driven by the service conditions the bearing experienced, not by any property of the steel itself.

@@ -1,0 +1,518 @@
+PROCUREMENT RECORDS EXPORT — CAIRN BRAE WIND FARM
+Asset: Cairn Brae Wind Farm O&M operation (WTG-01 to WTG-20; gearbox asset tags CB-GBX-01 to CB-GBX-20)
+Reporting period: 01 January 2022 to 29 February 2024
+Date generated: 25 February 2024
+Source system: Cairn Brae procurement and stores module (purchase-order ledger)
+
+Note: the entries below are purchase-order line items exactly as held in the procurement system, listed in approximate chronological order by order date. Each purchase order block carries a PO number, the contracted supplier, the order and delivery dates, and the cost centre to which the line items were booked. One line item is shown per line. Prices are in pounds sterling (GBP) and exclude VAT unless otherwise stated. This export is provided for audit and reconciliation purposes only.
+
+PO-2022-2003  supplier: Severn Bearings Ltd  order date: 06/01/2022  delivery date: 21/01/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2003 line 1: SB-CRB-2200 cylindrical roller bearing (Severn Bearings), for gearbox CB-GBX-03; part qty 2 each, unit price GBP 612.00, line total GBP 1,224.00.
+PO-2022-2003 line 2: SB-SRB-22320 spherical roller bearing, gearbox HSS, for WTG-03; part qty 1 each, unit price GBP 884.50, line total GBP 884.50.
+PO-2022-2003 line 3: SB-DGB-6314 deep-groove ball bearing; part qty 4 each, unit price GBP 78.40, line total GBP 313.60.
+PO-2022-2003 line 4: SB-PLB-205 pillow block bearing unit; part qty 2 each, unit price GBP 96.00, line total GBP 192.00.
+
+PO-2022-2007  supplier: Glenmara Lubricants plc  order date: 11/01/2022  delivery date: 24/01/2022  cost centre: CC-OM-LUBE (Lubrication)
+PO-2022-2007 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-01; part qty 3 unit, unit price GBP 1,012.00, line total GBP 3,036.00.
+PO-2022-2007 line 2: Yaw gearbox grease NLGI 2 lithium-complex, 18 kg keg; part qty 4 unit, unit price GBP 188.00, line total GBP 752.00.
+PO-2022-2007 line 3: Multipurpose EP2 grease cartridge, 400 g, box of 24; part qty 6 unit, unit price GBP 54.00, line total GBP 324.00.
+PO-2022-2007 line 4: Open gear lubricant, high-tack, 20 kg pail; part qty 2 unit, unit price GBP 162.00, line total GBP 324.00.
+PO-2022-2007 line 5: Hydraulic oil ISO VG 46, pitch system, 208 L drum, for WTG-05; part qty 1 unit, unit price GBP 468.00, line total GBP 468.00.
+
+PO-2022-2011  supplier: Brackmoor Filtration Co  order date: 18/01/2022  delivery date: 02/02/2022  cost centre: CC-OM-CONS (Consumables)
+PO-2022-2011 line 1: Gearbox offline filter element OF-10-3-NDS, 3 micron, for gearbox CB-GBX-04; part qty 8 each, unit price GBP 84.00, line total GBP 672.00.
+PO-2022-2011 line 2: Gearbox pressure filter element PF-25-12, 12 micron; part qty 6 each, unit price GBP 96.50, line total GBP 579.00.
+PO-2022-2011 line 3: Breather desiccant filter DBF-15, gearbox; part qty 10 each, unit price GBP 41.00, line total GBP 410.00.
+PO-2022-2011 line 4: Cooling circuit duplex filter cartridge, 25 micron, for WTG-08; part qty 4 each, unit price GBP 132.00, line total GBP 528.00.
+
+PO-2022-2014  supplier: Tarn Valley Fasteners  order date: 24/01/2022  delivery date: 09/02/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2014 line 1: Tower flange bolt set M42x230 10.9 HDG, tensioned, for WTG-11; part qty 1 set, unit price GBP 2,640.00, line total GBP 2,640.00.
+PO-2022-2014 line 2: Structural washer DIN 6916 M42 HDG, pack of 50; part qty 2 set, unit price GBP 180.00, line total GBP 360.00.
+PO-2022-2014 line 3: Hex bolt assortment M8-M24 8.8 zinc, workshop bin; part qty 1 set, unit price GBP 142.00, line total GBP 142.00.
+PO-2022-2014 line 4: Locking nut M36 10.9, self-locking, pack of 25; part qty 3 set, unit price GBP 188.00, line total GBP 564.00.
+
+PO-2022-2018  supplier: Lochend Oil Analysis Laboratories  order date: 02/02/2022  delivery date: 16/02/2022  cost centre: CC-OM-SVCS (External Services)
+PO-2022-2018 line 1: Oil analysis lab service, full spectrometric panel per sample; part qty 20 service, unit price GBP 44.00, line total GBP 880.00.
+PO-2022-2018 line 2: Oil analysis lab service, full spectrometric panel per sample, for gearbox CB-GBX-09; part qty 10 service, unit price GBP 44.00, line total GBP 440.00.
+PO-2022-2018 line 3: Vibration survey and analysis, per turbine; part qty 6 service, unit price GBP 720.00, line total GBP 4,320.00.
+
+PO-2022-2023  supplier: Marrowfield Safety Equipment  order date: 09/02/2022  delivery date: 23/02/2022  cost centre: CC-OM-SAFE (Health & Safety)
+PO-2022-2023 line 1: Fall-arrest harness, full body, size L; part qty 8 each, unit price GBP 186.00, line total GBP 1,488.00.
+PO-2022-2023 line 2: Self-retracting lifeline 6 m, twin-leg; part qty 4 each, unit price GBP 512.00, line total GBP 2,048.00.
+PO-2022-2023 line 3: Cut-resistant gloves level D, box of 60 pairs; part qty 3 each, unit price GBP 142.00, line total GBP 426.00.
+PO-2022-2023 line 4: Rescue descender device, certified; part qty 2 each, unit price GBP 388.00, line total GBP 776.00.
+PO-2022-2023 line 5: Hearing protection earmuffs SNR 31, pack of 10; part qty 5 each, unit price GBP 96.00, line total GBP 480.00.
+
+PO-2022-2028  supplier: Drumlie Electrical Distribution  order date: 17/02/2022  delivery date: 04/03/2022  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2022-2028 line 1: Pitch motor brush set, carbon, per turbine, for WTG-02; part qty 6 each, unit price GBP 112.00, line total GBP 672.00.
+PO-2022-2028 line 2: Contactor 3-pole 95 A, control cabinet; part qty 4 each, unit price GBP 168.00, line total GBP 672.00.
+PO-2022-2028 line 3: Surge protection device Type 2, 690 V; part qty 5 each, unit price GBP 246.00, line total GBP 1,230.00.
+PO-2022-2028 line 4: Power supply module 24 VDC 20 A, DIN rail; part qty 3 each, unit price GBP 184.00, line total GBP 552.00.
+
+PO-2022-2033  supplier: Westhaven Tooling & Calibration  order date: 25/02/2022  delivery date: 14/03/2022  cost centre: CC-OM-TOOL (Tooling & Equipment)
+PO-2022-2033 line 1: Hydraulic torque wrench 4000 Nm, calibrated; part qty 1 each, unit price GBP 4,280.00, line total GBP 4,280.00.
+PO-2022-2033 line 2: Torque multiplier 25:1, reaction arm; part qty 2 each, unit price GBP 1,140.00, line total GBP 2,280.00.
+PO-2022-2033 line 3: Calibration of torque tooling, UKAS, per instrument; part qty 6 service, unit price GBP 148.00, line total GBP 888.00.
+
+PO-2022-2039  supplier: Severn Bearings Ltd  order date: 07/03/2022  delivery date: 22/03/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2039 line 1: SB-TRB-32048 tapered roller bearing, main shaft, for WTG-14; part qty 1 each, unit price GBP 2,180.00, line total GBP 2,180.00.
+PO-2022-2039 line 2: SB-CRB-2200 cylindrical roller bearing, inner race kit; part qty 3 each, unit price GBP 168.00, line total GBP 504.00.
+PO-2022-2039 line 3: SB-ANG-7212 angular contact bearing pair; part qty 2 each, unit price GBP 284.00, line total GBP 568.00.
+PO-2022-2039 line 4: Generator NDE bearing SB-DGB-6326, insulated, for gearbox CB-GBX-14; part qty 1 each, unit price GBP 512.00, line total GBP 512.00.
+
+PO-2022-2044  supplier: Caledon Hydraulics & Seals  order date: 15/03/2022  delivery date: 30/03/2022  cost centre: CC-OM-CONS (Consumables)
+PO-2022-2044 line 1: Main shaft radial lip seal RLS-220x260x16 NBR; part qty 4 kit, unit price GBP 64.00, line total GBP 256.00.
+PO-2022-2044 line 2: Hydraulic rod seal set HRS-50 (pitch cylinder), for WTG-06; part qty 6 kit, unit price GBP 88.00, line total GBP 528.00.
+PO-2022-2044 line 3: O-ring assortment kit, FKM, 386 piece; part qty 2 kit, unit price GBP 72.00, line total GBP 144.00.
+PO-2022-2044 line 4: Cover plate gasket, gearbox top, Ravenscar GKT-1180; part qty 5 kit, unit price GBP 42.00, line total GBP 210.00.
+
+PO-2022-2050  supplier: Kelpie Crane Services  order date: 24/03/2022  delivery date: 12/04/2022  cost centre: CC-OM-SVCS (External Services)
+PO-2022-2050 line 1: Crane hire 250 t mobile, day rate including operator; part qty 3 service, unit price GBP 6,400.00, line total GBP 19,200.00.
+PO-2022-2050 line 2: Crane hire 500 t crawler, mobilisation lump sum; part qty 1 service, unit price GBP 28,500.00, line total GBP 28,500.00.
+
+PO-2022-2056  supplier: Borthwick NDT & Inspection  order date: 04/04/2022  delivery date: 19/04/2022  cost centre: CC-OM-INSP (Inspection & NDT)
+PO-2022-2056 line 1: Borescope inspection of gearbox, per turbine, day rate, for gearbox CB-GBX-05; part qty 4 service, unit price GBP 980.00, line total GBP 3,920.00.
+PO-2022-2056 line 2: Up-tower main bearing inspection, technician day rate; part qty 6 service, unit price GBP 640.00, line total GBP 3,840.00.
+PO-2022-2056 line 3: Thermographic survey of switchgear, per substation; part qty 2 service, unit price GBP 720.00, line total GBP 1,440.00.
+
+PO-2022-2061  supplier: Glenmara Lubricants plc  order date: 13/04/2022  delivery date: 27/04/2022  cost centre: CC-OM-LUBE (Lubrication)
+PO-2022-2061 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-10; part qty 2 unit, unit price GBP 1,028.00, line total GBP 2,056.00.
+PO-2022-2061 line 2: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 20 L pail; part qty 6 unit, unit price GBP 118.00, line total GBP 708.00.
+PO-2022-2061 line 3: Main bearing grease NLGI 2 polyurea, 50 kg drum; part qty 1 unit, unit price GBP 392.00, line total GBP 392.00.
+PO-2022-2061 line 4: Coolant / glycol concentrate, gearbox cooling, 25 L; part qty 4 unit, unit price GBP 96.00, line total GBP 384.00.
+
+PO-2022-2067  supplier: Ardroth Industrial Supplies  order date: 22/04/2022  delivery date: 09/05/2022  cost centre: CC-OM-STORE (Stores Replenishment)
+PO-2022-2067 line 1: Cable cleat assortment, nacelle, box; part qty 3 each, unit price GBP 78.00, line total GBP 234.00.
+PO-2022-2067 line 2: Spill kit, hydrocarbon, 90 L, per unit; part qty 5 each, unit price GBP 112.00, line total GBP 560.00.
+PO-2022-2067 line 3: Absorbent mat, oil only, bale of 200; part qty 4 each, unit price GBP 158.00, line total GBP 632.00.
+PO-2022-2067 line 4: Warning signage set, blade lay-down area; part qty 2 each, unit price GBP 84.00, line total GBP 168.00.
+PO-2022-2067 line 5: Threaded rod M16 8.8, 1 m, pack of 10; part qty 6 set, unit price GBP 88.00, line total GBP 528.00.
+
+PO-2022-2073  supplier: Strathorn Sensors & Instrumentation  order date: 03/05/2022  delivery date: 18/05/2022  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2022-2073 line 1: Vibration sensor, accelerometer 100 mV/g, IEPE, for WTG-09; part qty 4 each, unit price GBP 268.00, line total GBP 1,072.00.
+PO-2022-2073 line 2: Temperature RTD PT100 4-wire, gearbox bearing; part qty 10 each, unit price GBP 64.00, line total GBP 640.00.
+PO-2022-2073 line 3: Proximity speed sensor, HSS, per unit; part qty 4 each, unit price GBP 142.00, line total GBP 568.00.
+PO-2022-2073 line 4: Pressure transducer 0-250 bar, pitch; part qty 6 each, unit price GBP 198.00, line total GBP 1,188.00.
+
+PO-2022-2079  supplier: Auldgate Braking Systems  order date: 12/05/2022  delivery date: 27/05/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2079 line 1: Brake pad set, hydraulic caliper, Auldgate BP-410, for WTG-12; part qty 4 each, unit price GBP 168.00, line total GBP 672.00.
+PO-2022-2079 line 2: Brake disc, parking brake, per turbine; part qty 2 each, unit price GBP 420.00, line total GBP 840.00.
+PO-2022-2079 line 3: Disc spring stack, blade bearing bolt, set; part qty 3 set, unit price GBP 156.00, line total GBP 468.00.
+
+PO-2022-2085  supplier: Nordhelm Drivetrain Systems  order date: 23/05/2022  delivery date: 14/06/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2085 line 1: Generator coupling element, flexible, PTC-880, for gearbox CB-GBX-07; part qty 2 each, unit price GBP 684.00, line total GBP 1,368.00.
+PO-2022-2085 line 2: Gearbox input seal kit GSK-NDS-04; part qty 3 kit, unit price GBP 224.00, line total GBP 672.00.
+PO-2022-2085 line 3: High-speed coupling spacer, machined; part qty 2 each, unit price GBP 388.00, line total GBP 776.00.
+PO-2022-2085 line 4: Oil particle counter inline sensor, for gearbox CB-GBX-07; part qty 1 each, unit price GBP 1,840.00, line total GBP 1,840.00.
+
+PO-2022-2092  supplier: Drystone Site Logistics  order date: 06/06/2022  delivery date: 21/06/2022  cost centre: CC-OM-LOGS (Logistics & Access)
+PO-2022-2092 line 1: Drone blade inspection, per turbine; part qty 8 service, unit price GBP 280.00, line total GBP 2,240.00.
+PO-2022-2092 line 2: Service lift wire rope, certified, per set; part qty 2 each, unit price GBP 720.00, line total GBP 1,440.00.
+PO-2022-2092 line 3: Dehumidifier unit, tower base, exchange; part qty 3 each, unit price GBP 412.00, line total GBP 1,236.00.
+
+PO-2022-2098  supplier: Severn Bearings Ltd  order date: 16/06/2022  delivery date: 01/07/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2098 line 1: SB-CRB-2200 cylindrical roller bearing (Severn Bearings), for gearbox CB-GBX-16; part qty 2 each, unit price GBP 598.00, line total GBP 1,196.00.
+PO-2022-2098 line 2: SB-DGB-6314 deep-groove ball bearing; part qty 6 each, unit price GBP 82.00, line total GBP 492.00.
+PO-2022-2098 line 3: SB-SRB-22320 spherical roller bearing, gearbox HSS; part qty 1 each, unit price GBP 912.00, line total GBP 912.00.
+PO-2022-2098 line 4: Generator NDE bearing SB-DGB-6326, insulated; part qty 2 each, unit price GBP 524.00, line total GBP 1,048.00.
+
+PO-2022-2104  supplier: Glenmara Lubricants plc  order date: 27/06/2022  delivery date: 12/07/2022  cost centre: CC-OM-LUBE (Lubrication)
+PO-2022-2104 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-15; part qty 3 unit, unit price GBP 1,036.00, line total GBP 3,108.00.
+PO-2022-2104 line 2: Open gear lubricant, high-tack, 20 kg pail; part qty 3 unit, unit price GBP 168.00, line total GBP 504.00.
+PO-2022-2104 line 3: Multipurpose EP2 grease cartridge, 400 g, box of 24; part qty 8 unit, unit price GBP 56.00, line total GBP 448.00.
+PO-2022-2104 line 4: Yaw gearbox grease NLGI 2 lithium-complex, 18 kg keg; part qty 2 unit, unit price GBP 192.00, line total GBP 384.00.
+
+PO-2022-2111  supplier: Brackmoor Filtration Co  order date: 08/07/2022  delivery date: 22/07/2022  cost centre: CC-OM-CONS (Consumables)
+PO-2022-2111 line 1: Gearbox offline filter element OF-10-3-NDS, 3 micron; part qty 10 each, unit price GBP 86.00, line total GBP 860.00.
+PO-2022-2111 line 2: Gearbox pressure filter element PF-25-12, 12 micron, for gearbox CB-GBX-18; part qty 6 each, unit price GBP 98.00, line total GBP 588.00.
+PO-2022-2111 line 3: Hydraulic return filter HF-160, pitch system; part qty 8 each, unit price GBP 118.00, line total GBP 944.00.
+PO-2022-2111 line 4: Air intake panel filter, nacelle HVAC G4; part qty 12 each, unit price GBP 18.00, line total GBP 216.00.
+
+PO-2022-2117  supplier: Pentland Couplings & Power Transmission  order date: 19/07/2022  delivery date: 03/08/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2117 line 1: Generator coupling element, flexible, PTC-880, for WTG-17; part qty 2 each, unit price GBP 712.00, line total GBP 1,424.00.
+PO-2022-2117 line 2: High-speed coupling spacer, machined; part qty 3 each, unit price GBP 396.00, line total GBP 1,188.00.
+PO-2022-2117 line 3: SB-PLB-205 pillow block bearing unit; part qty 4 each, unit price GBP 104.00, line total GBP 416.00.
+
+PO-2022-2123  supplier: Cromarty Yaw Drives Ltd  order date: 29/07/2022  delivery date: 16/08/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2123 line 1: Yaw motor exchange unit, Cromarty YD-12, for WTG-04; part qty 1 each, unit price GBP 2,840.00, line total GBP 2,840.00.
+PO-2022-2123 line 2: Yaw gear pinion, hardened, single; part qty 2 each, unit price GBP 612.00, line total GBP 1,224.00.
+PO-2022-2123 line 3: Pitch drive gearbox exchange unit; part qty 1 each, unit price GBP 3,920.00, line total GBP 3,920.00.
+
+PO-2022-2130  supplier: Lochend Oil Analysis Laboratories  order date: 10/08/2022  delivery date: 24/08/2022  cost centre: CC-OM-SVCS (External Services)
+PO-2022-2130 line 1: Oil analysis lab service, full spectrometric panel per sample; part qty 20 service, unit price GBP 46.00, line total GBP 920.00.
+PO-2022-2130 line 2: Oil analysis lab service, full spectrometric panel per sample, for gearbox CB-GBX-02; part qty 20 service, unit price GBP 46.00, line total GBP 920.00.
+PO-2022-2130 line 3: Vibration survey and analysis, per turbine; part qty 5 service, unit price GBP 740.00, line total GBP 3,700.00.
+
+PO-2022-2136  supplier: Marrowfield Safety Equipment  order date: 21/08/2022  delivery date: 05/09/2022  cost centre: CC-OM-SAFE (Health & Safety)
+PO-2022-2136 line 1: Arc-flash coverall 12 cal, per garment; part qty 10 each, unit price GBP 218.00, line total GBP 2,180.00.
+PO-2022-2136 line 2: Safety helmet with chin strap, vented, box of 10; part qty 3 each, unit price GBP 286.00, line total GBP 858.00.
+PO-2022-2136 line 3: Hi-vis winter jacket, EN ISO 20471, per unit; part qty 12 each, unit price GBP 92.00, line total GBP 1,104.00.
+PO-2022-2136 line 4: Cut-resistant gloves level D, box of 60 pairs; part qty 4 each, unit price GBP 144.00, line total GBP 576.00.
+
+PO-2022-2142  supplier: Galloway Cable & Connector Supplies  order date: 02/09/2022  delivery date: 16/09/2022  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2022-2142 line 1: Fibre patch cable LC-LC 50 m, nacelle to base, for WTG-19; part qty 4 each, unit price GBP 96.00, line total GBP 384.00.
+PO-2022-2142 line 2: Emergency stop pushbutton, IP67, twist release; part qty 8 each, unit price GBP 48.00, line total GBP 384.00.
+PO-2022-2142 line 3: UPS battery block 12 V 9 Ah, controller backup; part qty 10 each, unit price GBP 64.00, line total GBP 640.00.
+PO-2022-2142 line 4: Anemometer heater element, 230 V; part qty 5 each, unit price GBP 88.00, line total GBP 440.00.
+
+PO-2022-2149  supplier: Westhaven Tooling & Calibration  order date: 14/09/2022  delivery date: 29/09/2022  cost centre: CC-OM-TOOL (Tooling & Equipment)
+PO-2022-2149 line 1: Bolt tensioning pump 1500 bar, electric; part qty 1 each, unit price GBP 5,600.00, line total GBP 5,600.00.
+PO-2022-2149 line 2: Bearing induction heater 3.6 kVA; part qty 1 each, unit price GBP 1,840.00, line total GBP 1,840.00.
+PO-2022-2149 line 3: Insulated tool set 1000 V VDE, 32 piece; part qty 2 each, unit price GBP 412.00, line total GBP 824.00.
+PO-2022-2149 line 4: Digital depth micrometre set, calibrated; part qty 1 each, unit price GBP 384.00, line total GBP 384.00.
+
+PO-2022-2155  supplier: Ravenscar Gasket Manufacturing  order date: 26/09/2022  delivery date: 11/10/2022  cost centre: CC-OM-CONS (Consumables)
+PO-2022-2155 line 1: Cover plate gasket, gearbox top, Ravenscar GKT-1180, for gearbox CB-GBX-11; part qty 6 kit, unit price GBP 44.00, line total GBP 264.00.
+PO-2022-2155 line 2: Generator slip-ring chamber V-ring seal; part qty 10 kit, unit price GBP 28.00, line total GBP 280.00.
+PO-2022-2155 line 3: Yaw bearing grease seal, labyrinth type; part qty 8 kit, unit price GBP 36.00, line total GBP 288.00.
+
+PO-2022-2161  supplier: Severn Bearings Ltd  order date: 07/10/2022  delivery date: 21/10/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2161 line 1: SB-TRB-32048 tapered roller bearing, main shaft, for WTG-20; part qty 1 each, unit price GBP 2,260.00, line total GBP 2,260.00.
+PO-2022-2161 line 2: SB-CRB-2200 cylindrical roller bearing (Severn Bearings); part qty 3 each, unit price GBP 604.00, line total GBP 1,812.00.
+PO-2022-2161 line 3: SB-ANG-7212 angular contact bearing pair; part qty 2 each, unit price GBP 296.00, line total GBP 592.00.
+PO-2022-2161 line 4: SB-DGB-6314 deep-groove ball bearing; part qty 8 each, unit price GBP 84.00, line total GBP 672.00.
+
+PO-2022-2168  supplier: Glenmara Lubricants plc  order date: 19/10/2022  delivery date: 02/11/2022  cost centre: CC-OM-LUBE (Lubrication)
+PO-2022-2168 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-13; part qty 4 unit, unit price GBP 1,044.00, line total GBP 4,176.00.
+PO-2022-2168 line 2: Hydraulic oil ISO VG 46, pitch system, 208 L drum; part qty 2 unit, unit price GBP 472.00, line total GBP 944.00.
+PO-2022-2168 line 3: Main bearing grease NLGI 2 polyurea, 50 kg drum; part qty 2 unit, unit price GBP 398.00, line total GBP 796.00.
+PO-2022-2168 line 4: Coolant / glycol concentrate, gearbox cooling, 25 L; part qty 6 unit, unit price GBP 98.00, line total GBP 588.00.
+
+PO-2022-2175  supplier: Harkness Pump & Valve Co  order date: 31/10/2022  delivery date: 15/11/2022  cost centre: CC-OM-STORE (Stores Replenishment)
+PO-2022-2175 line 1: Nacelle cooling fan motor, exchange unit, for WTG-07; part qty 2 each, unit price GBP 468.00, line total GBP 936.00.
+PO-2022-2175 line 2: Cooling circuit duplex filter cartridge, 25 micron; part qty 4 each, unit price GBP 138.00, line total GBP 552.00.
+PO-2022-2175 line 3: Hydraulic return filter HF-160, pitch system; part qty 6 each, unit price GBP 122.00, line total GBP 732.00.
+
+PO-2022-2181  supplier: Borthwick NDT & Inspection  order date: 11/11/2022  delivery date: 25/11/2022  cost centre: CC-OM-INSP (Inspection & NDT)
+PO-2022-2181 line 1: Borescope inspection of gearbox, per turbine, day rate, for gearbox CB-GBX-08; part qty 5 service, unit price GBP 1,020.00, line total GBP 5,100.00.
+PO-2022-2181 line 2: Vibration survey and analysis, per turbine; part qty 4 service, unit price GBP 760.00, line total GBP 3,040.00.
+PO-2022-2181 line 3: Up-tower main bearing inspection, technician day rate; part qty 6 service, unit price GBP 660.00, line total GBP 3,960.00.
+
+PO-2022-2188  supplier: Drumlie Electrical Distribution  order date: 23/11/2022  delivery date: 08/12/2022  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2022-2188 line 1: Slip ring assembly refurbishment exchange unit, for WTG-15; part qty 1 each, unit price GBP 3,640.00, line total GBP 3,640.00.
+PO-2022-2188 line 2: Contactor 3-pole 95 A, control cabinet; part qty 6 each, unit price GBP 172.00, line total GBP 1,032.00.
+PO-2022-2188 line 3: Power supply module 24 VDC 20 A, DIN rail; part qty 4 each, unit price GBP 188.00, line total GBP 752.00.
+PO-2022-2188 line 4: Pitch motor brush set, carbon, per turbine; part qty 8 each, unit price GBP 114.00, line total GBP 912.00.
+
+PO-2022-2194  supplier: Ardroth Industrial Supplies  order date: 05/12/2022  delivery date: 20/12/2022  cost centre: CC-OM-STORE (Stores Replenishment)
+PO-2022-2194 line 1: Anchor bolt epoxy resin, foundation, cartridge box; part qty 4 each, unit price GBP 218.00, line total GBP 872.00.
+PO-2022-2194 line 2: Spill kit, hydrocarbon, 90 L, per unit; part qty 6 each, unit price GBP 116.00, line total GBP 696.00.
+PO-2022-2194 line 3: Absorbent mat, oil only, bale of 200; part qty 3 each, unit price GBP 162.00, line total GBP 486.00.
+PO-2022-2194 line 4: Warning signage set, blade lay-down area; part qty 3 each, unit price GBP 86.00, line total GBP 258.00.
+
+PO-2023-2203  supplier: Severn Bearings Ltd  order date: 09/01/2023  delivery date: 24/01/2023  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2023-2203 line 1: SB-CRB-2200 cylindrical roller bearing (Severn Bearings), for gearbox CB-GBX-06; part qty 2 each, unit price GBP 624.00, line total GBP 1,248.00.
+PO-2023-2203 line 2: SB-SRB-22320 spherical roller bearing, gearbox HSS; part qty 2 each, unit price GBP 928.00, line total GBP 1,856.00.
+PO-2023-2203 line 3: SB-DGB-6314 deep-groove ball bearing; part qty 6 each, unit price GBP 86.00, line total GBP 516.00.
+PO-2023-2203 line 4: Generator NDE bearing SB-DGB-6326, insulated, for gearbox CB-GBX-06; part qty 1 each, unit price GBP 536.00, line total GBP 536.00.
+
+PO-2023-2209  supplier: Glenmara Lubricants plc  order date: 18/01/2023  delivery date: 01/02/2023  cost centre: CC-OM-LUBE (Lubrication)
+PO-2023-2209 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-02; part qty 3 unit, unit price GBP 1,052.00, line total GBP 3,156.00.
+PO-2023-2209 line 2: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 20 L pail; part qty 4 unit, unit price GBP 124.00, line total GBP 496.00.
+PO-2023-2209 line 3: Yaw gearbox grease NLGI 2 lithium-complex, 18 kg keg; part qty 3 unit, unit price GBP 196.00, line total GBP 588.00.
+PO-2023-2209 line 4: Open gear lubricant, high-tack, 20 kg pail; part qty 2 unit, unit price GBP 172.00, line total GBP 344.00.
+
+PO-2023-2215  supplier: Brackmoor Filtration Co  order date: 30/01/2023  delivery date: 14/02/2023  cost centre: CC-OM-CONS (Consumables)
+PO-2023-2215 line 1: Gearbox offline filter element OF-10-3-NDS, 3 micron, for gearbox CB-GBX-19; part qty 10 each, unit price GBP 88.00, line total GBP 880.00.
+PO-2023-2215 line 2: Gearbox pressure filter element PF-25-12, 12 micron; part qty 8 each, unit price GBP 102.00, line total GBP 816.00.
+PO-2023-2215 line 3: Breather desiccant filter DBF-15, gearbox; part qty 12 each, unit price GBP 44.00, line total GBP 528.00.
+PO-2023-2215 line 4: Generator air-to-air heat exchanger filter mat; part qty 6 each, unit price GBP 32.00, line total GBP 192.00.
+
+PO-2023-2221  supplier: Tarn Valley Fasteners  order date: 10/02/2023  delivery date: 24/02/2023  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2023-2221 line 1: Blade root stud M30x300 10.9, with nut and washer, for WTG-13; part qty 1 set, unit price GBP 820.00, line total GBP 820.00.
+PO-2023-2221 line 2: Tower flange bolt set M42x230 10.9 HDG, tensioned; part qty 1 set, unit price GBP 2,720.00, line total GBP 2,720.00.
+PO-2023-2221 line 3: Structural washer DIN 6916 M42 HDG, pack of 50; part qty 3 set, unit price GBP 184.00, line total GBP 552.00.
+PO-2023-2221 line 4: Hex bolt assortment M8-M24 8.8 zinc, workshop bin; part qty 1 set, unit price GBP 146.00, line total GBP 146.00.
+
+PO-2023-2227  supplier: Strathorn Sensors & Instrumentation  order date: 21/02/2023  delivery date: 08/03/2023  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2023-2227 line 1: Vibration sensor, accelerometer 100 mV/g, IEPE, for WTG-10; part qty 6 each, unit price GBP 272.00, line total GBP 1,632.00.
+PO-2023-2227 line 2: Oil particle counter inline sensor, for gearbox CB-GBX-10; part qty 1 each, unit price GBP 1,920.00, line total GBP 1,920.00.
+PO-2023-2227 line 3: Temperature RTD PT100 4-wire, gearbox bearing; part qty 12 each, unit price GBP 66.00, line total GBP 792.00.
+PO-2023-2227 line 4: Wind vane sensor, heated, per unit; part qty 4 each, unit price GBP 296.00, line total GBP 1,184.00.
+
+PO-2023-2233  supplier: Westhaven Tooling & Calibration  order date: 05/03/2023  delivery date: 20/03/2023  cost centre: CC-OM-TOOL (Tooling & Equipment)
+PO-2023-2233 line 1: Hydraulic torque wrench 4000 Nm, calibrated; part qty 1 each, unit price GBP 4,360.00, line total GBP 4,360.00.
+PO-2023-2233 line 2: Lifting sling set 2 t WLL, certified, pack; part qty 3 each, unit price GBP 248.00, line total GBP 744.00.
+PO-2023-2233 line 3: Calibration of torque tooling, UKAS, per instrument; part qty 8 service, unit price GBP 152.00, line total GBP 1,216.00.
+PO-2023-2233 line 4: Endoscope tool kit, mechanical access; part qty 1 each, unit price GBP 486.00, line total GBP 486.00.
+
+PO-2023-2240  supplier: Kelpie Crane Services  order date: 16/03/2023  delivery date: 03/04/2023  cost centre: CC-OM-SVCS (External Services)
+PO-2023-2240 line 1: Crane hire 250 t mobile, day rate including operator; part qty 4 service, unit price GBP 6,600.00, line total GBP 26,400.00.
+PO-2023-2240 line 2: Crane hire 500 t crawler, mobilisation lump sum; part qty 1 service, unit price GBP 32,000.00, line total GBP 32,000.00.
+
+PO-2023-2246  supplier: Caledon Hydraulics & Seals  order date: 27/03/2023  delivery date: 11/04/2023  cost centre: CC-OM-CONS (Consumables)
+PO-2023-2246 line 1: Main shaft radial lip seal RLS-220x260x16 NBR, for gearbox CB-GBX-17; part qty 6 kit, unit price GBP 66.00, line total GBP 396.00.
+PO-2023-2246 line 2: Hydraulic rod seal set HRS-50 (pitch cylinder); part qty 8 kit, unit price GBP 92.00, line total GBP 736.00.
+PO-2023-2246 line 3: O-ring assortment kit, FKM, 386 piece; part qty 3 kit, unit price GBP 74.00, line total GBP 222.00.
+PO-2023-2246 line 4: Gearbox input seal kit GSK-NDS-04; part qty 2 kit, unit price GBP 228.00, line total GBP 456.00.
+
+PO-2023-2252  supplier: Severn Bearings Ltd  order date: 07/04/2023  delivery date: 21/04/2023  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2023-2252 line 1: SB-TRB-32048 tapered roller bearing, main shaft, for WTG-18; part qty 1 each, unit price GBP 2,340.00, line total GBP 2,340.00.
+PO-2023-2252 line 2: SB-CRB-2200 cylindrical roller bearing, inner race kit; part qty 4 each, unit price GBP 172.00, line total GBP 688.00.
+PO-2023-2252 line 3: SB-PLB-205 pillow block bearing unit; part qty 5 each, unit price GBP 108.00, line total GBP 540.00.
+PO-2023-2252 line 4: SB-ANG-7212 angular contact bearing pair; part qty 3 each, unit price GBP 302.00, line total GBP 906.00.
+
+PO-2023-2258  supplier: Marrowfield Safety Equipment  order date: 18/04/2023  delivery date: 03/05/2023  cost centre: CC-OM-SAFE (Health & Safety)
+PO-2023-2258 line 1: Fall-arrest harness, full body, size L; part qty 10 each, unit price GBP 192.00, line total GBP 1,920.00.
+PO-2023-2258 line 2: Self-retracting lifeline 6 m, twin-leg; part qty 5 each, unit price GBP 524.00, line total GBP 2,620.00.
+PO-2023-2258 line 3: Rescue descender device, certified; part qty 3 each, unit price GBP 396.00, line total GBP 1,188.00.
+PO-2023-2258 line 4: Arc-flash coverall 12 cal, per garment; part qty 8 each, unit price GBP 222.00, line total GBP 1,776.00.
+
+PO-2023-2265  supplier: Lochend Oil Analysis Laboratories  order date: 28/04/2023  delivery date: 12/05/2023  cost centre: CC-OM-SVCS (External Services)
+PO-2023-2265 line 1: Oil analysis lab service, full spectrometric panel per sample; part qty 20 service, unit price GBP 48.00, line total GBP 960.00.
+PO-2023-2265 line 2: Oil analysis lab service, full spectrometric panel per sample, for gearbox CB-GBX-12; part qty 20 service, unit price GBP 48.00, line total GBP 960.00.
+PO-2023-2265 line 3: Vibration survey and analysis, per turbine; part qty 6 service, unit price GBP 780.00, line total GBP 4,680.00.
+
+PO-2023-2271  supplier: Cromarty Yaw Drives Ltd  order date: 10/05/2023  delivery date: 25/05/2023  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2023-2271 line 1: Yaw motor exchange unit, Cromarty YD-12, for WTG-16; part qty 1 each, unit price GBP 2,960.00, line total GBP 2,960.00.
+PO-2023-2271 line 2: Yaw gear pinion, hardened, single; part qty 3 each, unit price GBP 628.00, line total GBP 1,884.00.
+PO-2023-2271 line 3: Pitch drive gearbox exchange unit; part qty 1 each, unit price GBP 4,080.00, line total GBP 4,080.00.
+
+PO-2023-2277  supplier: Galloway Cable & Connector Supplies  order date: 21/05/2023  delivery date: 05/06/2023  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2023-2277 line 1: Fibre patch cable LC-LC 50 m, nacelle to base; part qty 6 each, unit price GBP 98.00, line total GBP 588.00.
+PO-2023-2277 line 2: UPS battery block 12 V 9 Ah, controller backup; part qty 12 each, unit price GBP 66.00, line total GBP 792.00.
+PO-2023-2277 line 3: Emergency stop pushbutton, IP67, twist release; part qty 10 each, unit price GBP 50.00, line total GBP 500.00.
+PO-2023-2277 line 4: Surge protection device Type 2, 690 V; part qty 6 each, unit price GBP 252.00, line total GBP 1,512.00.
+
+PO-2023-2283  supplier: Brackmoor Filtration Co  order date: 02/06/2023  delivery date: 16/06/2023  cost centre: CC-OM-CONS (Consumables)
+PO-2023-2283 line 1: Gearbox offline filter element OF-10-3-NDS, 3 micron, for gearbox CB-GBX-12; part qty 12 each, unit price GBP 90.00, line total GBP 1,080.00.
+PO-2023-2283 line 2: Gearbox pressure filter element PF-25-12, 12 micron; part qty 8 each, unit price GBP 104.00, line total GBP 832.00.
+PO-2023-2283 line 3: Hydraulic return filter HF-160, pitch system; part qty 8 each, unit price GBP 124.00, line total GBP 992.00.
+PO-2023-2283 line 4: Cooling circuit duplex filter cartridge, 25 micron; part qty 6 each, unit price GBP 142.00, line total GBP 852.00.
+
+PO-2023-2289  supplier: Pentland Couplings & Power Transmission  order date: 13/06/2023  delivery date: 28/06/2023  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2023-2289 line 1: Generator coupling element, flexible, PTC-880, for WTG-01; part qty 2 each, unit price GBP 728.00, line total GBP 1,456.00.
+PO-2023-2289 line 2: High-speed coupling spacer, machined; part qty 3 each, unit price GBP 404.00, line total GBP 1,212.00.
+PO-2023-2289 line 3: SB-PLB-205 pillow block bearing unit; part qty 6 each, unit price GBP 110.00, line total GBP 660.00.
+
+PO-2023-2295  supplier: Auldgate Braking Systems  order date: 23/06/2023  delivery date: 10/07/2023  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2023-2295 line 1: Brake pad set, hydraulic caliper, Auldgate BP-410, for WTG-05; part qty 6 each, unit price GBP 172.00, line total GBP 1,032.00.
+PO-2023-2295 line 2: Brake disc, parking brake, per turbine; part qty 2 each, unit price GBP 432.00, line total GBP 864.00.
+PO-2023-2295 line 3: Disc spring stack, blade bearing bolt, set; part qty 4 set, unit price GBP 160.00, line total GBP 640.00.
+
+PO-2023-2302  supplier: Borthwick NDT & Inspection  order date: 14/07/2023  delivery date: 28/07/2023  cost centre: CC-OM-INSP (Inspection & NDT)
+PO-2023-2302 line 1: Borescope inspection of gearbox, per turbine, day rate, for gearbox CB-GBX-12; part qty 6 service, unit price GBP 1,060.00, line total GBP 6,360.00.
+PO-2023-2302 line 2: Vibration survey and analysis, per turbine; part qty 5 service, unit price GBP 800.00, line total GBP 4,000.00.
+PO-2023-2302 line 3: Up-tower main bearing inspection, technician day rate; part qty 6 service, unit price GBP 680.00, line total GBP 4,080.00.
+
+PO-2023-2308  supplier: Glenmara Lubricants plc  order date: 25/07/2023  delivery date: 09/08/2023  cost centre: CC-OM-LUBE (Lubrication)
+PO-2023-2308 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-12; part qty 3 unit, unit price GBP 1,058.00, line total GBP 3,174.00.
+PO-2023-2308 line 2: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 20 L pail; part qty 6 unit, unit price GBP 128.00, line total GBP 768.00.
+PO-2023-2308 line 3: Main bearing grease NLGI 2 polyurea, 50 kg drum; part qty 2 unit, unit price GBP 412.00, line total GBP 824.00.
+PO-2023-2308 line 4: Coolant / glycol concentrate, gearbox cooling, 25 L; part qty 4 unit, unit price GBP 100.00, line total GBP 400.00.
+
+PO-2023-2314  supplier: Severn Bearings Ltd  order date: 07/08/2023  delivery date: 22/08/2023  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2023-2314 line 1: SB-CRB-2200 cylindrical roller bearing (Severn Bearings), for gearbox CB-GBX-12; part qty 2 each, unit price GBP 636.00, line total GBP 1,272.00.
+PO-2023-2314 line 2: SB-SRB-22320 spherical roller bearing, gearbox HSS, for WTG-12; part qty 1 each, unit price GBP 944.00, line total GBP 944.00.
+PO-2023-2314 line 3: SB-DGB-6314 deep-groove ball bearing; part qty 6 each, unit price GBP 88.00, line total GBP 528.00.
+PO-2023-2314 line 4: Generator NDE bearing SB-DGB-6326, insulated; part qty 2 each, unit price GBP 540.00, line total GBP 1,080.00.
+
+PO-2023-2320  supplier: Drumlie Electrical Distribution  order date: 18/08/2023  delivery date: 02/09/2023  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2023-2320 line 1: Pitch motor brush set, carbon, per turbine, for WTG-14; part qty 8 each, unit price GBP 116.00, line total GBP 928.00.
+PO-2023-2320 line 2: Contactor 3-pole 95 A, control cabinet; part qty 6 each, unit price GBP 174.00, line total GBP 1,044.00.
+PO-2023-2320 line 3: Power supply module 24 VDC 20 A, DIN rail; part qty 4 each, unit price GBP 190.00, line total GBP 760.00.
+PO-2023-2320 line 4: Anemometer heater element, 230 V; part qty 6 each, unit price GBP 90.00, line total GBP 540.00.
+
+PO-2023-2326  supplier: Westhaven Tooling & Calibration  order date: 29/08/2023  delivery date: 13/09/2023  cost centre: CC-OM-TOOL (Tooling & Equipment)
+PO-2023-2326 line 1: Bolt tensioning pump 1500 bar, electric; part qty 1 each, unit price GBP 5,800.00, line total GBP 5,800.00.
+PO-2023-2326 line 2: Bearing induction heater 3.6 kVA; part qty 1 each, unit price GBP 1,920.00, line total GBP 1,920.00.
+PO-2023-2326 line 3: Digital depth micrometre set, calibrated; part qty 2 each, unit price GBP 392.00, line total GBP 784.00.
+PO-2023-2326 line 4: Calibration of torque tooling, UKAS, per instrument; part qty 8 service, unit price GBP 156.00, line total GBP 1,248.00.
+
+PO-2023-2332  supplier: Caledon Hydraulics & Seals  order date: 11/09/2023  delivery date: 26/09/2023  cost centre: CC-OM-CONS (Consumables)
+PO-2023-2332 line 1: Hydraulic rod seal set HRS-50 (pitch cylinder), for WTG-10; part qty 8 kit, unit price GBP 94.00, line total GBP 752.00.
+PO-2023-2332 line 2: Main shaft radial lip seal RLS-220x260x16 NBR; part qty 6 kit, unit price GBP 68.00, line total GBP 408.00.
+PO-2023-2332 line 3: O-ring assortment kit, FKM, 386 piece; part qty 3 kit, unit price GBP 76.00, line total GBP 228.00.
+PO-2023-2332 line 4: Cover plate gasket, gearbox top, Ravenscar GKT-1180; part qty 6 kit, unit price GBP 46.00, line total GBP 276.00.
+
+PO-2023-2338  supplier: Skellig Composites Repair  order date: 22/09/2023  delivery date: 09/10/2023  cost centre: CC-OM-SVCS (External Services)
+PO-2023-2338 line 1: Rope-access blade repair team, day rate per technician, for WTG-08; part qty 10 service, unit price GBP 640.00, line total GBP 6,400.00.
+PO-2023-2338 line 2: Drone blade inspection, per turbine; part qty 6 service, unit price GBP 300.00, line total GBP 1,800.00.
+PO-2023-2338 line 3: Anchor bolt epoxy resin, foundation, cartridge box; part qty 4 each, unit price GBP 224.00, line total GBP 896.00.
+
+PO-2023-2344  supplier: Glenmara Lubricants plc  order date: 03/10/2023  delivery date: 18/10/2023  cost centre: CC-OM-LUBE (Lubrication)
+PO-2023-2344 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-12; part qty 4 unit, unit price GBP 1,062.00, line total GBP 4,248.00.
+PO-2023-2344 line 2: Open gear lubricant, high-tack, 20 kg pail; part qty 3 unit, unit price GBP 176.00, line total GBP 528.00.
+PO-2023-2344 line 3: Multipurpose EP2 grease cartridge, 400 g, box of 24; part qty 8 unit, unit price GBP 58.00, line total GBP 464.00.
+PO-2023-2344 line 4: Yaw gearbox grease NLGI 2 lithium-complex, 18 kg keg; part qty 3 unit, unit price GBP 200.00, line total GBP 600.00.
+
+PO-2023-2350  supplier: Strathorn Sensors & Instrumentation  order date: 14/10/2023  delivery date: 29/10/2023  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2023-2350 line 1: Vibration sensor, accelerometer 100 mV/g, IEPE, for WTG-12; part qty 6 each, unit price GBP 276.00, line total GBP 1,656.00.
+PO-2023-2350 line 2: Strain gauge kit, blade root monitoring; part qty 2 each, unit price GBP 468.00, line total GBP 936.00.
+PO-2023-2350 line 3: Proximity speed sensor, HSS, per unit; part qty 4 each, unit price GBP 146.00, line total GBP 584.00.
+PO-2023-2350 line 4: Pressure transducer 0-250 bar, pitch; part qty 6 each, unit price GBP 202.00, line total GBP 1,212.00.
+
+PO-2023-2356  supplier: Ardroth Industrial Supplies  order date: 25/10/2023  delivery date: 09/11/2023  cost centre: CC-OM-STORE (Stores Replenishment)
+PO-2023-2356 line 1: Cable cleat assortment, nacelle, box; part qty 4 each, unit price GBP 80.00, line total GBP 320.00.
+PO-2023-2356 line 2: Spill kit, hydrocarbon, 90 L, per unit; part qty 6 each, unit price GBP 118.00, line total GBP 708.00.
+PO-2023-2356 line 3: Absorbent mat, oil only, bale of 200; part qty 4 each, unit price GBP 166.00, line total GBP 664.00.
+PO-2023-2356 line 4: Dehumidifier unit, tower base, exchange; part qty 3 each, unit price GBP 420.00, line total GBP 1,260.00.
+
+PO-2023-2362  supplier: Severn Bearings Ltd  order date: 06/11/2023  delivery date: 21/11/2023  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2023-2362 line 1: SB-TRB-32048 tapered roller bearing, main shaft, for WTG-03; part qty 1 each, unit price GBP 2,420.00, line total GBP 2,420.00.
+PO-2023-2362 line 2: SB-CRB-2200 cylindrical roller bearing (Severn Bearings); part qty 3 each, unit price GBP 640.00, line total GBP 1,920.00.
+PO-2023-2362 line 3: SB-ANG-7212 angular contact bearing pair; part qty 2 each, unit price GBP 308.00, line total GBP 616.00.
+PO-2023-2362 line 4: SB-DGB-6314 deep-groove ball bearing; part qty 8 each, unit price GBP 90.00, line total GBP 720.00.
+
+PO-2023-2368  supplier: Lochend Oil Analysis Laboratories  order date: 17/11/2023  delivery date: 01/12/2023  cost centre: CC-OM-SVCS (External Services)
+PO-2023-2368 line 1: Oil analysis lab service, full spectrometric panel per sample; part qty 20 service, unit price GBP 50.00, line total GBP 1,000.00.
+PO-2023-2368 line 2: Oil analysis lab service, full spectrometric panel per sample, for gearbox CB-GBX-12; part qty 20 service, unit price GBP 50.00, line total GBP 1,000.00.
+PO-2023-2368 line 3: Vibration survey and analysis, per turbine; part qty 6 service, unit price GBP 820.00, line total GBP 4,920.00.
+
+PO-2023-2374  supplier: Marrowfield Safety Equipment  order date: 28/11/2023  delivery date: 13/12/2023  cost centre: CC-OM-SAFE (Health & Safety)
+PO-2023-2374 line 1: Fall-arrest harness, full body, size L; part qty 8 each, unit price GBP 196.00, line total GBP 1,568.00.
+PO-2023-2374 line 2: Hearing protection earmuffs SNR 31, pack of 10; part qty 5 each, unit price GBP 100.00, line total GBP 500.00.
+PO-2023-2374 line 3: Hi-vis winter jacket, EN ISO 20471, per unit; part qty 12 each, unit price GBP 96.00, line total GBP 1,152.00.
+PO-2023-2374 line 4: Rescue descender device, certified; part qty 2 each, unit price GBP 404.00, line total GBP 808.00.
+
+PO-2023-2380  supplier: Glenmara Lubricants plc  order date: 08/12/2023  delivery date: 22/12/2023  cost centre: CC-OM-LUBE (Lubrication)
+PO-2023-2380 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-12; part qty 4 unit, unit price GBP 1,066.00, line total GBP 4,264.00.
+PO-2023-2380 line 2: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 20 L pail; part qty 6 unit, unit price GBP 130.00, line total GBP 780.00.
+PO-2023-2380 line 3: Main bearing grease NLGI 2 polyurea, 50 kg drum; part qty 2 unit, unit price GBP 414.00, line total GBP 828.00.
+PO-2023-2380 line 4: Hydraulic oil ISO VG 46, pitch system, 208 L drum; part qty 2 unit, unit price GBP 478.00, line total GBP 956.00.
+
+PO-2023-2386  supplier: Harkness Pump & Valve Co  order date: 19/12/2023  delivery date: 05/01/2024  cost centre: CC-OM-STORE (Stores Replenishment)
+PO-2023-2386 line 1: Nacelle cooling fan motor, exchange unit, for WTG-11; part qty 2 each, unit price GBP 476.00, line total GBP 952.00.
+PO-2023-2386 line 2: Cooling circuit duplex filter cartridge, 25 micron; part qty 4 each, unit price GBP 144.00, line total GBP 576.00.
+PO-2023-2386 line 3: Hydraulic return filter HF-160, pitch system; part qty 6 each, unit price GBP 126.00, line total GBP 756.00.
+PO-2023-2386 line 4: Breather desiccant filter DBF-15, gearbox; part qty 10 each, unit price GBP 46.00, line total GBP 460.00.
+
+PO-2024-2392  supplier: Severn Bearings Ltd  order date: 08/01/2024  delivery date: 23/01/2024  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2024-2392 line 1: SB-CRB-2200 cylindrical roller bearing (Severn Bearings), for gearbox CB-GBX-12; part qty 2 each, unit price GBP 648.00, line total GBP 1,296.00.
+PO-2024-2392 line 2: SB-SRB-22320 spherical roller bearing, gearbox HSS, for WTG-12; part qty 2 each, unit price GBP 956.00, line total GBP 1,912.00.
+PO-2024-2392 line 3: SB-DGB-6314 deep-groove ball bearing; part qty 6 each, unit price GBP 92.00, line total GBP 552.00.
+PO-2024-2392 line 4: Generator NDE bearing SB-DGB-6326, insulated, for gearbox CB-GBX-12; part qty 1 each, unit price GBP 548.00, line total GBP 548.00.
+
+PO-2024-2398  supplier: Glenmara Lubricants plc  order date: 18/01/2024  delivery date: 02/02/2024  cost centre: CC-OM-LUBE (Lubrication)
+PO-2024-2398 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-12; part qty 4 unit, unit price GBP 1,070.00, line total GBP 4,280.00.
+PO-2024-2398 line 2: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 20 L pail; part qty 6 unit, unit price GBP 132.00, line total GBP 792.00.
+PO-2024-2398 line 3: Yaw gearbox grease NLGI 2 lithium-complex, 18 kg keg; part qty 3 unit, unit price GBP 204.00, line total GBP 612.00.
+PO-2024-2398 line 4: Coolant / glycol concentrate, gearbox cooling, 25 L; part qty 6 unit, unit price GBP 102.00, line total GBP 612.00.
+
+PO-2024-2404  supplier: Brackmoor Filtration Co  order date: 29/01/2024  delivery date: 13/02/2024  cost centre: CC-OM-CONS (Consumables)
+PO-2024-2404 line 1: Gearbox offline filter element OF-10-3-NDS, 3 micron, for gearbox CB-GBX-12; part qty 12 each, unit price GBP 92.00, line total GBP 1,104.00.
+PO-2024-2404 line 2: Gearbox pressure filter element PF-25-12, 12 micron; part qty 8 each, unit price GBP 106.00, line total GBP 848.00.
+PO-2024-2404 line 3: Hydraulic return filter HF-160, pitch system; part qty 8 each, unit price GBP 128.00, line total GBP 1,024.00.
+PO-2024-2404 line 4: Air intake panel filter, nacelle HVAC G4; part qty 12 each, unit price GBP 20.00, line total GBP 240.00.
+
+PO-2024-2410  supplier: Borthwick NDT & Inspection  order date: 09/02/2024  delivery date: 23/02/2024  cost centre: CC-OM-INSP (Inspection & NDT)
+PO-2024-2410 line 1: Borescope inspection of gearbox, per turbine, day rate, for gearbox CB-GBX-12; part qty 6 service, unit price GBP 1,100.00, line total GBP 6,600.00.
+PO-2024-2410 line 2: Vibration survey and analysis, per turbine; part qty 5 service, unit price GBP 840.00, line total GBP 4,200.00.
+PO-2024-2410 line 3: Up-tower main bearing inspection, technician day rate; part qty 6 service, unit price GBP 700.00, line total GBP 4,200.00.
+
+PO-2024-2416  supplier: Westhaven Tooling & Calibration  order date: 19/02/2024  delivery date: 05/03/2024  cost centre: CC-OM-TOOL (Tooling & Equipment)
+PO-2024-2416 line 1: Hydraulic torque wrench 4000 Nm, calibrated; part qty 1 each, unit price GBP 4,440.00, line total GBP 4,440.00.
+PO-2024-2416 line 2: Insulated tool set 1000 V VDE, 32 piece; part qty 2 each, unit price GBP 418.00, line total GBP 836.00.
+PO-2024-2416 line 3: Lifting sling set 2 t WLL, certified, pack; part qty 3 each, unit price GBP 252.00, line total GBP 756.00.
+PO-2024-2416 line 4: Calibration of torque tooling, UKAS, per instrument; part qty 8 service, unit price GBP 160.00, line total GBP 1,280.00.
+
+PO-2022-2009  supplier: Inverleith Welding Supplies  order date: 14/01/2022  delivery date: 28/01/2022  cost centre: CC-OM-TOOL (Tooling & Equipment)
+PO-2022-2009 line 1: MIG welding wire ER70S-6, 1.2 mm, 15 kg spool; part qty 6 each, unit price GBP 58.00, line total GBP 348.00.
+PO-2022-2009 line 2: Tungsten electrode 2.4 mm, pack of 10; part qty 4 each, unit price GBP 28.00, line total GBP 112.00.
+PO-2022-2009 line 3: Welding shield auto-darkening, per unit; part qty 3 each, unit price GBP 142.00, line total GBP 426.00.
+PO-2022-2009 line 4: Grinding disc 125 mm, box of 25; part qty 4 each, unit price GBP 46.00, line total GBP 184.00.
+
+PO-2022-2026  supplier: Quillan Adhesives & Sealants  order date: 16/02/2022  delivery date: 02/03/2022  cost centre: CC-OM-CONS (Consumables)
+PO-2022-2026 line 1: Anaerobic threadlocker high-strength, 250 ml, for WTG-06; part qty 8 each, unit price GBP 34.00, line total GBP 272.00.
+PO-2022-2026 line 2: RTV silicone sealant, flange grade, 310 ml, box of 12; part qty 3 each, unit price GBP 72.00, line total GBP 216.00.
+PO-2022-2026 line 3: Retaining compound for bearings, 50 ml; part qty 6 each, unit price GBP 42.00, line total GBP 252.00.
+PO-2022-2026 line 4: Cleaning solvent activator aerosol, box of 12; part qty 2 each, unit price GBP 88.00, line total GBP 176.00.
+
+PO-2022-2071  supplier: Fennel & Birch Industrial Coatings  order date: 28/04/2022  delivery date: 13/05/2022  cost centre: CC-OM-STORE (Stores Replenishment)
+PO-2022-2071 line 1: Two-pack epoxy primer, tower steel, 5 L tin; part qty 6 each, unit price GBP 96.00, line total GBP 576.00.
+PO-2022-2071 line 2: Polyurethane topcoat, light grey, 5 L tin; part qty 6 each, unit price GBP 112.00, line total GBP 672.00.
+PO-2022-2071 line 3: Cold galvanising compound aerosol, box of 12; part qty 3 each, unit price GBP 78.00, line total GBP 234.00.
+PO-2022-2071 line 4: Surface tolerant zinc-rich coating, 5 L, for WTG-09; part qty 4 each, unit price GBP 124.00, line total GBP 496.00.
+
+PO-2022-2120  supplier: Drystone Site Logistics  order date: 25/07/2022  delivery date: 09/08/2022  cost centre: CC-OM-LOGS (Logistics & Access)
+PO-2022-2120 line 1: Low-loader transport, gearbox exchange, per movement; part qty 2 service, unit price GBP 1,840.00, line total GBP 3,680.00.
+PO-2022-2120 line 2: Site access road grading, day rate; part qty 3 service, unit price GBP 720.00, line total GBP 2,160.00.
+PO-2022-2120 line 3: Welfare unit hire, per month; part qty 2 service, unit price GBP 980.00, line total GBP 1,960.00.
+
+PO-2022-2147  supplier: Harkness Pump & Valve Co  order date: 12/09/2022  delivery date: 27/09/2022  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2022-2147 line 1: Gearbox lubrication pump, exchange unit, for gearbox CB-GBX-10; part qty 1 each, unit price GBP 1,640.00, line total GBP 1,640.00.
+PO-2022-2147 line 2: Pressure relief valve, gearbox circuit, 8 bar; part qty 3 each, unit price GBP 188.00, line total GBP 564.00.
+PO-2022-2147 line 3: Non-return valve, 1 inch, stainless; part qty 6 each, unit price GBP 64.00, line total GBP 384.00.
+PO-2022-2147 line 4: Cooling circuit circulation pump seal kit; part qty 4 kit, unit price GBP 96.00, line total GBP 384.00.
+
+PO-2022-2186  supplier: Strathorn Sensors & Instrumentation  order date: 21/11/2022  delivery date: 06/12/2022  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2022-2186 line 1: Oil particle counter inline sensor, for gearbox CB-GBX-13; part qty 1 each, unit price GBP 1,880.00, line total GBP 1,880.00.
+PO-2022-2186 line 2: Temperature RTD PT100 4-wire, gearbox bearing; part qty 10 each, unit price GBP 65.00, line total GBP 650.00.
+PO-2022-2186 line 3: Vibration sensor, accelerometer 100 mV/g, IEPE; part qty 4 each, unit price GBP 270.00, line total GBP 1,080.00.
+PO-2022-2186 line 4: Pressure transducer 0-250 bar, pitch; part qty 4 each, unit price GBP 200.00, line total GBP 800.00.
+
+PO-2023-2206  supplier: Inverleith Welding Supplies  order date: 12/01/2023  delivery date: 26/01/2023  cost centre: CC-OM-TOOL (Tooling & Equipment)
+PO-2023-2206 line 1: MIG welding wire ER70S-6, 1.2 mm, 15 kg spool; part qty 6 each, unit price GBP 60.00, line total GBP 360.00.
+PO-2023-2206 line 2: Grinding disc 125 mm, box of 25; part qty 5 each, unit price GBP 48.00, line total GBP 240.00.
+PO-2023-2206 line 3: Cutting disc 230 mm, box of 25; part qty 3 each, unit price GBP 54.00, line total GBP 162.00.
+PO-2023-2206 line 4: Welding gas argon/CO2 mix, cylinder rental, per month; part qty 4 service, unit price GBP 38.00, line total GBP 152.00.
+
+PO-2023-2218  supplier: Quillan Adhesives & Sealants  order date: 06/02/2023  delivery date: 20/02/2023  cost centre: CC-OM-CONS (Consumables)
+PO-2023-2218 line 1: Anaerobic threadlocker high-strength, 250 ml, for WTG-13; part qty 8 each, unit price GBP 36.00, line total GBP 288.00.
+PO-2023-2218 line 2: Retaining compound for bearings, 50 ml; part qty 6 each, unit price GBP 44.00, line total GBP 264.00.
+PO-2023-2218 line 3: RTV silicone sealant, flange grade, 310 ml, box of 12; part qty 3 each, unit price GBP 74.00, line total GBP 222.00.
+PO-2023-2218 line 4: Gasket maker, anaerobic, 50 ml, box of 12; part qty 2 each, unit price GBP 96.00, line total GBP 192.00.
+
+PO-2023-2244  supplier: Fennel & Birch Industrial Coatings  order date: 24/03/2023  delivery date: 07/04/2023  cost centre: CC-OM-STORE (Stores Replenishment)
+PO-2023-2244 line 1: Two-pack epoxy primer, tower steel, 5 L tin; part qty 6 each, unit price GBP 98.00, line total GBP 588.00.
+PO-2023-2244 line 2: Polyurethane topcoat, light grey, 5 L tin, for WTG-15; part qty 6 each, unit price GBP 114.00, line total GBP 684.00.
+PO-2023-2244 line 3: Cold galvanising compound aerosol, box of 12; part qty 4 each, unit price GBP 80.00, line total GBP 320.00.
+PO-2023-2244 line 4: Anti-corrosion wax spray, box of 12; part qty 3 each, unit price GBP 62.00, line total GBP 186.00.
+
+PO-2023-2280  supplier: Drystone Site Logistics  order date: 21/05/2023  delivery date: 05/06/2023  cost centre: CC-OM-LOGS (Logistics & Access)
+PO-2023-2280 line 1: Low-loader transport, gearbox exchange, per movement; part qty 2 service, unit price GBP 1,920.00, line total GBP 3,840.00.
+PO-2023-2280 line 2: Site access road grading, day rate; part qty 4 service, unit price GBP 740.00, line total GBP 2,960.00.
+PO-2023-2280 line 3: Welfare unit hire, per month; part qty 3 service, unit price GBP 1,000.00, line total GBP 3,000.00.
+
+PO-2023-2317  supplier: Harkness Pump & Valve Co  order date: 09/08/2023  delivery date: 24/08/2023  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2023-2317 line 1: Gearbox lubrication pump, exchange unit, for gearbox CB-GBX-12; part qty 1 each, unit price GBP 1,720.00, line total GBP 1,720.00.
+PO-2023-2317 line 2: Pressure relief valve, gearbox circuit, 8 bar; part qty 3 each, unit price GBP 192.00, line total GBP 576.00.
+PO-2023-2317 line 3: Cooling circuit circulation pump seal kit; part qty 4 kit, unit price GBP 98.00, line total GBP 392.00.
+PO-2023-2317 line 4: Non-return valve, 1 inch, stainless; part qty 6 each, unit price GBP 66.00, line total GBP 396.00.
+
+PO-2023-2347  supplier: Galloway Cable & Connector Supplies  order date: 06/10/2023  delivery date: 20/10/2023  cost centre: CC-OM-ELEC (Electrical Maintenance)
+PO-2023-2347 line 1: Power cable 4-core 25 mm2, per metre, drum of 100 m; part qty 3 each, unit price GBP 420.00, line total GBP 1,260.00.
+PO-2023-2347 line 2: M-series circular connector, 12-way, IP67; part qty 12 each, unit price GBP 38.00, line total GBP 456.00.
+PO-2023-2347 line 3: Cable gland kit, brass, M20-M40, assorted; part qty 4 each, unit price GBP 72.00, line total GBP 288.00.
+PO-2023-2347 line 4: Heat-shrink termination kit, MV, per set; part qty 2 each, unit price GBP 168.00, line total GBP 336.00.
+
+PO-2023-2371  supplier: Skellig Composites Repair  order date: 20/11/2023  delivery date: 05/12/2023  cost centre: CC-OM-SVCS (External Services)
+PO-2023-2371 line 1: Rope-access blade repair team, day rate per technician, for WTG-12; part qty 8 service, unit price GBP 660.00, line total GBP 5,280.00.
+PO-2023-2371 line 2: Leading-edge protection tape, per roll; part qty 6 each, unit price GBP 84.00, line total GBP 504.00.
+PO-2023-2371 line 3: Two-part laminating epoxy, blade repair, 5 kg kit; part qty 3 each, unit price GBP 196.00, line total GBP 588.00.
+
+PO-2024-2395  supplier: Inverleith Welding Supplies  order date: 12/01/2024  delivery date: 26/01/2024  cost centre: CC-OM-TOOL (Tooling & Equipment)
+PO-2024-2395 line 1: MIG welding wire ER70S-6, 1.2 mm, 15 kg spool; part qty 6 each, unit price GBP 62.00, line total GBP 372.00.
+PO-2024-2395 line 2: Grinding disc 125 mm, box of 25; part qty 5 each, unit price GBP 50.00, line total GBP 250.00.
+PO-2024-2395 line 3: Cutting disc 230 mm, box of 25; part qty 3 each, unit price GBP 56.00, line total GBP 168.00.
+PO-2024-2395 line 4: Welding gas argon/CO2 mix, cylinder rental, per month; part qty 4 service, unit price GBP 40.00, line total GBP 160.00.
+
+PO-2024-2401  supplier: Quillan Adhesives & Sealants  order date: 22/01/2024  delivery date: 06/02/2024  cost centre: CC-OM-CONS (Consumables)
+PO-2024-2401 line 1: Anaerobic threadlocker high-strength, 250 ml; part qty 8 each, unit price GBP 38.00, line total GBP 304.00.
+PO-2024-2401 line 2: Retaining compound for bearings, 50 ml, for gearbox CB-GBX-12; part qty 6 each, unit price GBP 46.00, line total GBP 276.00.
+PO-2024-2401 line 3: RTV silicone sealant, flange grade, 310 ml, box of 12; part qty 3 each, unit price GBP 76.00, line total GBP 228.00.
+PO-2024-2401 line 4: Gasket maker, anaerobic, 50 ml, box of 12; part qty 2 each, unit price GBP 98.00, line total GBP 196.00.
+
+PO-2024-2407  supplier: Pentland Couplings & Power Transmission  order date: 02/02/2024  delivery date: 17/02/2024  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2024-2407 line 1: Generator coupling element, flexible, PTC-880, for WTG-12; part qty 2 each, unit price GBP 744.00, line total GBP 1,488.00.
+PO-2024-2407 line 2: High-speed coupling spacer, machined; part qty 3 each, unit price GBP 412.00, line total GBP 1,236.00.
+PO-2024-2407 line 3: SB-PLB-205 pillow block bearing unit; part qty 6 each, unit price GBP 112.00, line total GBP 672.00.
+PO-2024-2407 line 4: Coupling bolt set, fitted, per coupling; part qty 4 set, unit price GBP 188.00, line total GBP 752.00.
+
+PO-2024-2413  supplier: Cromarty Yaw Drives Ltd  order date: 14/02/2024  delivery date: 29/02/2024  cost centre: CC-OM-MECH (Mechanical Maintenance)
+PO-2024-2413 line 1: Yaw motor exchange unit, Cromarty YD-12, for WTG-12; part qty 1 each, unit price GBP 3,040.00, line total GBP 3,040.00.
+PO-2024-2413 line 2: Yaw gear pinion, hardened, single; part qty 3 each, unit price GBP 644.00, line total GBP 1,932.00.
+PO-2024-2413 line 3: Yaw brake caliper, exchange unit; part qty 2 each, unit price GBP 568.00, line total GBP 1,136.00.
+PO-2024-2413 line 4: Yaw bearing grease seal, labyrinth type; part qty 8 kit, unit price GBP 38.00, line total GBP 304.00.
+
+PO-2023-2261  supplier: Glenmara Lubricants plc  order date: 03/07/2023  delivery date: 11/07/2023  cost centre: CC-OM-LUBE (Lubrication)
+PO-2023-2261 line 1: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, for gearbox CB-GBX-07; part qty 2 unit, unit price GBP 1,040.00, line total GBP 2,080.00.
+PO-2023-2261 line 2: Main bearing grease NLGI 2 polyurea, 50 kg drum; part qty 1 unit, unit price GBP 410.00, line total GBP 410.00.
+PO-2023-2261 line 3: Breather desiccant filter DBF-15, gearbox, for gearbox CB-GBX-07; part qty 4 each, unit price GBP 52.00, line total GBP 208.00.
+PO-2023-2261 line 4: Gear oil ISO VG 320 synthetic to NDS-LUB-04, 208 L drum, scheduled top-up for gearbox CB-GBX-12; part qty 1 unit, unit price GBP 1,055.00, line total GBP 1,055.00.
+Note on PO-2023-2261 line 4: the gear oil ordered to grade ISO VG 320 synthetic (NDS-LUB-04) was unavailable from the primary supplier, and 200 litres of ISO VG 150 mineral gear oil were substituted and issued to Cairn Brae stores on 9 July 2023 against operations' verbal approval, pending resupply of the specified grade.
+PO-2023-2261 line 5: Absorbent mat, oil only, bale of 200; part qty 2 each, unit price GBP 165.00, line total GBP 330.00.
+
+--- END OF PURCHASE ORDER LINE ITEMS ---
+Total purchase orders in export: 90. Reconciled against goods-received notes and stores issue records as at 25 February 2024.
+Export prepared by Cairn Brae procurement; queries to the O&M commercial desk. End of file.
