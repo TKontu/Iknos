@@ -125,7 +125,9 @@ before committing to the full build:
       agentic RAG / expert+search on the differentiator axes (contradiction handling,
       retraction, traceability, calibration), bias-controlled. If not, **stop and rethink**.
 - [ ] **Ablation (Trial E2)** — which components carry the value; the data-driven minimal
-      system if descoping is needed.
+      system if descoping is needed. *(The W10 de-scoping ladder in `todo_trials.md`
+      names the candidate minimal configurations in advance, so a mixed E1 result has
+      a pre-agreed landing zone.)*
 - [ ] **Ecological validity (Trial E3)** — run on a real, already-resolved case (messy
       evidence, known answer). Climb the ladder: synthetic → retrospective real →
       prospective/live; never claim efficacy from the synthetic gate alone.
@@ -143,6 +145,19 @@ must land before the remaining G4.5 slices — specs in
 `todo_phase_4_linking_adjudication.md` *Open task specs*. Gate infrastructure
 (R10/R11 out-of-process embeddings + job queue; R4/V9 ANN) lands before the trials
 run.
+
+**And the loop itself is unproven (2026-06-11 architecture assessment, W1/W2/W3).**
+Nothing calls the G3.9 `stabilize` driver, so the
+`REFUTES → retract → A → B → QBAF → gate` feedback path has never executed — every
+correctness guarantee rests on per-layer unit tests, and with the symbolic channel
+ABSTAINing the default gate withholds every automated `refuted` flip (the
+differentiator is currently non-functional end to end). The composed-loop
+orchestrator (**W1**) and the synthetic §8 end-to-end fixture (**W2**) are gate
+prerequisites alongside V1–V6, and the interim refutation-gate choice (**W3**) is
+decided eyes-open, not by default — specs in `todo_phase_4_*.md` *Open task specs*.
+The assessment also gates Phase 5 entry (see `todo_phase_5_*.md`) and adds
+G1.23/G1.24, W7/W8/W11, the C3 W9 amendment, and the E2 de-scoping ladder (W10).
+Findings record: `archive/review_2026-06-11_planned_architecture_assessment.md`.
 
 ## Deferred items — triggers (check on every slice PR)
 
@@ -200,11 +215,13 @@ into the owning phase/gap doc as an active task.
 ## Open questions & risks
 
 Tracked in `architecture.md` Open items and §13. The live, build-time/empirical ones
-are surfaced in the phase that must resolve them. All review findings (June 2026 and
-2026-06-11) are **fully folded into the plan**: shipped fixes are recorded in each
+are surfaced in the phase that must resolve them. All review findings (June 2026,
+the 2026-06-11 post-Phase-4 review, and the 2026-06-11 architecture assessment
+W1–W11) are **fully folded into the plan**: shipped fixes are recorded in each
 phase file's *Build record*; open tasks live as specs in `todo_phase_4_*.md` (*Open
-task specs*), `todo_trials.md` (A0/E1 work breakdowns + *Gate prerequisites*), the
-Phase 6/7 entry criteria, the deferred-triggers table above, and the *Maintenance
+task specs*), `todo_phase_1_ingest.md` (G1.23/G1.24), `todo_trials.md` (A0/E1 work
+breakdowns + *Gate prerequisites* + the C3/E2 amendments), the Phase 5/6/7 entry
+criteria, the deferred-triggers table above, and the *Maintenance
 backlog* below. The original review/gap documents are preserved verbatim in
 `docs/archive/` (historical record only — not task trackers; code docstrings that
 cite a gap file by name resolve there):
@@ -243,6 +260,36 @@ cite a gap file by name resolve there):
       `test_config.py` (defaults without env; env overrides; no DB on import).
       Pure where the module is pure; integration tests keep owning round-trips;
       don't chase coverage into ORM/type modules.
+- [ ] **W7 — dual-write transaction discipline** *(2026-06-11 architecture
+      assessment, P7 — **land before Phase 5**, see that file's entry criteria)*.
+      Graph writes (raw Cypher via `execute_driver_sql`) and relational writes
+      (ORM) share one session, but no call site has a rollback discipline: a
+      failed Fact write after a persisted `Action` leaves the audit log pointing
+      at an artifact that does not exist — breaking §10.2 point auditability
+      (principle 9) precisely where it must hold. One transactional wrapper
+      (context manager) covering graph write + relational write + `Action`
+      append; operators adopt it; rollback tests inject a failure between the
+      writes and assert no orphaned `Action` and no orphaned vertex.
+- [ ] **W8 — Cypher chokepoint + serde round-trips** *(assessment, P10)*. ~140
+      call sites interpolate labels/edge types/ids/timestamps into f-string
+      Cypher outside the `db/age.py` helpers — safe today (values come from
+      enums/UUIDs/`isoformat()`), but convention, not construction: one future
+      call site with a user-influenced value breaks it silently. (1) A thin
+      query-builder over `db/age.py` (validated label/edge enums, mandatory
+      value escaping through the `cypher_map` machinery); migrate the writers;
+      a CI grep gate against raw f-string Cypher outside it. (2) Round-trip
+      property tests for every manual serde pair (`Sensitivity.flatten` /
+      `from_props`, `SourceInterest`, box serde, `same_as_to_props`) so a
+      write/read format drift cannot ship without a test going red.
+- [ ] **W11 — small hardening batch** *(assessment, minor findings — one PR)*:
+      embedding-model identity checked at substrate construction, not first
+      write (fail before the expensive re-embed, `core/embeddings.py`);
+      verifier-down degraded mode surfaced as a triage-visible reason, not only
+      a log line; the segment `Action` records the per-reason span-skip split
+      (whitespace vs zero-vector); `DEFAULT_AGREEMENT_THRESHOLD` becomes a
+      config knob; `types/nodes.py` gains the `Mention` placeholder (or an
+      explicit docstring pointer) so the §3.1 binding seam is visible in the
+      schema module, not only in `core/reference.py` prose.
 
 ## Conventions for executing agents *(applies to every task in every phase file)*
 
@@ -252,7 +299,7 @@ cite a gap file by name resolve there):
   (see `MIGRATIONS.md`); if you cannot run integration tests, say so — never claim
   them green.
 - Do not start Docker containers without explicit approval.
-- One task per PR; reference the task id (G/R/V) in the PR body.
+- One task per PR; reference the task id (G/R/V/W) in the PR body.
 - `architecture.md` is the source of truth; if a task seems to contradict it, stop
   and report instead of improvising.
 - Migrations: set `down_revision` to the current head (`alembic heads`) — revision
