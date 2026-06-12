@@ -280,7 +280,7 @@ G4.5 slices), then **W1 → W2** (the composed-loop spine — before Phase 5 and
 the G4.6 run), with **W3** decided alongside the G4.5 channel-producer work, and
 **R4 → V9** (gate ANN infrastructure — with the gate trials).
 Migrations: set `down_revision` to the actual head (`alembic heads`) — numbering in
-older specs is stale. **R8 shipped (next: R9).**
+older specs is stale. **R8/R9 shipped (next: V7).**
 
 ### R8 — `provisional` boolean → `provisional_reasons` set — ✅ **shipped**
 
@@ -341,7 +341,16 @@ clear the OR-fold); a twin that is also low-faithfulness carries **both** reason
 (OR-fold union, never overwrite); reasons survive an AGE persist → read
 round-trip; and the legacy boolean mirrors non-emptiness in each case.
 
-### R9 — quarantine gate function (pure)
+### R9 — quarantine gate function (pure) — ✅ **shipped**
+
+*Shipped as `fix/r9-quarantine-gate`, to spec. `assert_not_quarantined` normalises
+`proposition_reasons` through `merge_provisional_reasons` (one source of truth for the
+reason-list shape) and gates via a `_GATES_ON_PROVISIONAL` dict keyed on every `Stakes`
+member, so a future calibrated middle band is a fail-loud KeyError, not a silent pass. The
+raised `QuarantinedPropositionError` carries the normalised `reasons` tuple + `stakes` so the
+V7 caller records the `{evidence_id, sign, reasons, stakes}` triage signal straight off the
+exception. `test_quarantine.py`: the three-row truth table + the move-not-atom asymmetry,
+importable without `DATABASE_URL`.*
 
 New module `src/iknos/core/quarantine.py`: `QuarantinedPropositionError`;
 `Stakes(StrEnum)` `LOW`/`HIGH`; `assert_not_quarantined(proposition_reasons:
