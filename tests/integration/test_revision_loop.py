@@ -79,6 +79,16 @@ async def _evidential(
     )
 
 
+def _norm(v: object) -> str:
+    """Normalize an agtype scalar to a plain string, with SQL/agtype null → ``"null"``.
+
+    A null property comes back as Python ``None`` (rendering ``str(None) == "None"``); collapse both
+    that and a literal agtype ``"null"`` to ``"null"`` so the assertions read cleanly."""
+    if v is None or str(v) in ("null", "None"):
+        return "null"
+    return unquote_agtype(v)
+
+
 async def _read(session: AsyncSession, nid: uuid.UUID) -> dict[str, str]:
     rows = await execute_cypher(
         session,
@@ -87,10 +97,10 @@ async def _read(session: AsyncSession, nid: uuid.UUID) -> dict[str, str]:
     )
     state, valid_to, conf, pending = rows[0]
     return {
-        "state": unquote_agtype(state),
-        "valid_to": unquote_agtype(valid_to),
-        "confidence": str(conf),
-        "pending": str(pending),
+        "state": _norm(state),
+        "valid_to": _norm(valid_to),
+        "confidence": _norm(conf),
+        "pending": _norm(pending),
     }
 
 
