@@ -33,6 +33,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass, replace
 from typing import Any
@@ -59,6 +60,7 @@ from iknos.core.reference_corpus import (
 from iknos.core.segmentation import SegmentationBackbone
 from iknos.db.orm import DocumentEmbedding
 from iknos.provenance.action_log import record_action
+from iknos.provenance.metrics import elapsed_ms
 from iknos.types.governance import Sensitivity
 from iknos.types.nodes import Box, Span
 
@@ -300,6 +302,10 @@ async def persist_spans(
     """
     from iknos.db.age import cypher_map, execute_cypher
 
+    # R12: time the whole segment-persist (guards + span/dense writes) for the segment Action's
+    # duration_ms. monotonic delta; the span/whitespace counts come from the loop below.
+    t0 = time.monotonic()
+
     # G1.16: refuse a model swap before any write. The model is also in span_content_hash, so a
     # swap trips the resegmentation guard below too — but this fires first with the specific error
     # and the actionable fix (reembed), and it is the load-bearing check for any caller whose
@@ -415,6 +421,13 @@ async def persist_spans(
             },
             outputs={"span_ids": [str(s.id) for s in spans], "skipped": skipped},
             model=model,
+            # R12 observability floor: persisted span count + whitespace/no-embedding spans dropped
+            # (review R3), with the persist wall-clock. n_spans is the set written this level.
+            metrics={
+                "duration_ms": elapsed_ms(t0),
+                "n_spans": len(spans),
+                "n_skipped_whitespace": skipped,
+            },
         )
 
     return SpanPersistResult(
@@ -433,6 +446,7 @@ async def _ingest_parsed(
     segmenter: SegmentationBackbone,
     title: str | None = None,
     source_uri: str | None = None,
+    parse_duration_ms: int | None = None,
 ) -> SpanPersistResult:
     """The Stage-0-onward tail shared by every ingest entry point (text or bytes).
 
@@ -490,6 +504,11 @@ async def _ingest_parsed(
             },
             outputs={"elements": len(parse_result.elements)},
             model=parse_result.parser_name,
+            # R12: the parser's wall-clock, timed by the entry point (the parse runs before this
+            # tail). n_spans/n_skipped_whitespace belong to the segment stage and are absent at
+            # parse time, so they are omitted (the never-zero discipline) rather than written as 0.
+            # Omitted whole when an entry point did not time the parse (parse_duration_ms is None).
+            metrics=({"duration_ms": parse_duration_ms} if parse_duration_ms is not None else None),
         )
 
     context = substrate.embed_document(raw_text)
@@ -560,7 +579,9 @@ async def ingest_document(
     document (two sources of truth for one string). The shared tail lives in
     :func:`_ingest_parsed`.
     """
+    t0 = time.monotonic()
     parse_result = NullParser().parse_text(raw_text)
+    parse_duration_ms = elapsed_ms(t0)
     parse_ch = parse_content_hash(
         input_sha256=hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
         media_type="text/plain",
@@ -578,6 +599,7 @@ async def ingest_document(
         segmenter=segmenter,
         title=title,
         source_uri=source_uri,
+        parse_duration_ms=parse_duration_ms,
     )
 
 
@@ -607,7 +629,9 @@ async def ingest_document_bytes(
     so spans, layouts, idempotency and the resegmentation guard behave the same — only the
     geometry differs (real regions here, ``None`` under the null parser).
     """
+    t0 = time.monotonic()
     parse_result = await parser.parse(document_bytes, media_type=media_type)
+    parse_duration_ms = elapsed_ms(t0)
     parse_ch = parse_content_hash(
         input_sha256=hashlib.sha256(document_bytes).hexdigest(),
         media_type=media_type,
@@ -625,6 +649,7 @@ async def ingest_document_bytes(
         segmenter=segmenter,
         title=title,
         source_uri=source_uri,
+        parse_duration_ms=parse_duration_ms,
     )
 
 

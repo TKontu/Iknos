@@ -101,6 +101,13 @@ class Action(Base):
     sampling: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     raw_judgment: Mapped[str | None] = mapped_column(Text)
     calibration: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Observability floor (R12, §6.1): per-Action operational metrics — token counts, durations,
+    # span counts. NOT NULL DEFAULT '{}' so every Action has an object to read (like inputs/outputs)
+    # and the cost-discipline / Trials-A/C consumers never hit a null. Keys are omitted, never
+    # zeroed, when a source is absent (e.g. an endpoint that returns no usage block).
+    metrics: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
 
 class DocumentEmbedding(Base):

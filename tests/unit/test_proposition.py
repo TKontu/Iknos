@@ -104,7 +104,9 @@ async def test_infer_span_maps_propositions_to_target_span():
         embed_return=[[1.0, 0.0], [0.0, 1.0]],
     )
 
-    results, _twins = await p._infer_span(asyncio.Semaphore(2), spans, index=1, raw_text=raw)
+    results, _twins, _metrics = await p._infer_span(
+        asyncio.Semaphore(2), spans, index=1, raw_text=raw
+    )
 
     assert [r.text for r in results] == [
         "Smith argued the budget was insufficient.",
@@ -127,7 +129,9 @@ async def test_infer_span_empty_returns_no_results_and_skips_embedding():
     spans = [_span(doc, 0, 13)]
     p = _propositionizer(llm_return={"propositions": []}, embed_return=[])
 
-    results, _twins = await p._infer_span(asyncio.Semaphore(2), spans, index=0, raw_text=raw)
+    results, _twins, _metrics = await p._infer_span(
+        asyncio.Semaphore(2), spans, index=0, raw_text=raw
+    )
 
     assert results == []
     p.substrate.embed_passages.assert_not_called()
@@ -186,7 +190,9 @@ async def test_infer_span_populates_epistemic_fields_and_routing():
         embed_return=[[1.0, 0.0], [0.0, 1.0]],
     )
 
-    results, _twins = await p._infer_span(asyncio.Semaphore(2), spans, index=1, raw_text=raw)
+    results, _twins, _metrics = await p._infer_span(
+        asyncio.Semaphore(2), spans, index=1, raw_text=raw
+    )
 
     judgement, observation = results
     assert judgement.epistemic_class is EpistemicClass.JUDGEMENT
@@ -257,11 +263,17 @@ async def test_verify_all_sets_faithfulness_and_provisional() -> None:
 
     verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, inferred)
 
-    (i, results, verdicts) = verified[0]
+    (i, results, verdicts, metrics) = verified[0]
     assert i == 0
     assert results[0].faithfulness == pytest.approx(1.0)
     assert results[0].provisional_reasons == []
     assert verdicts[0].entailment is Entailment.ENTAILED
+    # R12: the span's verify Action carries cost metrics — one verify call per proposition, no
+    # reuse; the mock verifier reports no usage so the token keys are omitted (never zeroed).
+    assert metrics["n_samples"] == 1
+    assert metrics["cache_hit"] is False
+    assert "duration_ms" in metrics
+    assert "prompt_tokens" not in metrics
     # The verifier was handed the source span's text, not the proposition text.
     p.verifier.verify_proposition.assert_awaited_once()
     assert p.verifier.verify_proposition.call_args.args[0] == raw
@@ -355,7 +367,7 @@ async def test_verify_all_degrades_on_verifier_failure() -> None:
 
     verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, inferred)
 
-    (i, results, verdicts) = verified[0]
+    (i, results, verdicts, _metrics) = verified[0]
     assert results[0].faithfulness is None
     assert results[0].provisional_reasons == ["unassessed_faithfulness"]
     assert verdicts == [None]
@@ -420,7 +432,9 @@ async def test_multi_sample_clusters_and_scores_agreement() -> None:
         n_samples=3,
     )
 
-    results, _twins = await p._infer_span(asyncio.Semaphore(4), spans, index=0, raw_text=raw)
+    results, _twins, _metrics = await p._infer_span(
+        asyncio.Semaphore(4), spans, index=0, raw_text=raw
+    )
 
     assert p.llm.guided_complete.call_count == 3  # the extractor was sampled N times
     p.substrate.embed_passages.assert_called_once()  # one batched pass over all candidates
@@ -449,7 +463,9 @@ async def test_multi_sample_polarity_twin_quarantines_both_sides() -> None:
         n_samples=5,
     )
 
-    results, twins = await p._infer_span(asyncio.Semaphore(4), spans, index=0, raw_text=raw)
+    results, twins, _metrics = await p._infer_span(
+        asyncio.Semaphore(4), spans, index=0, raw_text=raw
+    )
 
     assert len(results) == 2
     assert sorted(r.agreement for r in results) == pytest.approx([0.4, 0.6])  # never 1.0
@@ -467,7 +483,9 @@ async def test_single_sample_leaves_agreement_null() -> None:
     spans = [_span(doc, 0, len(raw))]
     p = _propositionizer(llm_return={"propositions": [{"text": "A"}]}, embed_return=[[1.0, 0.0]])
 
-    results, _twins = await p._infer_span(asyncio.Semaphore(2), spans, index=0, raw_text=raw)
+    results, _twins, _metrics = await p._infer_span(
+        asyncio.Semaphore(2), spans, index=0, raw_text=raw
+    )
 
     assert p.n_samples == 1
     assert results[0].agreement is None

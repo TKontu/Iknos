@@ -42,6 +42,7 @@ Scope deliberately left to later slices (documented seams):
 """
 
 import asyncio
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -56,6 +57,7 @@ from iknos.boxes.serde import resolve_tier
 from iknos.core.llm import LLMClient
 from iknos.core.prompts import vocab
 from iknos.provenance.action_log import record_action
+from iknos.provenance.metrics import elapsed_ms, llm_metrics
 from iknos.types.annotations import Annotations
 from iknos.types.governance import Sensitivity
 from iknos.types.nodes import Box, Fact, Proposition, Tier
@@ -288,19 +290,33 @@ class Extractor:
         self.sampling = sampling or {"temperature": 0.0}
         self.concurrency = concurrency
 
-    async def _infer(self, sem: asyncio.Semaphore, statement: str) -> list[ExtractedEntity]:
+    async def _infer(
+        self, sem: asyncio.Semaphore, statement: str
+    ) -> tuple[list[ExtractedEntity], dict[str, Any]]:
         """Identify one statement's entities via guided decoding (LLM, DB-free).
 
         Each entity gets a **fresh** uuid — this slice does no dedup, so two mentions of the
         same real entity become two nodes (G2.3 resolves them into a ``SAME_AS`` component).
         The semaphore bounds the global LLM concurrency, acquired around the single call so
         it never nests inside another permit (the proposition-layer permit discipline).
+
+        Returns the entities plus this Action's R12 cost metrics: the LLM call is timed with a
+        ``time.monotonic()`` delta (inside the permit, so the semaphore wait is excluded) and its
+        token usage captured via ``usage_out``. This Phase-2 extractor runs exactly one call per
+        proposition (no self-consistency sampling) and never reuses a prior result, so
+        ``n_samples=1`` and ``cache_hit=False``; an endpoint that reports no usage omits the token
+        keys (never zeroed).
         """
         messages = build_messages(statement)
+        usage: dict[str, int] = {}
         async with sem:
-            raw = await self.llm.guided_complete(messages, ENTITY_SCHEMA, self.sampling)
+            t0 = time.monotonic()
+            raw = await self.llm.guided_complete(
+                messages, ENTITY_SCHEMA, self.sampling, usage_out=usage
+            )
+            duration_ms = elapsed_ms(t0)
         out = FactEntities.model_validate(raw)
-        return [
+        entities = [
             ExtractedEntity(
                 id=uuid.uuid4(),
                 label=e.label,
@@ -310,6 +326,8 @@ class Extractor:
             )
             for e in out.entities
         ]
+        metrics = llm_metrics(duration_ms=duration_ms, usages=[usage], n_samples=1, cache_hit=False)
+        return entities, metrics
 
     async def _already_extracted(self, session: AsyncSession, proposition_id: uuid.UUID) -> bool:
         """Whether this proposition already produced a Fact (idempotency, §10.1-backed).
@@ -357,13 +375,15 @@ class Extractor:
         item: ExtractInput,
         box: Box,
         entities: list[ExtractedEntity],
+        metrics: dict[str, Any],
         *,
         tier_override: Tier | None = None,
     ) -> uuid.UUID:
         """Persist one proposition's Fact + entities + edges + Action in one transaction.
 
         Returns the extract Action id. Commits — one short transaction per fact, like the
-        proposition layer's ``_persist``.
+        proposition layer's ``_persist``. ``metrics`` is the R12 cost payload built in
+        :meth:`_infer` (duration/usage/n_samples/cache_hit), recorded on the extract Action.
         """
         from iknos.db.age import atomic_write, merge_edge, merge_vertex
 
@@ -438,6 +458,7 @@ class Extractor:
                 },
                 model=self.llm.model,
                 sampling=self.sampling,
+                metrics=metrics,
             )
         return action_id
 
@@ -469,11 +490,14 @@ class Extractor:
             *(self._infer(sem, item.proposition.text) for item in pending)
         )
 
-        # Phase 3: serial persistence — one short transaction per fact.
+        # Phase 3: serial persistence — one short transaction per fact. Each inference yields its
+        # entities plus the R12 cost metrics for that proposition's extract Action.
         action_ids: list[uuid.UUID] = []
-        for item, entities in zip(pending, inferred, strict=True):
+        for item, (entities, metrics) in zip(pending, inferred, strict=True):
             action_ids.append(
-                await self._persist(session, item, box, entities, tier_override=tier_override)
+                await self._persist(
+                    session, item, box, entities, metrics, tier_override=tier_override
+                )
             )
         return action_ids
 

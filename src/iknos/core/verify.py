@@ -137,9 +137,20 @@ class Verifier:
         """SHA-256 of the canonical verifier output schema (G1.15) — key-order-insensitive."""
         return canonical_json_sha256(VERIFY_SCHEMA)
 
-    async def verify_proposition(self, span_text: str, prop: PropositionResult) -> _VerifyOut:
-        """One verify LLM call for one proposition. No DB access (concurrent-phase safe)."""
+    async def verify_proposition(
+        self,
+        span_text: str,
+        prop: PropositionResult,
+        *,
+        usage_out: dict[str, int] | None = None,
+    ) -> _VerifyOut:
+        """One verify LLM call for one proposition. No DB access (concurrent-phase safe).
+
+        ``usage_out`` (R12) is threaded straight to :meth:`LLMClient.guided_complete`'s side
+        channel so the caller can fold this verify call's token usage into the span's verify
+        ``Action`` metrics; it is left untouched when the endpoint reports no usage block.
+        """
         raw = await self.llm.guided_complete(
-            self.build_messages(span_text, prop), VERIFY_SCHEMA, self.sampling
+            self.build_messages(span_text, prop), VERIFY_SCHEMA, self.sampling, usage_out=usage_out
         )
         return VerifyVerdict.model_validate(raw).verdicts[0]

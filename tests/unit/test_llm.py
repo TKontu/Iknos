@@ -15,14 +15,22 @@ def _client(call_timeout_s: float = DEFAULT_CALL_TIMEOUT_S) -> LLMClient:
     )
 
 
-def _response(content: str) -> MagicMock:
+def _response(content: str, usage: object = None) -> MagicMock:
     msg = MagicMock()
     msg.content = content
     choice = MagicMock()
     choice.message = msg
     resp = MagicMock()
     resp.choices = [choice]
+    resp.usage = usage
     return resp
+
+
+def _usage(prompt_tokens: int, completion_tokens: int) -> MagicMock:
+    u = MagicMock()
+    u.prompt_tokens = prompt_tokens
+    u.completion_tokens = completion_tokens
+    return u
 
 
 def test_missing_model_raises():
@@ -47,6 +55,38 @@ async def test_guided_complete_parses_json_and_passes_guided_schema():
     assert kwargs["extra_body"] == {"guided_json": {"type": "object"}}
     assert kwargs["model"] == "test-model"
     assert kwargs["temperature"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_guided_complete_populates_usage_out_when_endpoint_reports_it():
+    # R12: the optional usage_out side channel is filled in place with the endpoint's token counts;
+    # the return value stays the bare parsed dict (no contract change for existing callers).
+    client = _client()
+    create = AsyncMock(return_value=_response('{"x": 1}', usage=_usage(31, 9)))
+    client._client.chat.completions.create = create
+
+    usage: dict[str, int] = {}
+    out = await client.guided_complete(
+        [{"role": "user", "content": "hi"}], {"type": "object"}, usage_out=usage
+    )
+
+    assert out == {"x": 1}
+    assert usage == {"prompt_tokens": 31, "completion_tokens": 9}
+
+
+@pytest.mark.asyncio
+async def test_guided_complete_leaves_usage_out_empty_when_endpoint_omits_usage():
+    # Some vLLM configs return no usage block: usage_out stays empty so the caller records the
+    # token keys as *absent* (omitted), never a fabricated zero.
+    client = _client()
+    create = AsyncMock(return_value=_response('{"x": 1}', usage=None))
+    client._client.chat.completions.create = create
+
+    usage: dict[str, int] = {}
+    await client.guided_complete(
+        [{"role": "user", "content": "hi"}], {"type": "object"}, usage_out=usage
+    )
+    assert usage == {}
 
 
 @pytest.mark.asyncio
