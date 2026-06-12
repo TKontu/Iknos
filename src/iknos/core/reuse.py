@@ -98,11 +98,21 @@ def _reasons_from_props(props: dict[str, Any]) -> list[str]:
     reason set from the stored ``faithfulness`` (the only two extract-time producers were
     low-faithfulness and the G1.14 polarity twin, so a True with no faithfulness explanation is
     a twin) — never *clearing* a quarantine on replay. Absent reasons + falsy boolean → empty.
+
+    This is *legacy* reconstruction, frozen to the pre-R8 truth: a ``True`` with **null**
+    faithfulness was always a polarity twin (pre-R8 verifier-off mode left ``provisional`` null,
+    never ``True``), so a null score reconstructs ``POLARITY_UNSTABLE`` — *not* G1.21's
+    ``UNASSESSED_FAITHFULNESS``, which :func:`provisional_reasons_for` now derives from ``None``
+    but which describes a fresh degraded ingest, not a historical node. (The replay write path
+    re-folds the live faithfulness reason regardless, so a null-faithfulness replay still lands
+    ``UNASSESSED_FAITHFULNESS`` on the new node — see ``_build_replay_results``.)
     """
     reasons = decode_provisional_reasons(props.get("provisional_reasons"))
     if reasons or props.get("provisional") is not True:
         return reasons
     faith = props.get("faithfulness")
+    if faith is None:
+        return [ProvisionalReason.POLARITY_UNSTABLE.value]
     return sorted(provisional_reasons_for(faith)) or [ProvisionalReason.POLARITY_UNSTABLE.value]
 
 

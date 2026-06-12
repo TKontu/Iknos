@@ -458,7 +458,9 @@ async def test_multi_sample_agreement_combines_into_faithfulness(session: AsyncS
 
 async def test_multi_sample_without_verifier_sets_agreement_only(session: AsyncSession) -> None:
     """G1.3 degraded mode: multi-sample on but verifier off → agreement is still computed and
-    persisted, while faithfulness/provisional stay null (faithfulness needs verification too)."""
+    persisted, while faithfulness stays null (faithfulness needs verification too). G1.21: a null
+    faithfulness is *unassessed* → provisional, so the atom carries UNASSESSED_FAITHFULNESS and the
+    legacy boolean is True (repinned from the pre-G1.21 `provisional is None`)."""
     await bootstrap_session(session)
     raw = "The bearing failed under load."
     doc_id, span = await _seed_one_span_doc(session, raw)
@@ -482,20 +484,26 @@ async def test_multi_sample_without_verifier_sets_agreement_only(session: AsyncS
     rows = await execute_cypher(
         session,
         f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span.id)})}) "
-        "RETURN p.text, p.agreement, p.faithfulness, p.provisional",
-        returns="text agtype, agr agtype, faith agtype, prov agtype",
+        "RETURN p.text, p.agreement, p.faithfulness, p.provisional, properties(p)",
+        returns="text agtype, agr agtype, faith agtype, prov agtype, props agtype",
     )
     by_text = {str(r[0]).strip('"'): r for r in rows}
     stable = by_text["The bearing failed."]
     assert float(str(stable[1])) == pytest.approx(1.0)  # agreement persisted
-    assert (
-        stable[2] is None and stable[3] is None
-    )  # faithfulness/provisional null without a verifier
+    assert stable[2] is None  # faithfulness null without a verifier
+    # G1.21: unassessed faithfulness → provisional. The reason set is the source of truth; the
+    # legacy boolean mirrors its non-emptiness.
+    assert decode_provisional_reasons(parse_agtype_map(stable[4]).get("provisional_reasons")) == [
+        "unassessed_faithfulness"
+    ]
+    assert str(stable[3]).strip('"').lower() == "true"
 
 
 async def test_verifier_absent_leaves_faithfulness_null(session: AsyncSession) -> None:
-    """Degraded mode (no verifier configured): no verify Action, faithfulness/provisional null —
-    the documented G1.1 contract is preserved as a regression guard."""
+    """Degraded mode (no verifier configured): no verify Action, faithfulness null. G1.21 (§3.1
+    D2): unassessed faithfulness is provisional → the atom carries UNASSESSED_FAITHFULNESS and the
+    legacy boolean is True (repinned from the pre-G1.21 `provisional is None`); no faithfulness is
+    ever coerced toward trusted just because no verifier ran."""
     await bootstrap_session(session)
     raw = "The surface shows indentations."
     doc_id, span = await _seed_one_span_doc(session, raw)
@@ -510,10 +518,14 @@ async def test_verifier_absent_leaves_faithfulness_null(session: AsyncSession) -
     rows = await execute_cypher(
         session,
         f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span.id)})}) "
-        "RETURN p.faithfulness, p.provisional",
-        returns="faith agtype, prov agtype",
+        "RETURN p.faithfulness, p.provisional, properties(p)",
+        returns="faith agtype, prov agtype, props agtype",
     )
-    assert rows[0][0] is None and rows[0][1] is None
+    assert rows[0][0] is None  # faithfulness unassessed without a verifier
+    assert decode_provisional_reasons(parse_agtype_map(rows[0][2]).get("provisional_reasons")) == [
+        "unassessed_faithfulness"
+    ]
+    assert str(rows[0][1]).strip('"').lower() == "true"
 
     no_verify = await session.execute(
         text(
