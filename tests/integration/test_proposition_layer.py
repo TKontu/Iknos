@@ -16,8 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.core.proposition import Propositionizer
 from iknos.core.verify import Verifier
-from iknos.db.age import bootstrap_session, cypher_map, execute_cypher
+from iknos.db.age import bootstrap_session, cypher_map, execute_cypher, parse_agtype_map
 from iknos.db.spans import resolve_span_text
+from iknos.types.epistemic import decode_provisional_reasons
 from iknos.types.nodes import Span
 
 pytestmark = pytest.mark.asyncio
@@ -312,17 +313,24 @@ async def test_faithfulness_and_provisional_persist_with_verifier(session: Async
     rows = await execute_cypher(
         session,
         f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span.id)})}) "
-        "RETURN p.text, p.faithfulness, p.provisional",
-        returns="text agtype, faith agtype, prov agtype",
+        "RETURN p.text, p.faithfulness, p.provisional, properties(p)",
+        returns="text agtype, faith agtype, prov agtype, props agtype",
     )
     by_text = {str(r[0]).strip('"'): r for r in rows}
 
     faithful = by_text["The surface shows indentations."]
     assert float(str(faithful[1]).strip('"')) == pytest.approx(1.0)
+    # R8: the reason set is the source of truth (empty here); the legacy boolean mirrors it.
+    assert (
+        decode_provisional_reasons(parse_agtype_map(faithful[3]).get("provisional_reasons")) == []
+    )
     assert str(faithful[2]).strip('"').lower() == "false"
 
     quarantined = by_text["The bearing failed."]
     assert float(str(quarantined[1]).strip('"')) == pytest.approx(0.40)
+    assert decode_provisional_reasons(
+        parse_agtype_map(quarantined[3]).get("provisional_reasons")
+    ) == ["low_faithfulness"]
     assert str(quarantined[2]).strip('"').lower() == "true"
 
 
@@ -361,7 +369,7 @@ async def test_verify_action_is_recorded(session: AsyncSession) -> None:
     assert len(verdicts) == 1
     assert verdicts[0]["entailment"] == "entailed"
     assert verdicts[0]["faithfulness"] == pytest.approx(1.0)
-    assert verdicts[0]["provisional"] is False
+    assert verdicts[0]["provisional_reasons"] == []
 
     # The verdict's proposition id is one of the extract Action's outputs (point auditability).
     ext = await session.execute(

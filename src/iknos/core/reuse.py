@@ -15,10 +15,10 @@ fresh locally-computed embeddings — skipping only the (expensive) LLM call. Th
 already encodes the target text, the context window, and the full pipeline identity (model,
 rendered prompt/schema, sampling regime incl. ``n_samples``, and verifier signature —
 ``core/cache.py``), so a match means the extractor *would* have produced the same propositions under
-the same regime; replaying serves exactly that. Reused ``faithfulness``/``provisional`` are copied
-from the cached nodes (the verifier signature is in the ``content_hash``, so re-verifying would
-reproduce them), and the replay records a ``reused_from`` pointer so the audit chain to the original
-verify ``Action`` is one hop away.
+the same regime; replaying serves exactly that. Reused ``faithfulness``/``provisional_reasons`` are
+copied from the cached nodes (the verifier signature is in the ``content_hash``, so re-verifying
+would reproduce them), and the replay records a ``reused_from`` pointer so the audit chain to the
+original verify ``Action`` is one hop away.
 
 This module owns the **read** half: finding a reusable extraction and reconstructing its
 propositions from the graph. It is deliberately free of the embedding substrate and the write path —
@@ -45,7 +45,10 @@ from iknos.types.epistemic import (
     EpistemicClass,
     Modality,
     Polarity,
+    ProvisionalReason,
     Routing,
+    decode_provisional_reasons,
+    provisional_reasons_for,
 )
 
 
@@ -55,10 +58,10 @@ class CachedProposition:
 
     The full set of fields a fresh extraction would have produced, *except* the per-span identity
     (a new id and a fresh embedding are minted at replay time, never copied — see the module
-    docstring on why the vector is re-derived rather than reused). ``faithfulness``/
-    ``provisional``/``agreement`` are ``None`` exactly when the source proposition carried no such
-    value (no verifier configured, or single-sample mode), so a replay reproduces the source's
-    epistemic state verbatim.
+    docstring on why the vector is re-derived rather than reused). ``faithfulness``/``agreement``
+    are ``None`` exactly when the source proposition carried no such value (no verifier configured,
+    or single-sample mode); ``provisional_reasons`` (R8) is the source's quarantine-reason set,
+    so a replay reproduces the source's epistemic state verbatim.
     """
 
     text: str
@@ -69,7 +72,7 @@ class CachedProposition:
     epistemic_class: EpistemicClass
     routing: Routing
     faithfulness: float | None
-    provisional: bool | None
+    provisional_reasons: list[str]
     agreement: float | None
 
 
@@ -87,12 +90,29 @@ class ReusableExtraction:
     propositions: list[CachedProposition]
 
 
+def _reasons_from_props(props: dict[str, Any]) -> list[str]:
+    """Read the cached proposition's ``provisional_reasons`` (R8), tolerant of pre-R8 nodes.
+
+    A post-R8 node stores ``provisional_reasons`` (a JSON-string list). A node written before
+    R8 has only the legacy ``provisional`` boolean: when it is ``True`` we reconstruct the
+    reason set from the stored ``faithfulness`` (the only two extract-time producers were
+    low-faithfulness and the G1.14 polarity twin, so a True with no faithfulness explanation is
+    a twin) — never *clearing* a quarantine on replay. Absent reasons + falsy boolean → empty.
+    """
+    reasons = decode_provisional_reasons(props.get("provisional_reasons"))
+    if reasons or props.get("provisional") is not True:
+        return reasons
+    faith = props.get("faithfulness")
+    return sorted(provisional_reasons_for(faith)) or [ProvisionalReason.POLARITY_UNSTABLE.value]
+
+
 def _cached_proposition_from_props(props: dict[str, Any]) -> CachedProposition:
     """Rebuild a :class:`CachedProposition` from an AGE ``properties(p)`` map.
 
     Enum fields persist as plain strings (``StrEnum``) and rebuild through their constructors;
-    ``faithfulness``/``provisional``/``agreement`` come back as JSON number/bool or ``null`` →
-    ``None``. Mirrors how ``core/proposition.py::_persist`` wrote them (``prop_props``).
+    ``faithfulness``/``agreement`` come back as JSON number or ``null`` → ``None``;
+    ``provisional_reasons`` decodes via :func:`_reasons_from_props` (R8, pre-R8 tolerant).
+    Mirrors how ``core/proposition.py::_write_propositions`` wrote them (``prop_props``).
     """
     return CachedProposition(
         text=props["text"],
@@ -103,7 +123,7 @@ def _cached_proposition_from_props(props: dict[str, Any]) -> CachedProposition:
         epistemic_class=EpistemicClass(props["epistemic_class"]),
         routing=Routing(props["routing"]),
         faithfulness=props.get("faithfulness"),
-        provisional=props.get("provisional"),
+        provisional_reasons=_reasons_from_props(props),
         agreement=props.get("agreement"),
     )
 

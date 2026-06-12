@@ -20,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.core.proposition import Propositionizer
 from iknos.core.verify import Verifier
-from iknos.db.age import bootstrap_session, cypher_map, execute_cypher
+from iknos.db.age import bootstrap_session, cypher_map, execute_cypher, parse_agtype_map
+from iknos.types.epistemic import decode_provisional_reasons
 from iknos.types.nodes import Span
 
 pytestmark = pytest.mark.asyncio
@@ -188,11 +189,13 @@ async def test_reused_faithfulness_is_copied_not_reverified(session: AsyncSessio
     rows = await execute_cypher(
         session,
         f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span_b.id)})}) "
-        "RETURN p.faithfulness, p.provisional",
-        returns="faith agtype, prov agtype",
+        "RETURN p.faithfulness, p.provisional, properties(p)",
+        returns="faith agtype, prov agtype, props agtype",
     )
     assert float(str(rows[0][0]).strip('"')) == pytest.approx(1.0)
     assert str(rows[0][1]).strip('"').lower() == "false"
+    # R8: the reason set round-trips through replay too (copied from the cached node).
+    assert decode_provisional_reasons(parse_agtype_map(rows[0][2]).get("provisional_reasons")) == []
 
     # No verify Action for the replayed span — the reused faithfulness is audited at the source.
     no_verify = await session.execute(

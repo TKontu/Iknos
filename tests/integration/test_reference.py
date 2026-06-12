@@ -17,10 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from iknos.boxes.serde import case_box
 from iknos.core.extract import ExtractInput, Extractor
 from iknos.core.reference import BindingStage, ReferenceBinder
-from iknos.db.age import bootstrap_session, cypher_map, execute_cypher
+from iknos.db.age import bootstrap_session, cypher_map, execute_cypher, parse_agtype_map
 from iknos.domain.loader import load_pack
 from iknos.domain.packs import bundled_pack
 from iknos.types.edges import BindingState
+from iknos.types.epistemic import decode_provisional_reasons
 from iknos.types.nodes import Proposition, Span
 
 pytestmark = pytest.mark.asyncio
@@ -116,6 +117,16 @@ async def _provisional(session: AsyncSession, prop: Proposition) -> str:
     return "null" if raw is None or str(raw) == "null" else str(raw)
 
 
+async def _provisional_reasons(session: AsyncSession, prop: Proposition) -> list[str]:
+    """The R8 reason set persisted on the proposition (decoded via the proven props path)."""
+    rows = await execute_cypher(
+        session,
+        f"MATCH (p:Proposition {cypher_map({'id': str(prop.id)})}) RETURN properties(p)",
+        returns="props agtype",
+    )
+    return decode_provisional_reasons(parse_agtype_map(rows[0][0]).get("provisional_reasons"))
+
+
 async def test_binder_confirms_proper_name_and_marks_clean(session: AsyncSession) -> None:
     await bootstrap_session(session)
     box = case_box("bind-confirm", "1", "test", 0.8)
@@ -153,6 +164,7 @@ async def test_binder_confirms_proper_name_and_marks_clean(session: AsyncSession
     # A confirmed binding does not make its proposition provisional.
     assert result.provisional_propositions == []
     assert await _provisional(session, p2[1]) == "null"
+    assert await _provisional_reasons(session, p2[1]) == []
 
     # The bind Action is joinable (§10.1).
     act = await session.execute(
@@ -210,6 +222,7 @@ async def test_binder_keeps_ambiguous_open_and_marks_provisional(session: AsyncS
     # The dependent proposition is provisional; no binding is confirmed.
     assert p3[1].id in result.provisional_propositions
     assert await _provisional(session, p3[1]) == "true"
+    assert await _provisional_reasons(session, p3[1]) == ["unresolved_reference"]
     assert all(b.state is BindingState.CANDIDATE for b in result.bound if b.targets)
 
 
@@ -232,6 +245,7 @@ async def test_binder_leaves_pronoun_unresolved_and_provisional(session: AsyncSe
     assert result.bound[0].state is None
     assert p1[1].id in result.provisional_propositions
     assert await _provisional(session, p1[1]) == "true"
+    assert await _provisional_reasons(session, p1[1]) == ["unresolved_reference"]
 
     bx = cypher_map({"box": str(box.id)})
     mentions = await execute_cypher(
@@ -271,6 +285,7 @@ async def test_binder_falls_through_to_taxonomy_stage(session: AsyncSession) -> 
     # A confirmed binding (even cross-box to the taxonomy) leaves its proposition non-provisional.
     assert result.provisional_propositions == []
     assert await _provisional(session, p1[1]) == "null"
+    assert await _provisional_reasons(session, p1[1]) == []
 
     # The REFERS_TO points cross-box at the pack's "Roller" Object, state CONFIRMED.
     rows = await execute_cypher(

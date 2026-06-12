@@ -63,6 +63,7 @@ Scope deliberately left to later slices (documented seams):
 """
 
 import asyncio
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -79,6 +80,11 @@ from iknos.core.prompts import vocab
 from iknos.core.resolve import normalize_label
 from iknos.provenance.action_log import record_action
 from iknos.types.edges import BindingState
+from iknos.types.epistemic import (
+    ProvisionalReason,
+    decode_provisional_reasons,
+    merge_provisional_reasons,
+)
 
 if TYPE_CHECKING:
     # Type-only import: ``core/anchor`` imports ``Referent``/``group_referents`` from this
@@ -771,11 +777,30 @@ class ReferenceBinder:
                 any_open = True
 
         if any_open:
-            # OR-fold the system gate (§3.1): a proposition resting on an unresolved or merely
-            # candidate-bound mention is provisional. Never cleared here (the G1.6 discipline).
+            # OR-fold the system gate (§3.1, R8): a proposition resting on an unresolved or
+            # merely candidate-bound mention gains the UNRESOLVED_REFERENCE reason. Read-
+            # modify-write because the reason set is a JSON-string property (not a native AGE
+            # list): union onto whatever the propositionizer already set (low_faithfulness /
+            # polarity twin), never clearing it. The legacy boolean stays true for the
+            # transition window. TODO(R8): drop `p.provisional` once readers consume the set.
+            from iknos.db.age import cypher_string_literal, parse_agtype_map
+
+            rows = await execute_cypher(
+                session,
+                f"MATCH (p:Proposition {{id: '{item.proposition_id}'}}) RETURN properties(p)",
+                returns="props agtype",
+            )
+            existing = (
+                decode_provisional_reasons(parse_agtype_map(rows[0][0]).get("provisional_reasons"))
+                if rows
+                else []
+            )
+            merged = merge_provisional_reasons(existing, [ProvisionalReason.UNRESOLVED_REFERENCE])
+            reasons_literal = cypher_string_literal(json.dumps(merged))
             await execute_cypher(
                 session,
-                f"MATCH (p:Proposition {{id: '{item.proposition_id}'}}) SET p.provisional = true",
+                f"MATCH (p:Proposition {{id: '{item.proposition_id}'}}) "
+                f"SET p.provisional_reasons = {reasons_literal}, p.provisional = true",
             )
 
         action_id = await record_action(
@@ -812,6 +837,10 @@ class ReferenceBinder:
                     for t in m.targets
                 ],
                 "provisional": any_open,
+                # R8: the reason this bind contributes when it leaves a mention open.
+                "provisional_reasons": (
+                    [ProvisionalReason.UNRESOLVED_REFERENCE.value] if any_open else []
+                ),
             },
             model=self.llm.model,
             sampling=self.sampling,
