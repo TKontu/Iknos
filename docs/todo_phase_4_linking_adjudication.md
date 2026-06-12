@@ -17,8 +17,11 @@ blind/randomized judge + slice 3 AGE producer that persists the judged `SUPPORTS
 edges) — funnel → judge → calibrated edge → QBAF is a closed loop; the **§7.2 ensemble gate's
 refuted-flip authoriser landed (G4.5 slice 1, `core/ensemble_gate.py`)** — the pure decision
 algebra over the LLM/symbolic/temporal channels that authorises a persisted `refuted` flip
-(unanimity-of-required + universal dissent veto, `DEFAULT_GATE` decided by a fixture);
-`corroborate`/`find-contradiction` operators + the gate's channel producers/consumer-filter
+(unanimity-of-required + universal dissent veto, `DEFAULT_GATE` decided by a fixture); the
+gate's **consumer-filter landed (V8, `persist_verdicts`)** — a structural `refuted` is held
+at its prior state + `pending_refutation` unless an authorising `GateDecision` is supplied,
+so `refuted` is unreachable through the writer without the gate;
+`corroborate`/`find-contradiction` operators + the gate's channel producers
 (rest of G4.5) and the validation gate (G4.6) open.**
 G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
 the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
@@ -377,7 +380,7 @@ edge + Action carries `quarantined`. Do not: filter at the candidate/judge stage
 (the judge should still see the evidence — quarantine gates the *write*); touch
 `qbaf_adapter.py` (V8).
 
-### V8 — `persist_verdicts` ensemble filter *(the G4.5 consumer-filter slice)*
+### V8 — `persist_verdicts` ensemble filter *(the G4.5 consumer-filter slice) — shipped*
 
 G4.5 slice 1 shipped the gate's pure core (`core/ensemble_gate.py::authorise`,
 unanimity-of-required + dissent veto, `DEFAULT_GATE` safe-by-default while the
@@ -405,6 +408,18 @@ Tests: unit hold/authorise/clear table (build `GateDecision`s through the real
 `authorise` — don't mock the gate); integration evaluate→persist with and without
 authorisation. Do not: modify `ensemble_gate.py`; build the symbolic/temporal
 producers (later G4.5 slices); change `classify_state`.
+
+**Shipped** (commit `feat(adjudication): V8 …`) as specified. `persist_verdicts` gains
+`gate_decisions` and returns a `PersistResult` (`written` + `held`, `is_finding`) instead
+of a bare count — the held refutations are the surfaced §13 finding. Pure
+`refutation_held(state, decision)` is the decision seam (unit-tested through the real
+`authorise`, gate not mocked). Two deviations worth recording: (a) the previous state is read
+with a **separate current-row query** (`_load_state`), not a `coalesce`-in-`SET` — AGE's
+`SET`-expression support is uncertain and a read-then-write in the caller's transaction is
+unambiguously correct (no other writer touches `Hypothesis.state`, verified by grep); (b) the
+clear-on-non-hold is done by **always writing `pending_refutation`** (`true` on a hold, `false`
+otherwise) so any non-refuted/authorised verdict lifts a prior hold. `ensemble_gate.py` and
+`classify_state` untouched; the §7.2 one-liner is backported to `architecture.md`.
 
 ### R4 — HNSW indexes on both pgvector tables + distance-operator standardization
 
