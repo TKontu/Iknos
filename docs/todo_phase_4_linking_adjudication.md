@@ -483,7 +483,7 @@ test_embedding_hnsw_indexes.py` asserts the index exists + the planner uses it f
 downgrade clean). **V9** (the push-down query + recall-vs-exact measurement) is the
 consumer that builds on it.
 
-### V9 — pgvector k-NN push-down + recall-vs-exact measurement *(needs R4)*
+### V9 — pgvector k-NN push-down + recall-vs-exact measurement *(needs R4)* — ✅ **shipped** *(#88; residuals → V14 below)*
 
 `core/candidates.py::embedding_knn_candidates` is exact in-memory cosine — the
 documented recall ceiling and the seam for the `<=>` push-down. Build the other
@@ -506,6 +506,60 @@ side of the seam:
 
 Do not: flip the default; remove the in-memory path (it is the oracle); touch
 `funnel` or the structural stage.
+
+### V14 — V9 push-down verification hardening *(needs V9; 2026-06-12 residual review, findings 4/7 — `archive/review_2026-06-12_completed_scope_residuals.md`; land before the G4.6 decision can flip `CANDIDATES_KNN_PUSHDOWN`)*
+
+The V9 implementation is spec-faithful and the ranking math is correct, but the
+verification doesn't cover the *production* query, and the real query's plan
+behavior and recall mode are exactly what the G4.6 flip decision needs to know.
+One PR:
+
+1. **EXPLAIN the real statement.** The integration test
+   (`test_candidates_knn_pushdown.py:103-113`) EXPLAINs a hand-written
+   `SELECT … WHERE model = … ORDER BY embedding <=> … LIMIT k`; the production
+   statement (`candidates.py:609-617`) differs in two plan-relevant ways — a
+   potentially large `proposition_id IN (…)` predicate and a **secondary sort key**
+   (`ORDER BY distance, proposition_id`). An HNSW scan provides only the `<=>`
+   pathkey; the secondary sort forces an Incremental Sort on top or loses the index
+   entirely, and a big `IN` list may flip the planner to a bitmap scan. EXPLAIN the
+   actual SQLAlchemy-compiled statement through the real call path and assert
+   `hnsw` appears; if it doesn't, fix the query (session-level `hnsw.ef_search` /
+   pgvector ≥0.8 `hnsw.iterative_scan`, or restructure) — a silent full-scan makes
+   the feature pointless.
+2. **Document + exercise the post-filter starvation mode.** pgvector applies WHERE
+   as a *post-filter* on the index scan's candidate stream (default
+   `hnsw.ef_search = 40`): when the active-evidence set is a small fraction of
+   `proposition_embeddings` (it will be — embeddings of retracted/out-of-box nodes
+   are never deleted), the query can return ≪ k rows, even zero, regardless of how
+   close true neighbours are. The current test masks this (100% of seeded rows
+   match the filter, `ef_search = 400`). Add a starvation-shaped integration case
+   (matching rows a small fraction of the table) and record the failure mode in the
+   `candidates.py` docstring next to the existing HNSW-recall caveat (~:584-587) —
+   today it attributes the subset gap only to HNSW recall and the prop-vs-node
+   LIMIT.
+3. **Tie-break parity at the LIMIT boundary.** The exact path breaks distance ties
+   by **evidence node id** (`candidates.py:343`); the push-down breaks them by
+   **proposition_id** inside the DB *before* `LIMIT k` (`:615`), re-applying the
+   node-id order only afterwards (`:627`). A tie group straddling the k boundary
+   where prop-uuid order disagrees with node-id order keeps a node the oracle would
+   not — violating both the spec's "same deterministic tie-break" and the
+   docstring's "never a superset" claim. Ties are realistic (identical proposition
+   texts ⇒ identical vectors). Either make the SQL tie-break match the oracle's
+   effective order, or — if that's not expressible without dragging node ids into
+   the SQL — document the divergence at the docstring's subset claim and pin it
+   with a deliberate-tie test. While here: note the float4 (`<=>`) vs float64
+   (Python) boundary-ordering caveat in the same docstring paragraph.
+4. **Cover `generate()`'s push-down branch.** No test sets
+   `candidates_knn_pushdown=True`; the wiring at `candidates.py:535-553`
+   (`prop_to_ev_nodes` construction, hypothesis-only vector loading, `hyp_embedded`)
+   is dead under test — a swapped mapping would ship green. Route at least one
+   integration case through `generate()` with the flag on.
+5. **Strengthen the subset assertion.** At `ef_search ≥ N` with one prop per node
+   and no ties, push-down should **equal** exact — assert equality (or recall ≥
+   0.9) instead of non-empty + `⊆`, which a 1-of-10 regression passes today.
+
+Do not: flip the `CANDIDATES_KNN_PUSHDOWN` default (still a G4.6 decision, now
+properly informed); change the exact path; touch `funnel` or the structural stage.
 
 ### W1 — composed-loop orchestrator (the missing spine) *(needs V7+V8; P1) — shipped*
 
