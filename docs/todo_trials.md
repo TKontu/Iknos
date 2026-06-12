@@ -336,21 +336,51 @@ edge-property GIN is a deferred-table item) and **bitemporal supersession
 updates at re-scoring rates**, on the full 15–20-property vertex payload. The
 W2 fixture graph (`todo_phase_4_*.md`) is a realistic shape source.
 
-- [ ] **Prerequisite:** the G0.R2 AGE property-index migration is merged — benchmark
+- [x] **Prerequisite:** the G0.R2 AGE property-index migration is merged — benchmark
       the indexed engine, and verify with `EXPLAIN` through the real `cypher()` call
-      path that the indexes are actually *used* (existence ≠ use).
-- [ ] Benchmark **Apache AGE** under the *real* schema density — every node/edge carrying
+      path that the indexes are actually *used* (existence ≠ use). *(Migration `0007`;
+      verified — see Result below.)*
+- [x] Benchmark **Apache AGE** under the *real* schema density — every node/edge carrying
       provenance, two annotations, sensitivity, conditional credibility, bitemporal
       validity, overrides — at investigation scale (tens of docs) + a static reference
       base, on the actual query patterns (box-scoped retrieval, `WITH RECURSIVE` closure,
       SCC detection, bitemporal as-of, **and MERGE-by-id at entity-resolution call
-      rates**).
-- [ ] **Scope bitemporality:** confirm it is applied where needed (boxes, overrides,
-      packs) and not bloating every `SAME_AS` edge.
-- [ ] **Decision:** stay single-engine (Postgres + AGE) if it meets latency; the fallback
+      rates**). *(30 000-vertex / 48 993-edge synthetic graph, 18-property payload.)*
+- [x] **Scope bitemporality:** confirm it is applied where needed (boxes, overrides,
+      packs) and not bloating every `SAME_AS` edge. *(SAME_AS carries `state`/validity but
+      no edge-property index — its absence is the one measured cost, see below.)*
+- [x] **Decision:** stay single-engine (Postgres + AGE) if it meets latency; the fallback
       is a separate graph store at the cost of single-engine simplicity (§6, §13).
+      **→ STAY single-engine.**
 - **Gates:** Phase 2 entry (and the original Phase 0 engine commitment, retroactively
   validated) — before building heavily on AGE.
+
+**Result (2026-06-12) — STAY single-engine (Postgres + AGE).** Harness:
+`scripts/c3_age_density_benchmark.py`; full report committed at
+`docs/trials/c3_age_density_benchmark.md`. Run on the ephemeral integration DB in an
+isolated bench graph (`iknos_c3_bench`) whose indexes **mirror migration 0007's exact
+DDL** (imported from the migration, retargeted — no drift), dropped on teardown; the real
+`cypher()` seam is pointed at it so every query and `EXPLAIN` goes through the production
+call path. Each read shape gets two plans — the planner's default and one with
+`enable_seqscan=off` — so *index existence* is separated from *index use* precisely.
+
+- **Index use confirmed (existence ≠ use).** At 30 000 vertices the planner **chooses**
+  the migration-0007 vertex GIN for box-scoped retrieval (1.6 ms), MERGE-by-id
+  (0.6 ms), and the bitemporal as-of (0.9 ms); the partonomy closure rides the Actor GIN
+  + `partOf` endpoint btrees. The agtype `properties @>` containment the 0007 docstring
+  predicts is exactly what the plans use. No "index exists but unusable" case among the
+  core reads — the §13 engine-swap trigger did **not** fire.
+- **Costliest indexed read:** the `*1..5` `partOf` closure at ~60 ms median — AGE
+  variable-length-traversal overhead, not a missing index. Acceptable at investigation
+  scale; watch if the roll-up becomes a hot path.
+- **The one gap (W9 edge-property amendment):** `MATCH ()-[r:SAME_AS {state:…}]->()` has
+  **no accelerating index** (the endpoint btree is a seq-scan substitute, not a `state`
+  filter — edge-property GIN is deferred per the 0007 docstring). Concrete cost: the bulk
+  bitemporal **supersession update** runs at ~1.3 s median (p95 ~2.1 s) — 10²–10³× the
+  indexed lookups. Bounded today by the small SAME_AS edge count, and real re-scoring
+  touches few edges at a time. **Phase-5 action item:** add an edge-property GIN on
+  `SAME_AS.properties` (or a btree on extracted `state`) before bitemporal supersession
+  runs at reference-base scale.
 
 ---
 
