@@ -1,0 +1,22 @@
+NORDHELM DRIVETRAIN SYSTEMS
+Service Manual Excerpt — NDS-3 Series Wind Turbine Gearbox
+Section 6: High-Speed Stage — Shaft and Bearing Arrangement
+Document NDS-SM-3-Rev D (2019). Reference material — for service and identification.
+
+6.1 Overview
+The NDS-3 gearbox is a three-stage unit: two planetary stages followed by a parallel high-speed stage. Torque from the rotor enters at the planet carrier and leaves at the high-speed shaft, which drives the generator through the coupling. This section covers the high-speed stage only.
+
+6.2 High-speed-shaft bearing arrangement
+The high-speed shaft is carried on two bearings. The drive-end bearing, designated position 3, is located nearest the high-speed pinion and takes the principal radial load. The non-drive-end bearing, designated position 4, is located at the generator-side end of the shaft and locates the shaft axially. Position 3 and position 4 are distinct bearings of different types and are not interchangeable; a fault at one is not evidence of a fault at the other.
+
+6.3 Bearing construction
+Each high-speed-shaft bearing comprises an inner ring, an outer ring, and a single row of cylindrical rollers retained by a machined brass cage. The inner ring is an interference fit on the shaft journal; the outer ring is a transition fit in the housing bore. The rollers run directly on the hardened raceways of the two rings. The bearing is a service-replaceable component; the rings, rollers and cage are supplied and replaced only as a matched assembly, never as separate parts.
+
+6.4 Part identification
+The position-3 drive-end bearing is supplied to Nordhelm specification NDS-BRG-2200. Equivalent bearings from approved suppliers carry the supplier's own designation against this Nordhelm part number; consult the approved-supplier list for current equivalents. The position-4 non-drive-end bearing is a separate part, NDS-BRG-2400, and must not be substituted for the position-3 bearing.
+
+6.5 Lubrication
+The high-speed stage is lubricated by the gearbox oil system shared with the lower stages. The specified oil is a synthetic gear oil of ISO viscosity grade VG 320 to Nordhelm specification NDS-LUB-04. Use of an oil of lower viscosity grade than specified reduces the elastohydrodynamic film thickness at the high-speed-shaft bearing and is not permitted. Oil condition and grade are to be verified at every scheduled oil service.
+
+6.6 Component hierarchy for records
+For maintenance records, the high-speed stage is structured as follows: the gearbox contains the high-speed shaft; the high-speed shaft carries the position-3 (drive-end) bearing and the position-4 (non-drive-end) bearing; each bearing contains its inner ring, outer ring, roller set and cage. Faults are to be recorded against the lowest level identified.

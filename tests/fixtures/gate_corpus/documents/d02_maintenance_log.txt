@@ -1,0 +1,25 @@
+MAINTENANCE LOG EXTRACT — TURBINE WTG-14 DRIVETRAIN
+Cairn Brae Wind Farm — extracted from the maintenance management system
+Asset: CB-GBX-03 (gearbox) and associated drivetrain
+Extract generated: 22 February 2024
+Period covered: January 2022 — February 2024
+
+This extract lists drivetrain maintenance activity recorded against turbine WTG-14 in the maintenance management system. Entries are reproduced as held in the system at the date of extraction.
+
+2022-03-14 — WTG-14 gearbox: routine 6-monthly inspection. Borescope of high-speed stage; no defects noted. Gear-oil sample drawn and sent for analysis (results within limits). Work order 3902.
+
+2022-09-21 — WTG-14 gearbox: routine 6-monthly inspection. Oil filter changed. Vibration spot-check normal. Work order 4108.
+
+2023-03-08 — WTG-14 gearbox: routine 6-monthly inspection. Borescope of high-speed stage; light frosting noted on intermediate gear, within acceptance. Work order 4290.
+
+2023-07-12 — WTG-14 gearbox: gear-oil top-up, 40 litres added following a slow loss noted at inspection. Grade as supplied by stores. Work order 4377.
+
+2023-09-21 — WTG-14 gearbox: routine 6-monthly inspection. Vibration spot-check showed a slight rise at the high-speed stage, flagged for monitoring. Work order 4419.
+
+2023-11-09 — WTG-14 gearbox: high-speed-shaft drive-end bearing (position 3) replaced. Old bearing removed showing early spalling on the inner ring. New bearing fitted and shaft re-aligned. Drivetrain run-tested for two hours, vibration acceptable. Work order 4471.
+
+2024-01-30 — WTG-14 gearbox: condition-monitoring review flagged rising high-speed vibration trend; site advised to schedule a borescope. Work order 4602.
+
+2024-02-18 — WTG-14 gearbox: high-speed-shaft bearing failure; turbine offline. See incident report IR-2024-031. Work order 4631.
+
+End of extract. The 9 November 2023 replacement (work order 4471) is the most recent intervention on the high-speed-shaft drive-end bearing recorded in the system for this turbine, and establishes that the bearing in service at the time of failure had been installed approximately three months before the event.

@@ -1,0 +1,22 @@
+OPERATOR AND TECHNICIAN INTERVIEW NOTES — WTG-14 FAILURE
+Cairn Brae Wind Farm — Investigation interviews
+Notes reference: INT-2024-014
+Date: 10 March 2024
+Interviews conducted by the investigation lead. Notes are a summary, not a verbatim transcript; reported statements are attributed to the speaker.
+
+1. Operator B (site wind-turbine technician, 6 years on site)
+Operator B was the technician who attended WTG-14 after the trip. Throughout the interview Operator B referred to the failed component as "the HSS bearing". Asked about its recent behaviour, Operator B said that it had been getting noisier for several weeks before it let go, and that the noise had been mentioned to the shift supervisor more than once. According to Operator B, the gear oil "had looked dark and smelled burnt" at the last filter change in January, which Operator B thought was unusual for this gearbox.
+
+Operator B was careful to distinguish the failed drive-end bearing from bearing 4 at the non-drive end of the same shaft, which had been inspected during 2023 and found sound. In Operator B's words, "people keep saying 'the bearings' as if they're one thing, but it was bearing 3 that went, not bearing 4 — bearing 4 was fine the last time we had eyes on it." When the interviewer used the work-order term "bearing 3", Operator B confirmed that this was the same component as the one called the HSS bearing.
+
+2. Shift supervisor
+The shift supervisor confirmed that Operator B had raised the rising noise on WTG-14 on at least two occasions in January. Asked about the lubrication maintenance, the shift supervisor acknowledged that the scheduled gear-oil change due in October 2023 had been deferred twice because of staff shortages, and was still outstanding at the time of the failure. The supervisor noted that this deferral was a site decision taken under workload pressure and accepted that, in hindsight, the oil service should not have slipped.
+
+3. Stores controller
+The stores controller was asked about the gear oil held on site. The controller recalled that during 2023 there had been a period when the specified gear-oil grade was not available from the usual supplier, and that a substitute had been issued against operations' approval to keep turbines in service. The controller could not recall the specific grades involved and referred the investigator to the purchasing records.
+
+4. Remote operations
+The remote operations centre confirmed the trip on high vibration and the controlled stop, and confirmed that no lubrication-system alarm had been raised on WTG-14 in the period before the failure. The operator on shift that night reported nothing unusual other than the rising vibration that triggered the protection.
+
+5. Interviewer's note
+The interviews place a developing noise and a dark, burnt-smelling oil on WTG-14 in the weeks before the failure, an overdue oil change, and a period during 2023 when a substitute gear oil was in use. The component descriptions are consistent: "the HSS bearing", "bearing 3" and "it" all denote the failed drive-end bearing, which is to be kept distinct from the non-drive-end bearing 4.

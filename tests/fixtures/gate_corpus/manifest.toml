@@ -1,0 +1,325 @@
+# Gate corpus manifest — the Trial A0 / V1 planted-contradiction evaluation asset.
+#
+# Domain: a wind-turbine gearbox high-speed-shaft (HSS) bearing root-cause investigation
+# (architecture.md §14's running example: gearbox ⊃ high-speed shaft ⊃ bearing ⊃ rollers).
+# Ten authored documents (d01–d10) carry deliberately *planted* items — contradictions,
+# dissimilar refuters, an overturning fact, coreference and over-merge traps — so the
+# Phase-4 validation gate (and the A1–A7/E1 trials) have a corpus with a known answer key.
+#
+# Loaded by tests/fixtures/gate_corpus.py, which reuses the Phase-1 loader
+# (tests/fixtures/corpus.py: load_corpus(corpus_dir=...)) for the [[documents]] section and
+# adds the [[planted]] / [[hypotheses]] layers below. Kept honest by
+# tests/unit/test_gate_corpus.py (model-free, DB-free): every planted quote is located in
+# its document and must occur **exactly once** (anchors carry the verbatim quote, never a
+# hand-counted offset, mirroring tests/fixtures/corpus/manifest.toml).
+#
+# *** SPOILER / ANSWER KEY ***  This manifest and gate_corpus/README.md name the planted
+# items and the true cause. A human annotator (Trial V2) labels the documents BEFORE
+# reading either — see gate_corpus/README.md.
+#
+# V1 scope: documents + the planted inventory + the hypothesis set. **No gold labels** —
+# gold_edges / gold_hypothesis_states / gold_faithfulness / gold_entity_clusters /
+# gold_levels are Trial V2 and live under gate_corpus/labels/ when they exist.
+#
+# planted.kind vocabulary (validated against PlantedKind in tests/fixtures/gate_corpus.py):
+#   hard_negation | hedge | contradiction | genuine_observation | self_serving_judgement
+#   | component_hierarchy | dissimilar_refuter | entity_coref | over_merge_trap
+#   | admission_against_interest | attribution | load_bearing_tail_fact
+#   | reference_hypothesis_set | overturning_fact
+# hypotheses.role vocabulary (validated against HypothesisRole):
+#   true_cause | favoured_before_overturn | refuted
+
+schema_version = 1
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# Documents. role carries the document type. d08 additionally is the G1.13 multi-window
+# anchor: min_words > MAX_MODEL_TOKENS (8192) makes ">1 embedding window under the
+# production model" provable in CI with no model loaded (SentencePiece emits >= 1 token
+# per whitespace word, so tokens >= words). Keep d08 above its floor when editing.
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+[[documents]]
+id = "d01"
+filename = "documents/d01_incident_report.txt"
+role = "incident_report"
+title = "Incident Report IR-2024-031 — WTG-14 HSS bearing failure"
+
+[[documents]]
+id = "d02"
+filename = "documents/d02_maintenance_log.txt"
+role = "maintenance_log"
+title = "Maintenance log extract — turbine WTG-14 drivetrain"
+
+[[documents]]
+id = "d03"
+filename = "documents/d03_supplier_analysis.txt"
+role = "supplier_analysis"
+title = "Severn Bearings failure analysis SB-FA-2024-118"
+
+[[documents]]
+id = "d04"
+filename = "documents/d04_oem_manual.txt"
+role = "oem_manual"
+title = "Nordhelm NDS-3 service manual excerpt — HSS stage"
+
+[[documents]]
+id = "d05"
+filename = "documents/d05_vibration_survey.txt"
+role = "vibration_survey"
+title = "Drivetrain vibration and duty survey CM-2024-077"
+
+[[documents]]
+id = "d06"
+filename = "documents/d06_operator_interviews.txt"
+role = "operator_interviews"
+title = "Operator and technician interview notes INT-2024-014"
+
+[[documents]]
+id = "d07"
+filename = "documents/d07_metallurgy_report.txt"
+role = "metallurgy_report"
+title = "Metallurgical examination report HML-2024-2207"
+
+[[documents]]
+id = "d08"
+filename = "documents/d08_purchasing_records.txt"
+role = "purchasing_records"
+title = "Procurement records export — Cairn Brae Wind Farm"
+min_words = 8200
+
+[[documents]]
+id = "d09"
+filename = "documents/d09_industry_bulletin.txt"
+role = "industry_bulletin"
+title = "Drivetrain reliability bulletin TB-2021-09"
+
+[[documents]]
+id = "d10"
+filename = "documents/d10_followup_correction.txt"
+role = "followup_correction"
+title = "Investigation file correction notice IR-2024-031-C1"
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# Hypotheses — the candidate causes (the reference set d09 enumerates). The pre/post-d10
+# flip is the retraction measurement: H2 is favoured before d10, H1 leads after it.
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+[[hypotheses]]
+id = "H1"
+label = "Lubrication failure"
+role = "true_cause"
+note = """The true root cause. Loss of lubricating film: an overdue oil change (d06), degraded \
+oil observed by the technician (d06), and a substitute under-viscosity oil grade in use \
+during 2023 (d08 tail fact) against the NDS-LUB-04 / ISO VG 320 spec (d04). Present \
+throughout, but becomes the leading hypothesis only once d10 removes H2."""
+
+[[hypotheses]]
+id = "H2"
+label = "Installation / mounting error"
+role = "favoured_before_overturn"
+note = """Favoured before d10. Rests on the d02 maintenance-log entry recording a recent \
+(Nov 2023) replacement of the HSS bearing, and on the supplier's self-serving assessment \
+(d03) blaming a mounting preload error. Collapses when d10 establishes the replacement \
+record was a transcription error for WTG-07 — there was no recent installation to blame."""
+
+[[hypotheses]]
+id = "H3"
+label = "Counterfeit / non-conforming part"
+role = "refuted"
+refuted_by = "d07"
+note = """Refuted by the d07 metallurgy report (dissimilar refuter #2): the inner-ring steel \
+is correct 100Cr6-class material, correctly hardened, microstructure to specification — \
+established without using any of the counterfeit/genuine/non-OEM vocabulary."""
+
+[[hypotheses]]
+id = "H4"
+label = "Overload / transient torque"
+role = "refuted"
+refuted_by = "d05"
+note = """Refuted by the d05 vibration/duty survey (dissimilar refuter #1): the torque trace \
+stayed within the normal operating envelope (max 96% of nameplate), no excursions logged — \
+a routine duty reading that rules overload out without naming load, overload, or rating."""
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# Planted items. Each row: a stable id, its kind, the owning document, the verbatim
+# anchor quote(s), and cross-references where the item is relational (a contradiction
+# pair, a refuter→hypothesis link, the overturning fact→retracted item link).
+# ─────────────────────────────────────────────────────────────────────────────────────
+
+# --- d01 incident report: a hard negation, a hedge, and the d01 side of contradiction #1 ---
+
+[[planted]]
+id = "d01-hard-negation"
+kind = "hard_negation"
+document = "d01"
+quotes = ["No low-lubrication alarm was recorded in the controller event log prior to the failure."]
+note = """Hard negation (negation-preservation test): the affirmative content ('a \
+low-lubrication alarm was recorded') is NEGATED. Subtle: absence of an alarm does not \
+exonerate lubrication — slow film loss need not trip a discrete alarm."""
+
+[[planted]]
+id = "d01-hedge"
+kind = "hedge"
+document = "d01"
+quotes = ["It is possible that the damage initiated at the drive-end roller path, although this could not be confirmed from the recovered fragments."]
+note = "Epistemic hedge (modality = possible), explicitly not confirmed — must not ingest as a categorical fact."
+
+[[planted]]
+id = "contradiction-1-d01"
+kind = "contradiction"
+document = "d01"
+pair = "contradiction-1-d02"
+quotes = ["At the time of failure the high-speed-shaft bearing was understood by the site team to be the original unit fitted at commissioning in 2018, and no replacement had been carried out on this gearbox since."]
+note = """Contradiction pair #1, d01 side: NO recent HSS-bearing replacement. Contradicts \
+contradiction-1-d02. Resolved in d01's favour by the d10 overturning fact (the d02 entry \
+was a transcription error). The pre-d10 unresolved contradiction is what favours H2."""
+
+# --- d02 maintenance log: the d02 side of contradiction #1 (later overturned by d10) ---
+
+[[planted]]
+id = "contradiction-1-d02"
+kind = "contradiction"
+document = "d02"
+pair = "contradiction-1-d01"
+quotes = ["high-speed-shaft drive-end bearing (position 3) replaced. Old bearing removed showing early spalling on the inner ring."]
+note = """Contradiction pair #1, d02 side: a maintenance-log entry (work order 4471, \
+2023-11-09) recording a recent replacement of the HSS bearing — contradicts \
+contradiction-1-d01 and is the principal basis for H2. Retracted by overturning-fact-d10."""
+
+# --- d03 supplier analysis: genuine observations vs a self-serving judgement (§9.1) ---
+
+[[planted]]
+id = "d03-genuine-observation"
+kind = "genuine_observation"
+document = "d03"
+quotes = ["Disassembly showed advanced spalling across approximately 60% of the inner-ring raceway, with secondary smearing on three of the rollers."]
+note = "A credible primary observation by the supplier — stands largely source-independently (§3.1 observation→fact)."
+
+[[planted]]
+id = "d03-self-serving-judgement"
+kind = "self_serving_judgement"
+document = "d03"
+supports = "H2"
+quotes = ["characteristic of mounting-induced preload error introduced during installation, and is not attributable to any deficiency in the bearing as supplied."]
+note = """§9.1 self-serving judgement: the bearing supplier attributes the failure to the \
+installer (mounting error, H2) and exonerates its own product — an against-interest \
+discount applies. Undermined by d10 (no recent installation existed)."""
+
+# --- d04 OEM manual: the reference-tier component hierarchy in prose ---
+
+[[planted]]
+id = "d04-component-hierarchy"
+kind = "component_hierarchy"
+document = "d04"
+quotes = [
+  "the gearbox contains the high-speed shaft; the high-speed shaft carries the position-3 (drive-end) bearing and the position-4 (non-drive-end) bearing; each bearing contains its inner ring, outer ring, roller set and cage.",
+  "Position 3 and position 4 are distinct bearings of different types and are not interchangeable; a fault at one is not evidence of a fault at the other.",
+]
+note = """Reference-tier part-whole hierarchy (§14): gearbox ⊃ HSS shaft ⊃ {position-3 DE \
+bearing, position-4 NDE bearing} ⊃ {inner ring, outer ring, rollers, cage}. The second \
+quote is the authority distinguishing bearing 3 from bearing 4 — the d06 over-merge trap's \
+ground truth."""
+
+# --- d05 vibration survey: dissimilar refuter #1 vs H4 overload (the §5.1 test case) ---
+
+[[planted]]
+id = "dissimilar-refuter-overload"
+kind = "dissimilar_refuter"
+document = "d05"
+refutes = "H4"
+quotes = ["Across the monitored interval the high-speed-shaft torque trace stayed within the normal operating envelope for the NDS-3 gearbox, with a maximum recorded value of 96% of nameplate torque reached briefly during a gust event in December 2023."]
+note = """Dissimilar refuter #1 (§5.1): a routine duty reading that rules out H4 (overload) \
+without naming 'overload', 'load', 'rating', or 'exceeded' — embedding-dissimilar to the \
+hypothesis it refutes, so a similarity-only candidate funnel would miss it."""
+
+# --- d06 operator interviews: coref + over-merge trap + admission + attribution ---
+
+[[planted]]
+id = "d06-entity-coref"
+kind = "entity_coref"
+document = "d06"
+quotes = [
+  "Throughout the interview Operator B referred to the failed component as \"the HSS bearing\".",
+  "it was bearing 3 that went, not bearing 4 — bearing 4 was fine the last time we had eyes on it.",
+  "\"the HSS bearing\", \"bearing 3\" and \"it\" all denote the failed drive-end bearing, which is to be kept distinct from the non-drive-end bearing 4.",
+]
+note = """One entity, three surface forms: 'the HSS bearing' / 'bearing 3' / 'it' all denote \
+the failed drive-end bearing (the §5.2 under-merge case — these must resolve together)."""
+
+[[planted]]
+id = "d06-over-merge-trap"
+kind = "over_merge_trap"
+document = "d06"
+quotes = ["Operator B was careful to distinguish the failed drive-end bearing from bearing 4 at the non-drive end of the same shaft, which had been inspected during 2023 and found sound."]
+note = """The over-merge trap (§5.2): 'bearing 4' (position-4 NDE bearing) is a DIFFERENT \
+entity on the same shaft. Merging it with bearing 3 would manufacture a false contradiction \
+(sound vs failed). Ground truth that they differ is d04-component-hierarchy."""
+
+[[planted]]
+id = "d06-admission-against-interest"
+kind = "admission_against_interest"
+document = "d06"
+supports = "H1"
+quotes = ["the shift supervisor acknowledged that the scheduled gear-oil change due in October 2023 had been deferred twice because of staff shortages, and was still outstanding at the time of the failure."]
+note = """§9.1 admission against interest: the site team admits its own maintenance lapse \
+(an overdue oil change) — credibility-boosted, and it supports H1 (lubrication failure)."""
+
+[[planted]]
+id = "d06-attribution"
+kind = "attribution"
+document = "d06"
+quotes = ["According to Operator B, the gear oil \"had looked dark and smelled burnt\" at the last filter change in January, which Operator B thought was unusual for this gearbox."]
+note = "Reported speech / named-source attribution (§3.1): a named operator's claim, not a document-voice observation — credibility-weighted."
+
+# --- d07 metallurgy report: dissimilar refuter #2 vs H3 counterfeit ---
+
+[[planted]]
+id = "dissimilar-refuter-counterfeit"
+kind = "dissimilar_refuter"
+document = "d07"
+refutes = "H3"
+quotes = [
+  "The inner-ring material is a high-carbon chromium bearing steel, correctly through-hardened and tempered to a hardness and microstructure consistent with the drawing specification for this class of bearing.",
+  "No material or heat-treatment non-conformance was found.",
+]
+note = """Dissimilar refuter #2: refutes H3 (counterfeit/non-conforming part) using none of \
+its vocabulary ('counterfeit', 'genuine', 'fake', 'non-OEM') — it establishes the material \
+IS to specification, which excludes the part-defect hypothesis indirectly."""
+
+# --- d08 purchasing records: the load-bearing fact buried in the final 10% ---
+
+[[planted]]
+id = "load-bearing-tail-fact"
+kind = "load_bearing_tail_fact"
+document = "d08"
+supports = "H1"
+quotes = ["Note on PO-2023-2261 line 4: the gear oil ordered to grade ISO VG 320 synthetic (NDS-LUB-04) was unavailable from the primary supplier, and 200 litres of ISO VG 150 mineral gear oil were substituted and issued to Cairn Brae stores on 9 July 2023 against operations' verbal approval, pending resupply of the specified grade."]
+note = """The load-bearing fact (G1.13 tail-window coverage): a substitute UNDER-viscosity oil \
+grade (VG 150 vs the NDS-LUB-04 / VG 320 spec in d04) was in use during 2023 — strong \
+support for H1. Buried in the final 10% of a >8,192-token document, so it is dropped if \
+the tail window is not embedded."""
+
+# --- d09 industry bulletin: the reference hypothesis set (§11.2) ---
+
+[[planted]]
+id = "d09-reference-hypothesis-set"
+kind = "reference_hypothesis_set"
+document = "d09"
+quotes = ["Field experience identifies four dominant failure modes for high-speed-shaft bearings in this drivetrain class."]
+note = """§11.2 reference hypothesis set: the four dominant HSS-bearing failure modes \
+(lubrication, mounting, overload, material non-conformance) that H1–H4 seed from."""
+
+# --- d10 follow-up correction: the overturning fact (retracts contradiction-1-d02) ---
+
+[[planted]]
+id = "overturning-fact-d10"
+kind = "overturning_fact"
+document = "d10"
+retracts = "contradiction-1-d02"
+quotes = [
+  "The high-speed-shaft bearing replacement that work order 4471 describes was performed on turbine WTG-07 (gearbox CB-GBX-07), not on turbine WTG-14.",
+  "No high-speed-shaft bearing replacement was carried out on turbine WTG-14.",
+]
+note = """The overturning fact (explicit later date, 30 May 2024): the d02 replacement entry \
+was a transcription error for WTG-07. Retracts contradiction-1-d02, collapses H2, and \
+lets H1 lead. The pre/post-d10 hypothesis-state flip is the §8 retraction measurement."""
