@@ -340,6 +340,7 @@ async def persist_spans(
     level: int = 0,
     layouts: list[dict[str, Any] | None] | None = None,
     window_layout: dict[str, Any] | None = None,
+    stage_setup_ms: int = 0,
 ) -> SpanPersistResult:
     """Persist segmented spans (Span vertices + dense rows) idempotently.
 
@@ -354,14 +355,19 @@ async def persist_spans(
     visual-provenance handle per span (G1.0); ``None`` — the whole arg or any element —
     means plain-text ingest with no layout. ``window_layout`` (optional, G1.13 slice 2) is
     the embedding window layout (count + boundaries + policy) recorded on the segment
-    ``Action`` for audit; ``None`` for direct callers that don't window. Caller-owned
-    transaction — does **not** commit. See module docstring for the immutability / atomicity
-    model.
+    ``Action`` for audit; ``None`` for direct callers that don't window. ``stage_setup_ms``
+    (R12) is the embed/split/segment wall-clock that ran *before* this call in the ingest path —
+    the dominant, shared segment-stage cost — which the entry point attributes to the finest
+    level so the segment Action's ``duration_ms`` covers the whole stage, not just the write.
+    It defaults to 0 for direct callers (tests, re-embed) whose vectors are precomputed, so their
+    Action records the persist time alone. Caller-owned transaction — does **not** commit. See
+    module docstring for the immutability / atomicity model.
     """
     from iknos.db.age import cypher_map, execute_cypher
 
-    # R12: time the whole segment-persist (guards + span/dense writes) for the segment Action's
-    # duration_ms. monotonic delta; the span/whitespace counts come from the loop below.
+    # R12: time the span/dense writes (guards + persist). Added to ``stage_setup_ms`` — the
+    # embed/split/segment cost the caller already paid — for the segment Action's duration_ms, so
+    # the dominant embedding cost is attributed, not silently dropped. Counts come from the loop.
     t0 = time.monotonic()
 
     # G1.16: refuse a model swap before any write. The model is also in span_content_hash, so a
@@ -480,9 +486,10 @@ async def persist_spans(
             outputs={"span_ids": [str(s.id) for s in spans], "skipped": skipped},
             model=model,
             # R12 observability floor: persisted span count + whitespace/no-embedding spans dropped
-            # (review R3), with the persist wall-clock. n_spans is the set written this level.
+            # (review R3), with the full segment-stage wall-clock (the shared embed/split/segment
+            # cost the entry point paid + this level's persist). n_spans is the set written.
             metrics={
-                "duration_ms": elapsed_ms(t0),
+                "duration_ms": stage_setup_ms + elapsed_ms(t0),
                 "n_spans": len(spans),
                 "n_skipped_whitespace": skipped,
             },
@@ -569,6 +576,14 @@ async def _ingest_parsed(
             metrics=({"duration_ms": parse_duration_ms} if parse_duration_ms is not None else None),
         )
 
+    # R12: the segment stage starts here — the embedding pass dominates it, then the sentence
+    # split + the (multi-level) segmenter run. These precede persist_spans and are shared across
+    # all levels, so persist_spans' own timer would attribute *none* of this dominant cost to any
+    # Action (it would record only the per-level write). Time the shared setup once and hand it to
+    # the finest level's segment Action below — the level the proposition layer extracts from —
+    # so the total across the per-level segment Actions sums to the true segment-stage wall-clock
+    # with no double-counting.
+    segment_started = time.monotonic()
     context = substrate.embed_document(raw_text)
     sentences = split_sentences(raw_text)
 
@@ -581,6 +596,8 @@ async def _ingest_parsed(
     windowing = context.windowing_policy()
     window_layout = context.window_layout()
     level_segments = segmenter.segment_document_levels(sentences, context)
+    setup_ms = elapsed_ms(segment_started)
+    finest_level_num = min((lvl.level for lvl, _ in level_segments), default=0)
 
     results: list[tuple[int, SpanPersistResult]] = []
     for lvl, char_spans in level_segments:
@@ -605,6 +622,9 @@ async def _ingest_parsed(
             level=lvl.level,
             layouts=layouts,
             window_layout=window_layout,
+            # Attribute the shared embed/split/segment cost to the finest level only (the
+            # extraction granularity); coarser levels record just their own per-level persist.
+            stage_setup_ms=(setup_ms if lvl.level == finest_level_num else 0),
         )
         results.append((lvl.level, result))
 

@@ -166,6 +166,41 @@ async def test_load_document_spans_reloads_extraction_level_in_order(session: As
     assert await load_document_text(session, uuid.uuid4()) is None
 
 
+async def test_segment_action_duration_includes_stage_setup(session: AsyncSession) -> None:
+    """R12: the segment Action's duration_ms folds in ``stage_setup_ms`` — the embed/split/segment
+    cost the ingest entry point already paid — not just the persist write, so the dominant
+    embedding cost is attributed. Direct callers passing the default 0 record persist time alone.
+    """
+    await bootstrap_session(session)
+    raw = "Solo claim sentence."
+    doc_id = await _seed_document(session, raw)
+    ch = span_content_hash(raw, segmenter_params=_PARAMS, model=_MODEL)
+    await persist_spans(
+        session,
+        doc_id,
+        [(0, len(raw))],
+        [_VEC],
+        content_hash=ch,
+        segmenter_params=_PARAMS,
+        model=_MODEL,
+        stage_setup_ms=1000,
+    )
+    await session.commit()
+
+    row = await session.execute(
+        text(
+            "SELECT metrics->>'duration_ms', metrics->>'n_spans', "
+            "metrics->>'n_skipped_whitespace' FROM actions "
+            "WHERE actor='segmenter' AND inputs->>'document_id'=:d"
+        ),
+        {"d": str(doc_id)},
+    )
+    dur, n_spans, n_skipped = row.one()
+    assert int(dur) >= 1000  # the threaded setup cost is included, not dropped
+    assert int(n_spans) == 1
+    assert int(n_skipped) == 0
+
+
 async def test_reload_is_a_no_op(session: AsyncSession) -> None:
     await bootstrap_session(session)
     raw = "Alpha statement. Beta statement."

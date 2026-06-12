@@ -1,10 +1,15 @@
 """Gate-corpus dry-run ingest — the first real multi-document corpus ingest (Trial C / §6.1).
 
 Ingests all ten `tests/fixtures/gate_corpus/` documents through the **real ingest pipeline via the
-R11 Postgres job queue** (procrastinate) and the **R10 embedding seam**, then sanity-reads the
-result and writes a run report under `docs/trials/`. This is the event R10 (out-of-process
-embedding) and R11 (per-box serialized job queue) exist for: a single investigation's documents
-ingested concurrently-but-serialized, exactly as a live operator would drive them.
+R11 Postgres job queue** (procrastinate), then sanity-reads the result and writes a run report under
+`docs/trials/`. This is the event R11 (per-box serialized job queue) exists for: a single
+investigation's documents ingested concurrently-but-serialized, exactly as a live operator would
+drive them.
+
+**Embedding backend.** The R11 ingest job constructs the **in-process** `EmbeddingSubstrate`
+directly (`iknos.jobs.app`); the R10 `make_embedding_backend` out-of-process seam is **not yet wired
+into the job**, so this run embeds in-process regardless of `EMBEDDINGS_BASE_URL`. Wiring that seam
+into the job is the other lane's task — the report states what the worker actually used.
 
 **Pipeline scope (important).** The R11 ingest job (`iknos.jobs.app.ingest_document_bytes_job`)
 runs the *perception* stage: parse → segment → embed → persist `Span` vertices + dense/sparse
@@ -69,10 +74,19 @@ class DocCounts:
     document_id: str
     spans: int = 0
     embedding_rows_by_level: dict[int, int] = field(default_factory=dict)
-    distinct_embedding_windows: int = 0  # rows with span_id NULL = document-level windows (d08)
+    # Document-level embedding window count, read from the **segment Action's**
+    # ``inputs.windowing.count`` (written by core/ingest.py from
+    # ``DocumentContext.window_layout``). NOT from ``document_embeddings`` rows: every dense row the
+    # pipeline writes sets ``span_id`` (the ``span_id IS NULL`` population is a documented "future"
+    # slot, db/orm.py — never written today), so counting NULL rows was always 0. d08 must show > 1.
+    embedding_windows: int = 0
     propositions: int = 0
     faithfulness_present: int = 0  # propositions with a non-null faithfulness (verifier ran)
     provisional: int = 0
+    # Total ingest wall-clock for this document, summed across its parse + segment Action
+    # ``metrics.duration_ms`` (R12). ``None`` when the ``metrics`` column is absent (pre-R12) — the
+    # observability-floor "absent, never zeroed" discipline.
+    ingest_duration_ms: int | None = None
 
 
 def load_documents(corpus_dir: Path) -> list[GateDoc]:
@@ -137,9 +151,11 @@ async def sanity_read(docs: list[GateDoc]) -> list[DocCounts]:
     """Read back per-document counts from the graph (spans/propositions) + relational (embeddings).
 
     Separate session from the worker's. Graph reads go through the real ``cypher()`` seam; embedding
-    coverage is read from ``document_embeddings`` (the R10 dense rows), where a row with ``span_id``
-    NULL is a document-level embedding *window* — d08 must show more than one (the G1.13 multi-
-    window fact lives in its tail).
+    row counts come from ``document_embeddings`` (one dense row per persisted ``Span``). The
+    document-level **window count** (d08's G1.13 multi-window fact) is read from the **segment
+    ``Action``'s** ``inputs.windowing.count`` — the layout the pipeline actually records — not from
+    ``span_id IS NULL`` rows (a population the pipeline never writes). Per-document ingest duration
+    sums the parse + segment Actions' R12 ``metrics.duration_ms`` when the column is present.
     """
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -149,6 +165,7 @@ async def sanity_read(docs: list[GateDoc]) -> list[DocCounts]:
 
     engine = create_async_engine(settings.database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    have_metrics = _actions_have_metrics()
     results: list[DocCounts] = []
     try:
         async with session_factory() as session:
@@ -191,16 +208,38 @@ async def sanity_read(docs: list[GateDoc]) -> list[DocCounts]:
                     )
                 ).all()
                 c.embedding_rows_by_level = {int(lvl): int(n) for lvl, n in level_rows}
-                window_rows = (
+
+                # Document-level window count (G1.13): the segment Action records the embedding
+                # window layout in inputs.windowing ({count, boundaries, policy...}). The window
+                # layout is identical across levels, so the newest segment Action for the doc
+                # suffices. ``->>'count'`` is NULL (→ 0) if no segment Action carries windowing.
+                win_count = (
                     await session.execute(
                         text(
-                            "SELECT count(*) FROM document_embeddings "
-                            "WHERE document_id = :did AND span_id IS NULL"
+                            "SELECT inputs->'windowing'->>'count' FROM actions "
+                            "WHERE actor = 'segmenter' AND action_type = 'segment' "
+                            "AND inputs->>'document_id' = :did "
+                            "ORDER BY timestamp DESC LIMIT 1"
                         ),
-                        {"did": doc.document_id},
+                        {"did": did},
                     )
-                ).scalar_one()
-                c.distinct_embedding_windows = int(window_rows)
+                ).scalar_one_or_none()
+                c.embedding_windows = int(win_count) if win_count is not None else 0
+
+                # Per-document ingest duration from R12 Action metrics: sum metrics.duration_ms over
+                # this document's Actions (parse + segment). SUM ignores rows whose metrics omit the
+                # key (->> NULL), so no fabricated zero. Omitted entirely when the column is absent.
+                if have_metrics:
+                    dur = (
+                        await session.execute(
+                            text(
+                                "SELECT COALESCE(SUM((metrics->>'duration_ms')::int), 0) "
+                                "FROM actions WHERE inputs->>'document_id' = :did"
+                            ),
+                            {"did": did},
+                        )
+                    ).scalar_one()
+                    c.ingest_duration_ms = int(dur)
                 results.append(c)
     finally:
         await engine.dispose()
@@ -208,15 +247,17 @@ async def sanity_read(docs: list[GateDoc]) -> list[DocCounts]:
 
 
 def _actions_have_metrics() -> bool:
-    """Whether R12 (Action cost/duration metrics) has landed — its columns on the Action model.
+    """Whether R12 (Action operational metrics) is present — the ``metrics`` JSONB column.
 
-    Checked reflectively so this runner needs no edit when R12 merges: if the columns appear, the
-    report can be extended to read them. Today they are absent, so the report says so.
+    R12 (#103) shipped as a single ``actions.metrics`` JSONB column whose **keys** are
+    ``duration_ms`` / token counts / span counts — not top-level ``duration_ms``/``cost`` columns
+    (the shape this guard wrongly looked for, so it returned ``False`` forever). Checked off the ORM
+    reflectively so the runner needs no schema knowledge: if the column is on the model, the report
+    reads per-document duration from it.
     """
     from iknos.db.orm import Action
 
-    cols = set(Action.__table__.columns.keys())
-    return bool(cols & {"duration_ms", "cost", "duration", "latency_ms"})
+    return "metrics" in Action.__table__.columns
 
 
 def render_report(
@@ -231,14 +272,21 @@ def render_report(
 
     total_spans = sum(c.spans for c in counts)
     total_props = sum(c.propositions for c in counts)
+    have_metrics = _actions_have_metrics()
+    total_duration = sum(c.ingest_duration_ms or 0 for c in counts)
     d08 = next((c for c in counts if c.key == "d08"), None)
     lines = [
         "# Gate-corpus dry-run ingest — run report (Trial C / §6.1)",
         "",
         f"- corpus: `{corpus_dir}` ({len(docs)} documents); box: `{box}`; "
         f"graph: `{settings.graph_name}`",
-        f"- embedding seam (R10): `{settings.embeddings_base_url or 'in-process bge-m3'}`; "
-        f"model: `{settings.embedding_model}`",
+        # The R11 ingest job constructs the in-process EmbeddingSubstrate directly (jobs/app.py);
+        # the R10 make_embedding_backend out-of-process seam is NOT yet wired into the job, so this
+        # run embedded in-process regardless of EMBEDDINGS_BASE_URL. Report what ran, not the seam.
+        f"- embedding backend: **in-process bge-m3** (`{settings.embedding_model}`) — the R11 "
+        "worker builds `EmbeddingSubstrate` in-process; the R10 `make_embedding_backend` "
+        f"out-of-process seam is **not yet wired into the ingest job**, so `EMBEDDINGS_BASE_URL` "
+        f"(`{settings.embeddings_base_url or 'unset'}`) had no effect on this run",
         f"- queue (R11): `ingest:{box}` — per-box execution lock, one worker (concurrency 1)",
         "",
         "**Pipeline scope.** The R11 ingest job runs perception only (parse → segment → embed → "
@@ -251,39 +299,43 @@ def render_report(
         f"- spans (graph `Span` vertices): **{total_spans}**",
         f"- propositions (graph `Proposition` vertices): **{total_props}** "
         + ("" if total_props else "_(0 — propositionization not run; see scope note)_"),
-        "- R12 Action cost/duration metrics: "
+        "- R12 Action metrics: "
         + (
-            "**available**"
-            if _actions_have_metrics()
-            else "**not merged** — per-document "
-            "cost/duration omitted (the §6.1 / Trial C numbers land once R12 ships)"
+            f"**present** — total ingest wall-clock **{total_duration} ms** "
+            "(per-document below, summed parse+segment `metrics.duration_ms`); token/cost keys are "
+            "LLM-stage and absent from this perception-only ingest"
+            if have_metrics
+            else "**absent** — the `actions.metrics` column is not on this DB; per-document "
+            "duration omitted"
         ),
         "",
         "## Per-document",
         "",
-        "| doc | spans | embedding rows by level | doc windows | propositions | "
+        "| doc | spans | embedding rows by level | doc windows | ingest ms | propositions | "
         "faithfulness set | provisional |",
-        "|-----|------:|-------------------------|------------:|-------------:|"
+        "|-----|------:|-------------------------|------------:|----------:|-------------:|"
         "-----------------:|------------:|",
     ]
     for c in counts:
         by_level = ", ".join(f"L{lvl}:{n}" for lvl, n in sorted(c.embedding_rows_by_level.items()))
+        dur = "—" if c.ingest_duration_ms is None else str(c.ingest_duration_ms)
         lines.append(
-            f"| {c.key} | {c.spans} | {by_level or '—'} | {c.distinct_embedding_windows} "
+            f"| {c.key} | {c.spans} | {by_level or '—'} | {c.embedding_windows} | {dur} "
             f"| {c.propositions} | {c.faithfulness_present} | {c.provisional} |"
         )
     lines += ["", "## d08 multi-window check (G1.13)", ""]
     if d08 is None:
         lines.append("- d08 not found in the corpus — cannot verify the tail-window-coverage fact.")
-    elif d08.distinct_embedding_windows > 1:
+    elif d08.embedding_windows > 1:
         lines.append(
-            f"- ✅ d08 produced **{d08.distinct_embedding_windows}** document-level embedding "
-            "windows — the >8,192-token purchasing record spans more than one window, so the "
-            "load-bearing tail fact in its final 10% is covered (the path R10 exists to serve)."
+            f"- ✅ d08 segmented under **{d08.embedding_windows}** document-level embedding "
+            "windows (from the segment `Action`'s `inputs.windowing.count`) — the >8,192-token "
+            "purchasing record spans more than one window, so the load-bearing tail fact in its "
+            "final 10% is covered (the path the multi-window embedding exists to serve)."
         )
     else:
         lines.append(
-            f"- ⚠️ d08 produced only **{d08.distinct_embedding_windows}** document-level window — "
+            f"- ⚠️ d08 segmented under only **{d08.embedding_windows}** document-level window — "
             "expected >1 for the >8,192-token document. Check the segmentation/window policy "
             "(this is the G1.13 tail-coverage regression the gate corpus plants for)."
         )

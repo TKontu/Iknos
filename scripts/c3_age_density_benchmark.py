@@ -155,6 +155,9 @@ class Shape:
 
     @property
     def p95_ms(self) -> float:
+        """The rank-``⌊0.95·n⌋`` observation. With the small default ``reps`` (7) this is the
+        **max** sample (rank 6 of 7), not a true percentile — read it as "worst observed of N",
+        and see the report's honest-label note. Meaningful as a real p95 only at large ``reps``."""
         if not self.times_ms:
             return float("nan")
         s = sorted(self.times_ms)
@@ -210,14 +213,26 @@ async def _explain(session: AsyncSession, query: str, *, no_seqscan: bool) -> st
     return plan
 
 
-async def _time(session: AsyncSession, query: str, reps: int) -> list[float]:
+async def _time(
+    session: AsyncSession, query: str, reps: int, *, is_write: bool = False
+) -> list[float]:
     # One untimed warmup so cold-cache / first-plan effects do not skew the median.
     await execute_cypher(session, query)
+    if is_write:
+        # A write rep mutates the rows it matches. Left in one growing transaction (the two
+        # EXPLAIN ANALYZE passes already ran the UPDATE twice, plus this warmup), every repeated rep
+        # rewrites the SAME matching edges and piles dead tuples on them, so the per-rep cost climbs
+        # with rep order and the median is contaminated (the C3 review's shape-6 defect). Roll back
+        # the explains + warmup, then time each rep in its own unit and roll it back, so every rep
+        # runs the UPDATE against the same committed baseline — order-independent, uncontaminated.
+        await session.rollback()
     out: list[float] = []
     for _ in range(reps):
         t0 = time.perf_counter()
         await execute_cypher(session, query)
         out.append((time.perf_counter() - t0) * 1000.0)
+        if is_write:
+            await session.rollback()  # reset to the committed baseline before the next rep
     return out
 
 
@@ -267,6 +282,10 @@ async def setup_graph(session: AsyncSession, graph: str) -> ModuleType:
 
 
 async def teardown_graph(session: AsyncSession, graph: str) -> None:
+    # Roll back FIRST: a mid-run failure leaves the session in an aborted transaction, in which any
+    # further statement (including the drop) errors out — so without this the bench graph leaks.
+    # Clearing the aborted transaction lets the drop actually execute. Best-effort thereafter.
+    await session.rollback()
     try:
         await _exec_sql(session, f"SELECT ag_catalog.drop_graph('{graph}', true)")
         await session.commit()
@@ -424,10 +443,16 @@ def _shapes(ctx: dict[str, object]) -> list[Shape]:
         Shape(
             "3 variable-length closure",
             f"MATCH (a:Actor {{id: '{a_id}'}})-[:partOf*1..5]->(b) RETURN count(b)",
-            "anchor vertex GIN + partOf endpoint btrees",
+            "anchor Actor GIN verified; endpoint partOf-btree use NOT demonstrated (VLE may "
+            "materialize edges internally); synthetic partonomy fan-out ≈1 (near-linear chain)",
             label_table="partOf",
-            # The anchor lookup rides the Actor GIN; the closure traversal rides the partOf
-            # endpoint btrees. Any of the three appearing is genuine acceleration of this shape.
+            # The anchor lookup rides the Actor GIN — that is what the plan demonstrably uses. The
+            # partOf endpoint btrees are *candidates* for the closure traversal but AGE's VLE may
+            # materialize edges internally and never emit a partOf-table index scan, so we do NOT
+            # claim btree use is shown; the GIN appearing confirms the anchor is indexed.
+            # Caveat: the generated partonomy is a near-linear chain (fan-out ≈1, _make_edges), so
+            # this closure is a depth-bounded linear walk, not a branching roll-up — a higher
+            # fan-out would cost more.
             expected_indexes=(actor_gin, po_start, po_end),
         ),
         Shape(
@@ -456,11 +481,20 @@ def _shapes(ctx: dict[str, object]) -> list[Shape]:
     ]
 
 
-def _scan_line(plan: str, label_table: str) -> str:
-    """The first scan-node line touching the label table — the evidence row for the report."""
+def _scan_line(plan: str, label_table: str, expected_indexes: tuple[str, ...] = ()) -> str:
+    """The first scan-node line touching the label table (or one of this shape's accelerating
+    indexes) — the evidence row for the report.
+
+    The bare ``"Index Scan" in line`` disjunct this used to carry matched *any* index-scan line,
+    so a shape whose label table never appears (e.g. the variable-length closure, where AGE may
+    materialize edges internally and emit no ``partOf``-table scan) would surface an unrelated
+    index's scan node as if it were the label-table evidence — overstating index use. We now match
+    only lines that name the label table **or** one of the shape's own ``expected_indexes``, so the
+    evidence row is always honest about what it shows; if neither appears we fall through.
+    """
     for line in plan.splitlines():
         if re.search(r"(Seq Scan|Index (Only )?Scan|Bitmap)", line) and (
-            label_table in line or "Index Scan" in line or "Bitmap Index Scan" in line
+            label_table in line or any(idx in line for idx in expected_indexes)
         ):
             return line.strip()
     first = plan.splitlines()[0] if plan else "(no plan)"
@@ -482,6 +516,22 @@ def _decision(shapes: list[Shape]) -> tuple[str, list[str]]:
     unused = [s for s in core_reads if not s.index_usable]
     deferred = [s for s in shapes if not s.has_index]
 
+    # MERGE-by-id is a *write* (excluded from core_reads above), so its index result was never
+    # folded into the verdict — yet the verdict asserted it "resolves on the vertex GIN". Derive the
+    # clause from shape 2's actual measured plan instead of hard-coding it.
+    merge = next((s for s in shapes if s.is_write and s.query.lstrip().startswith("MERGE")), None)
+    if merge is None:
+        merge_clause = ""
+    elif merge.index_chosen:
+        merge_clause = " MERGE-by-id resolves on the vertex GIN (index chosen)."
+    elif merge.index_usable:
+        merge_clause = " MERGE-by-id's vertex GIN is usable (planner seq-scans by choice here)."
+    else:
+        merge_clause = (
+            f" Note: MERGE-by-id ({merge.name}) did NOT show a usable vertex-GIN path — watch "
+            "entity-resolution scaling."
+        )
+
     for s in core_reads:
         if s.index_usable and not s.index_chosen:
             notes.append(
@@ -497,9 +547,10 @@ def _decision(shapes: list[Shape]) -> tuple[str, list[str]]:
         if others and slowest.median_ms > 5 * max(s.median_ms for s in others):
             notes.append(
                 f"shape {slowest.name} is the costliest indexed read ({slowest.median_ms:.0f} ms "
-                f"median) — its indexes are chosen, so this is AGE variable-length-traversal "
+                f"median) — its anchor index is chosen, so this is AGE variable-length-traversal "
                 "overhead, not a missing index. Acceptable at investigation scale; revisit if the "
-                "partonomy roll-up becomes a hot path or its depth/fan-out grows."
+                "partonomy roll-up becomes a hot path or its depth/fan-out grows (the synthetic "
+                "partonomy here is a near-linear chain, fan-out ≈1)."
             )
 
     if deferred:
@@ -529,10 +580,10 @@ def _decision(shapes: list[Shape]) -> tuple[str, list[str]]:
         verdict = (
             "✅ **STAY single-engine (Postgres + AGE).** Every core read shape (box-scoped "
             "retrieval, partonomy closure, bitemporal as-of) has a *usable* migration-0007 index "
-            "path verified through the real `cypher()` seam (existence ≠ use confirmed), and "
-            "MERGE-by-id resolves on the vertex GIN. The only gap is the by-design deferred "
-            "edge-property GIN (W9), which is Phase-5-scoped. No evidence for the separate-"
-            "graph-store fallback at this density."
+            "path verified through the real `cypher()` seam (existence ≠ use confirmed)."
+            + merge_clause
+            + " The only gap is the by-design deferred edge-property GIN (W9), which is "
+            "Phase-5-scoped. No evidence for the separate-graph-store fallback at this density."
         )
     return verdict, notes
 
@@ -557,6 +608,10 @@ def _report(
         f"- scale: **{n_vertices}** vertices across **{n_boxes}** boxes; "
         f"**{ctx['edge_count']}** edges; full {n_props}-property vertex payload",
         f"- bitemporal anchor (as-of): `{AS_OF}`; reps: {reps} (median/p95, 1 warmup discarded)",
+        f"- **`p95 ms` caveat:** with reps={reps} small, `p95 ms` is the rank-⌊0.95·{reps}⌋ sample "
+        f"— effectively the **max** observed (worst-of-{reps}), not a true percentile. Write-shape "
+        "reps are isolated (each rep rolled back to a clean baseline) so repeated updates of the "
+        "same edges don't accumulate dead tuples and skew the median.",
         "",
         "## Decision",
         "",
@@ -586,9 +641,11 @@ def _report(
         )
     lines += ["", "## EXPLAIN evidence (scan node touching the label table)", ""]
     for s in shapes:
+        default_scan = _scan_line(s.plan_default, s.label_table, s.expected_indexes)
+        noseq_scan = _scan_line(s.plan_no_seqscan, s.label_table, s.expected_indexes)
         lines.append(f"**{s.name}** — `{s.query}`")
-        lines.append(f"- default plan:        `{_scan_line(s.plan_default, s.label_table)}`")
-        lines.append(f"- enable_seqscan=off:  `{_scan_line(s.plan_no_seqscan, s.label_table)}`")
+        lines.append(f"- default plan:        `{default_scan}`")
+        lines.append(f"- enable_seqscan=off:  `{noseq_scan}`")
         lines.append("")
     lines.append(f"_(generation + ANALYZE: {gen_s:.1f}s for {n_vertices} vertices.)_")
     return "\n".join(lines)
@@ -623,7 +680,7 @@ async def run(args: argparse.Namespace) -> str:
                 for s in shapes:
                     s.plan_default = await _explain(session, s.query, no_seqscan=False)
                     s.plan_no_seqscan = await _explain(session, s.query, no_seqscan=True)
-                    s.times_ms = await _time(session, s.query, args.reps)
+                    s.times_ms = await _time(session, s.query, args.reps, is_write=s.is_write)
                     await session.commit()
                 report = _report(
                     ctx,
