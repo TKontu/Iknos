@@ -28,7 +28,9 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-iknos}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-iknos}
-    command: ["alembic", "upgrade", "head"]
+    # Alembic schema, then procrastinate's own queue tables (R11; idempotent — see MIGRATIONS.md).
+    command:
+      ["sh", "-c", "alembic upgrade head && procrastinate --app=iknos.jobs.app.app schema --apply"]
     restart: "no"
 
   api:
@@ -49,6 +51,25 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     command: ["uvicorn", "iknos.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
+
+  # R11 — background ingest worker. One investigation's graph writes serialize through the queue;
+  # a real multi-document corpus ingest runs here, not as a synchronous foreground API request.
+  worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: iknos-api:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-iknos}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-iknos}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./src:/app/src
+    command: ["procrastinate", "--app=iknos.jobs.app.app", "worker"]
 
 volumes:
   postgres_data:

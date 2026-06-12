@@ -42,6 +42,25 @@ docker compose up
 
 The `migrate` service runs before the `pipeline` service starts, ensuring the database schema is always up-to-date.
 
+## Background job queue schema (procrastinate, R11)
+
+The background ingest queue (`iknos.jobs.app`) uses **procrastinate**, which keeps its own tables
+on the same Postgres. Its schema is **not** managed by Alembic — apply it once per database with
+procrastinate's own one-shot, after the Alembic migrations:
+
+```bash
+# After `alembic upgrade head`, create procrastinate's queue tables (idempotent; run once per DB):
+uv run procrastinate --app=iknos.jobs.app.app schema --apply
+```
+
+Notes:
+- This is a **documented one-shot**, not an Alembic revision — procrastinate's schema is
+  version-coupled to the installed `procrastinate` package, so it is applied (and upgraded) through
+  procrastinate's own tooling rather than vendored into a migration that could drift.
+- Requires `DATABASE_URL` (the same database the app uses).
+- The `worker` service in `compose.yaml` runs `procrastinate worker` against these tables.
+- Tests use `procrastinate.testing.InMemoryConnector` and need none of this.
+
 ## Manual Migration Commands
 
 ### Apply Migrations
