@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import torch
 from transformers import AutoModel, AutoTokenizer
@@ -6,6 +6,11 @@ from transformers import AutoModel, AutoTokenizer
 # BAAI/bge-m3 context window (special tokens included). A single model forward pass
 # cannot see more than this many tokens at once.
 MAX_MODEL_TOKENS = 8192
+
+# bge-m3 dense dimension. The pgvector columns are `vector(1024)`; an out-of-process backend
+# (R10) validates every returned vector against this, so a wrong-dimension server response is
+# rejected at the trust boundary rather than failing later at the DB write.
+EMBEDDING_DIM = 1024
 
 # G1.13 slice 2 — windowed embedding ("late chunking over windows"). A document longer
 # than one model context is embedded as a sequence of overlapping macro-windows, each a
@@ -330,3 +335,57 @@ class EmbeddingSubstrate:
             token_embeddings = outputs.last_hidden_state
 
         return mean_pool_normalize(token_embeddings.cpu(), inputs["attention_mask"].cpu())
+
+
+@runtime_checkable
+class EmbeddingBackend(Protocol):
+    """The swappable embedding seam (R10): document context + passage vectors + model identity.
+
+    :class:`EmbeddingSubstrate` (in-process torch) is the **default/local** backend and already
+    satisfies this Protocol structurally; :class:`~iknos.core.embeddings_http.HTTPEmbeddingBackend`
+    is the out-of-process one, behind ``EMBEDDINGS_BASE_URL`` (the same service edge as the LLM and
+    parser). Both are **synchronous** — ``core/ingest.py`` calls ``embed_document`` inline — so the
+    HTTP backend uses a sync client, not an async one, to stay drop-in interchangeable.
+
+    ``model_name`` is the served model's identity; it feeds the segmentation content hash and the
+    G1.16 vector-space guard (one ANN index, one model), so a backend must report the model it
+    actually produced the vectors with.
+    """
+
+    @property
+    def model_name(self) -> str: ...
+
+    def embed_document(self, text: str) -> DocumentContext: ...
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]: ...
+
+
+def make_embedding_backend(
+    *,
+    base_url: str | None = None,
+    model_name: str | None = None,
+    timeout_s: float | None = None,
+    device: str | None = None,
+) -> EmbeddingBackend:
+    """The single construction point for an embedding backend (R10) — the ingest worker's seam.
+
+    An **empty base URL is the "no service" signal** → the in-process :class:`EmbeddingSubstrate`
+    (byte-identical to before; torch in the worker). A non-empty ``EMBEDDINGS_BASE_URL`` routes
+    embedding to the hosted service via :class:`~iknos.core.embeddings_http.HTTPEmbeddingBackend`,
+    so torch need not live in the worker. Mirrors ``core/parse.py::make_parser``: defaults are read
+    from config only when not supplied (a caller passing everything stays DB-free).
+    """
+    # Only consult the config singleton (which requires DATABASE_URL) when a default is needed.
+    if base_url is None or model_name is None:
+        from iknos.config import settings
+
+        base_url = settings.embeddings_base_url if base_url is None else base_url
+        model_name = settings.embedding_model if model_name is None else model_name
+
+    if not base_url:
+        return EmbeddingSubstrate(model_name, device=device)
+
+    # Lazy import keeps the httpx/pydantic dependency (and any import cycle) off the local path.
+    from iknos.core.embeddings_http import HTTPEmbeddingBackend
+
+    return HTTPEmbeddingBackend(base_url=base_url, model_name=model_name, timeout_s=timeout_s)
