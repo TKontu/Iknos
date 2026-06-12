@@ -27,8 +27,15 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from iknos.baselines.agentic import AgenticRagBaseline
 from iknos.baselines.chunking import SubstrateTokenizer
-from iknos.baselines.contract import AnswerFile, BaselineAnswer, load_questions
+from iknos.baselines.contract import (
+    AnswerFile,
+    BaselineAnswer,
+    QuestionTrace,
+    UnansweredQuestion,
+    load_questions,
+)
 from iknos.baselines.rag import RagBaseline
 from iknos.config import settings
 from iknos.core.embeddings import EmbeddingSubstrate
@@ -52,7 +59,8 @@ def _load_corpus_documents(corpus_dir: Path) -> list[tuple[str, str]]:
     return docs
 
 
-async def _run_rag(args: argparse.Namespace) -> AnswerFile:
+async def _run_baseline(args: argparse.Namespace) -> AnswerFile:
+    """Ingest the corpus once (shared), then answer every question with the chosen rung."""
     corpus_dir = Path(args.corpus)
     documents = _load_corpus_documents(corpus_dir)
     questions = load_questions(Path(args.questions))
@@ -61,6 +69,9 @@ async def _run_rag(args: argparse.Namespace) -> AnswerFile:
     engine = create_async_engine(settings.database_url)
     session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     llm = LLMClient(model=args.llm_model)
+    answers: list[BaselineAnswer] = []
+    unanswered: list[UnansweredQuestion] = []
+    traces: list[QuestionTrace] = []
     try:
         rig = RagBaseline(
             embedder=substrate,
@@ -75,16 +86,27 @@ async def _run_rag(args: argparse.Namespace) -> AnswerFile:
         for doc_id, text in documents:
             n = await rig.ingest_document(doc_id, text)
             logger.info("ingested %s -> %d chunks", doc_id, n)
-        answers: list[BaselineAnswer] = []
-        for q in questions:
-            answers.append(await rig.answer(q))
-            logger.info("answered %s", q.id)
+
+        if args.baseline == "rag":
+            for q in questions:
+                answers.append(await rig.answer(q))
+                logger.info("answered %s", q.id)
+        else:  # "agentic" — the multi-hop loop over the same retriever
+            agentic = AgenticRagBaseline(retriever=rig, llm=llm, max_search_steps=args.max_steps)
+            for q in questions:
+                result = await agentic.answer(q)
+                traces.append(result.trace)
+                if result.answer is not None:
+                    answers.append(result.answer)
+                if result.unanswered is not None:
+                    unanswered.append(result.unanswered)
+                logger.info("answered %s (%d queries)", q.id, len(result.trace.queries))
     finally:
         substrate.close()
         await engine.dispose()
 
     meta = {
-        "baseline": "rag",
+        "baseline": args.baseline,
         "corpus": str(corpus_dir),
         "embedding_model": substrate.model_name,
         "llm_model": llm.model,
@@ -92,7 +114,9 @@ async def _run_rag(args: argparse.Namespace) -> AnswerFile:
         "chunk_tokens": str(args.chunk_tokens),
         "overlap_tokens": str(args.overlap_tokens),
     }
-    return AnswerFile(meta=meta, answers=answers)
+    if args.baseline == "agentic":
+        meta["max_steps"] = str(args.max_steps)
+    return AnswerFile(meta=meta, answers=answers, unanswered=unanswered, traces=traces)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -108,19 +132,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=8, help="Chunks retrieved per question.")
     parser.add_argument("--chunk-tokens", type=int, default=512)
     parser.add_argument("--overlap-tokens", type=int, default=64)
+    parser.add_argument(
+        "--max-steps", type=int, default=6, help="Agentic: max search steps before a forced answer."
+    )
     return parser.parse_args()
 
 
 async def main() -> None:
     args = _parse_args()
     logging.basicConfig(level=settings.log_level)
-    if args.baseline == "rag":
-        answer_file = await _run_rag(args)
-    else:  # "agentic" — wired by V5
-        raise NotImplementedError("the agentic baseline (V5) is not yet implemented")
+    answer_file = await _run_baseline(args)
     output = Path(args.output or DEFAULT_OUTPUTS[args.baseline])
     answer_file.write(output)
-    logger.info("wrote %d answers to %s", len(answer_file.answers), output)
+    logger.info(
+        "wrote %d answers (%d unanswered) to %s",
+        len(answer_file.answers),
+        len(answer_file.unanswered),
+        output,
+    )
 
 
 if __name__ == "__main__":
