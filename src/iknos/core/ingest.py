@@ -42,7 +42,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from iknos.core.embeddings import EmbeddingModelMismatchError, EmbeddingSubstrate
+from iknos.core.embeddings import EmbeddingBackend, EmbeddingModelMismatchError
 from iknos.core.parse import (
     NullParser,
     Parser,
@@ -81,6 +81,11 @@ _ACTOR = "segmenter"
 # Action actor for the Stage 0 parse front-end (§1, G1.0) — gives "parse once" (§6.1)
 # its enforcement point and a future content-addressed parse cache its key.
 _PARSE_ACTOR = "parser"
+
+# The segmentation level the proposition layer extracts from: 0, the finest (G1.10,
+# segmentation.SegmentLevel — coarser levels serve §5.1 candidate pruning, not extraction).
+# The single source of truth for the level :func:`load_document_spans` reloads for extraction.
+EXTRACTION_LEVEL = 0
 
 # Sentence-ending punctuation followed by whitespace/end, OR a trailing fragment.
 _SENTENCE_RE = re.compile(r"[^.!?\n]+(?:[.!?]+(?=\s|$)|$)")
@@ -270,6 +275,59 @@ async def _parsed_hash(session: AsyncSession, document_id: uuid.UUID) -> str | N
     return row.scalar_one_or_none()
 
 
+async def load_document_text(session: AsyncSession, document_id: uuid.UUID) -> str | None:
+    """The document's ``raw_text`` from ``document_content``, or ``None`` if never ingested.
+
+    The inverse of the ``document_content`` upsert in :func:`_ingest_parsed` — the raw text the
+    propositionizer needs to resolve span substrings (``raw_text[start:end]``) and build its
+    context windows. Relational, so no AGE bootstrap is required to read it.
+    """
+    row = await session.execute(
+        text("SELECT raw_text FROM document_content WHERE document_id = :did"),
+        {"did": document_id},
+    )
+    return row.scalar_one_or_none()
+
+
+async def load_document_spans(
+    session: AsyncSession, document_id: uuid.UUID, *, level: int = EXTRACTION_LEVEL
+) -> list[Span]:
+    """Reload a document's persisted :class:`Span`s from the graph, ordered by ``start``.
+
+    The read-path inverse of :func:`persist_spans`: the R11 propositionize job runs in its own
+    process from a document id, so it cannot reuse the in-memory spans an ``ingest_*`` call
+    returned — it reloads them here. Scoped to ``level`` 0 by default — the finest level is the
+    granularity the proposition layer extracts from (segmentation.SegmentLevel docstring); coarser
+    levels exist only for §5.1 candidate pruning, not extraction. Ordered by ``start`` so the
+    propositionizer's context windows (``_pipeline_hash``) match the ingest-time order. Empty list
+    if the document was never ingested at that level (a clean no-op for the caller).
+    """
+    from iknos.db.age import execute_cypher, parse_agtype_map
+
+    rows = await execute_cypher(
+        session,
+        f"MATCH (s:Span {{document_id: '{document_id}', level: {level}}}) RETURN properties(s)",
+    )
+    spans: list[Span] = []
+    for (raw_props,) in rows:
+        props = parse_agtype_map(raw_props)
+        layout = props.get("layout")
+        if isinstance(layout, str):  # cypher_map JSON-encodes the dict into a string property
+            layout = json.loads(layout)
+        spans.append(
+            Span(
+                id=uuid.UUID(str(props["id"])),
+                document_id=uuid.UUID(str(props["document_id"])),
+                start=int(props["start"]),
+                end=int(props["end"]),
+                level=int(props["level"]),
+                layout=layout,
+            )
+        )
+    spans.sort(key=lambda s: s.start)
+    return spans
+
+
 async def persist_spans(
     session: AsyncSession,
     document_id: uuid.UUID,
@@ -442,7 +500,7 @@ async def _ingest_parsed(
     *,
     parse_ch: str,
     media_type: str,
-    substrate: EmbeddingSubstrate,
+    substrate: EmbeddingBackend,
     segmenter: SegmentationBackbone,
     title: str | None = None,
     source_uri: str | None = None,
@@ -563,7 +621,7 @@ async def ingest_document(
     session: AsyncSession,
     document_id: uuid.UUID,
     raw_text: str,
-    substrate: EmbeddingSubstrate,
+    substrate: EmbeddingBackend,
     segmenter: SegmentationBackbone,
     *,
     title: str | None = None,
@@ -607,7 +665,7 @@ async def ingest_document_bytes(
     session: AsyncSession,
     document_id: uuid.UUID,
     document_bytes: bytes,
-    substrate: EmbeddingSubstrate,
+    substrate: EmbeddingBackend,
     segmenter: SegmentationBackbone,
     *,
     media_type: str,
@@ -657,7 +715,7 @@ async def ingest_reference_document(
     session: AsyncSession,
     document_id: uuid.UUID,
     raw_text: str,
-    substrate: EmbeddingSubstrate,
+    substrate: EmbeddingBackend,
     segmenter: SegmentationBackbone,
     *,
     box: Box,

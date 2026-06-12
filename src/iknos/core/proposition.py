@@ -35,7 +35,7 @@ from iknos.core.consistency import (
     consolidate_samples,
     require_sampling_diversity,
 )
-from iknos.core.embeddings import EmbeddingModelMismatchError, EmbeddingSubstrate
+from iknos.core.embeddings import EmbeddingBackend, EmbeddingModelMismatchError
 from iknos.core.llm import LLMClient
 from iknos.core.parse import parse_quality_factor, worst_source_quality
 from iknos.core.prompts import vocab
@@ -314,7 +314,7 @@ class Propositionizer:
     def __init__(
         self,
         llm: LLMClient,
-        substrate: EmbeddingSubstrate,
+        substrate: EmbeddingBackend,
         *,
         context_window: int = 8,
         concurrency: int = 8,

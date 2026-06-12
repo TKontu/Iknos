@@ -26,6 +26,7 @@ from iknos.jobs.app import (  # noqa: E402
     app,
     ingest_document_bytes_job,
     is_retryable_ingest_error,
+    propositionize_document_job,
 )
 
 # --- the pure retry classifier ----------------------------------------------------------------
@@ -80,20 +81,70 @@ async def _run_worker() -> None:
 @pytest.mark.asyncio
 async def test_enqueue_then_run_succeeds_and_decodes_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
+    propositionized: list[uuid.UUID] = []
 
     async def _fake(**kwargs: object) -> None:
         seen.update(kwargs)
 
+    async def _fake_prop(*, document_id: uuid.UUID) -> None:
+        propositionized.append(document_id)
+
     monkeypatch.setattr("iknos.jobs.app._ingest_one", _fake)
+    monkeypatch.setattr("iknos.jobs.app._propositionize_one", _fake_prop)
     connector = InMemoryConnector()
     with app.replace_connector(connector):
-        job_id = await _defer()
-        await _run_worker()
+        doc = str(uuid.uuid4())
+        job_id = await _defer(document_id=doc)
+        await _run_worker()  # runs ingest, which chains extraction; the worker drains both
         assert connector.jobs[job_id]["status"] == "succeeded"
     # The task decoded the base64 bytes and passed through the document id / title.
     assert seen["document_bytes"] == b"hello world"
     assert isinstance(seen["document_id"], uuid.UUID)
     assert seen["title"] == "t"
+    # A successful ingest chained the follow-on extraction for the same document (queue-scope).
+    assert propositionized == [uuid.UUID(doc)]
+
+
+@pytest.mark.asyncio
+async def test_failed_ingest_does_not_chain_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fail(**kwargs: object) -> None:
+        raise DocumentResegmentationError("bad data")
+
+    prop_calls: list[uuid.UUID] = []
+
+    async def _fake_prop(*, document_id: uuid.UUID) -> None:  # pragma: no cover - must not run
+        prop_calls.append(document_id)
+
+    monkeypatch.setattr("iknos.jobs.app._ingest_one", _fail)
+    monkeypatch.setattr("iknos.jobs.app._propositionize_one", _fake_prop)
+    connector = InMemoryConnector()
+    with app.replace_connector(connector):
+        await _defer()
+        await _run_worker()
+        # The chain is after the ingest await: a failed ingest never enqueues extraction. Only the
+        # one ingest job exists, and extraction was never invoked.
+        assert len(connector.jobs) == 1
+    assert prop_calls == []
+
+
+@pytest.mark.asyncio
+async def test_propositionize_job_enqueue_then_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[uuid.UUID] = []
+
+    async def _fake_prop(*, document_id: uuid.UUID) -> None:
+        seen.append(document_id)
+
+    monkeypatch.setattr("iknos.jobs.app._propositionize_one", _fake_prop)
+    connector = InMemoryConnector()
+    with app.replace_connector(connector):
+        doc = str(uuid.uuid4())
+        deferrer = propositionize_document_job.configure(
+            queue="ingest:case-1", lock="case-1", queueing_lock=f"propositionize:{doc}"
+        )
+        job_id = await deferrer.defer_async(document_id=doc, box="case-1")
+        await _run_worker()
+        assert connector.jobs[job_id]["status"] == "succeeded"
+    assert seen == [uuid.UUID(doc)]
 
 
 @pytest.mark.asyncio

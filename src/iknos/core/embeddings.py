@@ -359,6 +359,15 @@ class EmbeddingBackend(Protocol):
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]: ...
 
+    def close(self) -> None:
+        """Release backend resources (torch tensors / the HTTP client). Idempotent.
+
+        Part of the seam so the ingest worker can construct a backend through
+        :func:`make_embedding_backend` and close it without knowing which concrete backend it
+        got — both :class:`EmbeddingSubstrate` and ``HTTPEmbeddingBackend`` implement it.
+        """
+        ...
+
 
 def make_embedding_backend(
     *,

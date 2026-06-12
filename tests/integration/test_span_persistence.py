@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.core.ingest import (
     DocumentResegmentationError,
+    load_document_spans,
+    load_document_text,
     persist_spans,
     span_content_hash,
 )
@@ -107,6 +109,61 @@ async def test_persist_spans_end_to_end(session: AsyncSession) -> None:
     # resolve_span_text round-trip via the local join.
     for s in result.spans:
         assert await resolve_span_text(session, doc_id, s.start, s.end) == raw[s.start : s.end]
+
+
+async def test_load_document_spans_reloads_extraction_level_in_order(session: AsyncSession) -> None:
+    # The read-path inverse of persist_spans the R11 propositionize job uses (it has no in-memory
+    # spans, only a document id). Must return level-0 spans only (the extraction granularity),
+    # ordered by start, with the JSON-encoded layout decoded back to a dict.
+    await bootstrap_session(session)
+    raw = "Gamma one. Gamma two. Gamma three."  # offsets: (0,10) (11,21) (22,34)
+    doc_id = await _seed_document(session, raw)
+
+    # Persist level-0 spans OUT of start order to prove the reloader sorts them; the first carries
+    # a layout, the others none.
+    fine = [(11, 21), (0, 10), (22, len(raw))]
+    layout = {"page": 1, "bbox": [0.0, 0.0, 1.0, 1.0]}
+    ch0 = span_content_hash(raw, segmenter_params=_PARAMS, model=_MODEL)
+    await persist_spans(
+        session,
+        doc_id,
+        fine,
+        [_VEC, _VEC, _VEC],
+        content_hash=ch0,
+        segmenter_params=_PARAMS,
+        model=_MODEL,
+        level=0,
+        layouts=[layout, None, None],
+    )
+    # A coarser level-1 span the extractor must NOT see.
+    coarse_params = {**_PARAMS, "max_len": 40}
+    ch1 = span_content_hash(raw, segmenter_params=coarse_params, model=_MODEL)
+    await persist_spans(
+        session,
+        doc_id,
+        [(0, len(raw))],
+        [_VEC],
+        content_hash=ch1,
+        segmenter_params=coarse_params,
+        model=_MODEL,
+        level=1,
+    )
+    await session.commit()
+
+    spans = await load_document_spans(session, doc_id)
+    assert [s.level for s in spans] == [0, 0, 0]  # level-1 excluded
+    assert [s.start for s in spans] == [0, 11, 22]  # sorted by start despite insert order
+    assert all(s.document_id == doc_id for s in spans)
+    by_start = {s.start: s for s in spans}
+    assert by_start[11].layout == layout  # JSON-encoded property decoded back to a dict
+    assert by_start[0].layout is None
+    # Span text resolves via the offsets the reloader carries.
+    assert raw[by_start[0].start : by_start[0].end] == "Gamma one."
+
+    assert await load_document_text(session, doc_id) == raw
+    # A never-ingested document is a clean no-op (the job returns without calling the LLM).
+    assert await load_document_spans(session, uuid.uuid4()) == []
+    assert await load_document_text(session, uuid.uuid4()) is None
 
 
 async def test_reload_is_a_no_op(session: AsyncSession) -> None:

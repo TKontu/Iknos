@@ -595,6 +595,26 @@ lock holds; direct synchronous callers unchanged. Tests: pure
 retry-classification unit test; enqueue→run integration via
 `procrastinate.testing.InMemoryConnector` (no live worker container).
 
+**R10/R11 follow-through (2026-06-12 — the gate dry-run report flagged "the job covers
+ingest only").** Two resolutions, both in `src/iknos/jobs/app.py` + `core/`:
+
+- **R10 seam threaded through ingest.** `core/ingest` (and `Propositionizer`) now take the
+  `EmbeddingBackend` protocol, and the R11 worker constructs the backend via
+  `make_embedding_backend()` — so `EMBEDDINGS_BASE_URL` set ⇒ the worker holds no torch, unset ⇒
+  byte-identical in-process bge-m3. (Also fixed a latent worker bug: the worker built its own
+  engine without the AGE connect-bootstrap, so `cypher()` would have failed on the first `Span`
+  MERGE — the dry run would have hit it. Factored `db/session.register_age_bootstrap` and applied
+  it; connection-level, so it survives the per-item rollbacks ingest/extract use.)
+- **Queue scope: perception and extraction are two tasks, not one job.** `ingest_document_bytes_job`
+  runs perception (parse → segment → embed → persist `Span`s) and, **on success**, chains
+  `propositionize_document_job` (the LLM extraction pass → `Proposition`s + faithfulness). They
+  have different cost/retry profiles — folding them into one job would re-embed on every LLM
+  transport blip — so they are separate tasks sharing the box's queue + execution lock (serialized,
+  no graph-write race) with their own `queueing_lock`s; both content-hash idempotent (a re-fired
+  chain is a no-op). The follow-on reloads spans by document id via `core.ingest.load_document_spans`
+  (level 0, the extraction granularity). Re-*inference* gating stays the separate §6.1/§11.1 VoI/
+  budget policy (Phase 5); this chains only the *initial* extraction of freshly-ingested spans.
+
 ## Sequencing & gating summary
 
 ```
