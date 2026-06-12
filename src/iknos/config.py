@@ -97,5 +97,12 @@ class Settings(BaseSettings):
     # *inside* this budget per attempt in the MinerU client.
     parser_timeout_s: float = Field(300.0, alias="PARSER_TIMEOUT_S")
 
+    # Candidate-generation embedding k-NN: in-memory exact cosine (default) vs the pgvector
+    # `<=>` push-down (V9, §5.1). The in-memory path is the recall **oracle** the §8 gate
+    # measures any ANN index against, so it stays the default; the push-down uses the R4 HNSW
+    # index for sublinear k-NN at scale. Flipping this to True is a data-driven G4.6 decision
+    # (the recall-vs-exact number on the gate corpus), not a default.
+    candidates_knn_pushdown: bool = Field(False, alias="CANDIDATES_KNN_PUSHDOWN")
+
 
 settings = Settings()

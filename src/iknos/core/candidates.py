@@ -522,17 +522,118 @@ class CandidateGenerationAdapter:
         )
 
         # Stage 2: trace active node -> EVIDENCED_BY proposition -> pgvector row, then k-NN.
+        # Two interchangeable implementations behind one contract (V9, §5.1): the in-memory
+        # exact-cosine oracle (default) and the pgvector `<=>` push-down. The push-down keeps the
+        # evidence vectors in the DB (the point of the index), so only the hypothesis query
+        # vectors are read into memory; the in-memory path reads both sides as before.
+        from iknos.config import settings
+
         node_props_active = [(n, p) for n, p in node_props if n in active_ids]
-        vectors = await self._load_proposition_vectors(session, {p for _n, p in node_props_active})
-        hyp_embedded: list[EmbeddedNode] = []
-        ev_embedded: list[EmbeddedNode] = []
-        for n, p in node_props_active:
-            for model, vec in vectors.get(p, ()):
-                bucket = hyp_embedded if n in hyp_ids else ev_embedded
-                bucket.append(EmbeddedNode(node=n, model=model, vector=vec))
-        embedding = embedding_knn_candidates(hypotheses=hyp_embedded, evidence=ev_embedded, k=k)
+        hyp_prop_ids = {p for n, p in node_props_active if n in hyp_ids}
+        ev_prop_ids = {p for n, p in node_props_active if n not in hyp_ids}
+
+        if settings.candidates_knn_pushdown:
+            prop_to_ev_nodes: dict[NodeId, list[NodeId]] = {}
+            for n, p in node_props_active:
+                if n not in hyp_ids:
+                    prop_to_ev_nodes.setdefault(p, []).append(n)
+            hyp_vectors = await self._load_proposition_vectors(session, hyp_prop_ids)
+            hyp_embedded = [
+                EmbeddedNode(node=n, model=model, vector=vec)
+                for n, p in node_props_active
+                if n in hyp_ids
+                for model, vec in hyp_vectors.get(p, ())
+            ]
+            embedding = await self._embedding_knn_pushdown(
+                session,
+                hyp_embedded=hyp_embedded,
+                evidence_prop_ids=ev_prop_ids,
+                prop_to_evidence_nodes=prop_to_ev_nodes,
+                k=k,
+            )
+        else:
+            vectors = await self._load_proposition_vectors(session, hyp_prop_ids | ev_prop_ids)
+            hyp_embedded = []
+            ev_embedded: list[EmbeddedNode] = []
+            for n, p in node_props_active:
+                for model, vec in vectors.get(p, ()):
+                    bucket = hyp_embedded if n in hyp_ids else ev_embedded
+                    bucket.append(EmbeddedNode(node=n, model=model, vector=vec))
+            embedding = embedding_knn_candidates(hypotheses=hyp_embedded, evidence=ev_embedded, k=k)
 
         return funnel(structural, embedding, strategy=strategy)
+
+    async def _embedding_knn_pushdown(
+        self,
+        session: object,
+        *,
+        hyp_embedded: list[EmbeddedNode],
+        evidence_prop_ids: set[NodeId],
+        prop_to_evidence_nodes: dict[NodeId, list[NodeId]],
+        k: int,
+    ) -> list[Candidate]:
+        """Stage 2 via the pgvector ``<=>`` push-down (V9) — the DB-backed side of the seam.
+
+        Per hypothesis query vector, the nearest ``k`` **evidence** propositions are ranked by
+        the database (``ORDER BY embedding <=> :vec``, the R4 HNSW index), then mapped to their
+        reasoning nodes via the ``EVIDENCED_BY`` link already read in :meth:`generate`. The result
+        honours the exact-path contract: directed evidence → hypothesis, unscored, tagged
+        :attr:`CandidateSource.EMBEDDING_KNN`, **no similarity floor**, self-pairs skipped, and the
+        same tie-break (nearest first, then node id) so the two implementations are interchangeable.
+
+        It is an *approximation* of the exact oracle on two axes — the HNSW index (recall < 1) and
+        the per-vector ``LIMIT k`` over propositions rather than distinct nodes — so the push-down
+        candidate set is a **subset** of the exact set at equal ``k`` (the V9 recall-vs-exact
+        measurement), never a superset. The ``WHERE model =`` clause is the G1.16 vector-space
+        guard (cosine across two embedding models is meaningless) and must never be dropped.
+        """
+        if k <= 0 or not hyp_embedded or not evidence_prop_ids:
+            return []
+        import uuid as _uuid
+
+        from sqlalchemy import select
+
+        from iknos.db.orm import PropositionEmbedding
+
+        evidence_uuids = [_uuid.UUID(p) for p in evidence_prop_ids]
+        hyp_by_node: dict[NodeId, list[EmbeddedNode]] = {}
+        for en in hyp_embedded:
+            hyp_by_node.setdefault(en.node, []).append(en)
+
+        candidates: list[Candidate] = []
+        for h, entries in hyp_by_node.items():
+            best_by_ev: dict[NodeId, float] = {}  # evidence node -> its smallest cosine distance
+            for en in entries:
+                # `<=>` must match the R4 opclass (vector_cosine_ops) or the HNSW index is unused.
+                distance = PropositionEmbedding.embedding.cosine_distance(list(en.vector))
+                stmt = (
+                    select(PropositionEmbedding.proposition_id, distance.label("distance"))
+                    .where(
+                        PropositionEmbedding.model == en.model,  # G1.16 guard — never drop
+                        PropositionEmbedding.proposition_id.in_(evidence_uuids),
+                    )
+                    .order_by(distance, PropositionEmbedding.proposition_id)
+                    .limit(k)
+                )
+                result = await session.execute(stmt)  # type: ignore[attr-defined]
+                for prop_id, dist in result.all():
+                    d = float(dist)
+                    for ev_node in prop_to_evidence_nodes.get(str(prop_id), ()):
+                        if ev_node == h:
+                            continue  # candidates run evidence -> hypothesis, never self
+                        if ev_node not in best_by_ev or d < best_by_ev[ev_node]:
+                            best_by_ev[ev_node] = d
+            # Top-k distinct evidence nodes: nearest (smallest distance) first, then node id.
+            ranked = sorted(best_by_ev.items(), key=lambda kv: (kv[1], kv[0]))
+            for ev_node, _d in ranked[:k]:
+                candidates.append(
+                    Candidate(
+                        evidence=ev_node,
+                        hypothesis=h,
+                        sources=frozenset({CandidateSource.EMBEDDING_KNN}),
+                    )
+                )
+        return candidates
 
 
 def _opt_str(v: object) -> str | None:
