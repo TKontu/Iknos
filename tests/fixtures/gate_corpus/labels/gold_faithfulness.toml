@@ -1,0 +1,31 @@
+# gold_faithfulness.toml — TEMPLATE (Trial V2). How individual statements are phrased.
+#
+# See INSTRUCTIONS.md §3. Aim for about 30 statements sampled across the documents (include some
+# tricky ones — denials, hedges, quoted people, opinions). Quote each statement verbatim. You are
+# recording HOW it is said, not whether it is true.
+#
+# Columns:
+#   document    : the document id (d01 … d10).
+#   quote       : the exact statement text (a short verbatim substring of that document).
+#   polarity    : "affirmed" (says something happened) or "denied" (says it did NOT).
+#   modality    : how sure it is stated — "definite" | "probable" | "possible".
+#   attribution : who says it — "document" (the document's own voice) or
+#                 "named_person" (a named person being quoted / reported).
+#   kind        : "observation" (seen or measured) | "testimony" (a person reported it) |
+#                 "judgement" (an opinion or conclusion).
+#   note        : optional — anything you were unsure about.
+#   consensus_* : leave blank; filled during reconciliation if the two annotators disagree.
+
+# Example row — FICTIONAL, delete it and add ~30 of your own.
+[[span]]
+document = "dNN"
+quote = "EXAMPLE: no alarm sounded before the stop"
+polarity = "denied"
+modality = "definite"
+attribution = "document"
+kind = "observation"
+note = "example row — delete me"
+consensus_polarity = ""
+consensus_modality = ""
+consensus_attribution = ""
+consensus_kind = ""

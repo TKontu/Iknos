@@ -1,0 +1,32 @@
+# gold_edges.toml — TEMPLATE (Trial V2). Evidence → hypothesis support/refute links.
+#
+# See INSTRUCTIONS.md §1. One [[edge]] per piece of evidence that bears on a hypothesis. Quote
+# the evidence verbatim (exact words from the document); do not paraphrase or use line numbers.
+# The same evidence may bear on more than one hypothesis — one row each.
+#
+# Columns:
+#   document   : the document id the evidence is in (d01 … d10).
+#   quote      : the exact evidence text (a short verbatim substring of that document).
+#   hypothesis : which candidate cause it bears on — one of H1, H2, H3, H4 (see below).
+#   sign       : "support" (makes the hypothesis more likely) or "refute" (less likely).
+#   dissimilar : true if the evidence refutes the hypothesis WITHOUT using its words/topic
+#                (an indirect refutal — important to flag); otherwise false. Leave false for
+#                supports.
+#   note       : optional — anything you were unsure about.
+#   consensus  : leave blank; filled during reconciliation if the two annotators disagree.
+#
+# The four hypotheses (candidate causes), so you can name them — NOT a hint about which is right:
+#   H1 = a lubrication problem
+#   H2 = an installation / mounting mistake
+#   H3 = a counterfeit or wrong / non-conforming part
+#   H4 = overload (the machine pushed too hard)
+
+# Example row — FICTIONAL, delete it and add your own.
+[[edge]]
+document = "dNN"
+quote = "EXAMPLE: the tank was found empty"
+hypothesis = "H1"
+sign = "support"
+dissimilar = false
+note = "example row — delete me"
+consensus = ""

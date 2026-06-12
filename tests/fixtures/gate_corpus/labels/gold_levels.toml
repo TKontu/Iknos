@@ -1,0 +1,34 @@
+# gold_levels.toml — TEMPLATE (Trial V2). How specific each fact is — BOTH annotators fill this in.
+#
+# See INSTRUCTIONS.md §5. For each fact (quote it), record the depth of the most specific part it
+# is really about: 1 = the whole machine, 2 = a major sub-assembly, 3 = a component, 4 = a piece
+# of a component. Use the reference/manual document to see how the parts nest.
+#
+# This is the agreement-gated family: BOTH annotators label the SAME facts independently, each
+# under their own `annotator` tag, so we can measure how well two people agree. Pick the shared
+# set of facts first, then each annotator fills a row per fact.
+#
+# Columns:
+#   annotator : your tag — "A" or "B" (so the two independent passes can be compared).
+#   document  : the document id the fact is in (d01 … d10).
+#   quote     : the exact fact text (a short verbatim substring of that document).
+#   level     : 1 | 2 | 3 | 4  (whole machine -> piece of a component).
+#   note      : optional — anything you were unsure about.
+#   consensus : leave blank; filled during reconciliation if the two annotators disagree.
+
+# Example rows — FICTIONAL, delete them. (The same fact, labelled by each annotator.)
+[[level]]
+annotator = "A"
+document = "dNN"
+quote = "EXAMPLE: the gearbox failed"
+level = 1
+note = "example row — delete me"
+consensus = ""
+
+[[level]]
+annotator = "B"
+document = "dNN"
+quote = "EXAMPLE: the gearbox failed"
+level = 1
+note = "example row — delete me"
+consensus = ""
