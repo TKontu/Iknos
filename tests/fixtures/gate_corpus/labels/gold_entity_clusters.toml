@@ -1,0 +1,30 @@
+# gold_entity_clusters.toml — TEMPLATE (Trial V2). Which mentions refer to the same real thing.
+#
+# See INSTRUCTIONS.md §4. List the mentions of physical parts across the documents and group the
+# ones that refer to the SAME real thing under the same cluster label. Different things get
+# different cluster labels, even when their names look almost identical (that is the trap to
+# catch). Quote each mention verbatim.
+#
+# Columns:
+#   document  : the document id the mention is in (d01 … d10).
+#   quote     : the exact mention text (a short verbatim substring — e.g. "the main pump",
+#               "pump 2", "it").
+#   cluster   : a short label you choose for the real thing it refers to (e.g. "cluster_A").
+#               Same real thing -> same label; different thing -> different label.
+#   note      : optional — e.g. why an ambiguous "it" was assigned where it was.
+#   consensus : leave blank; filled during reconciliation if the two annotators disagree.
+
+# Example rows — FICTIONAL, delete them. (Two names for one thing, plus a different thing.)
+[[mention]]
+document = "dNN"
+quote = "EXAMPLE: the main pump"
+cluster = "cluster_A"
+note = "example row — delete me"
+consensus = ""
+
+[[mention]]
+document = "dNN"
+quote = "EXAMPLE: pump 3"
+cluster = "cluster_B"
+note = "example row — a DIFFERENT thing from cluster_A; delete me"
+consensus = ""

@@ -1,0 +1,47 @@
+# E1 expert+search answers — TEMPLATE (Trial V6). Copy to e1_expert_answers.toml and fill in.
+#
+# One [[answers]] block per question in tests/fixtures/gate_corpus/questions.toml. The fields
+# match the shared BaselineAnswer contract (src/iknos/baselines/contract.py) so the V3 harness
+# scores the expert rung identically to plain RAG (V4) and agentic RAG (V5).
+#
+# Contamination rule: the expert filling this in must NOT have read gate_corpus/README.md,
+# manifest.toml, or anything under gate_corpus/labels/. Work from documents/ + questions.toml.
+#
+# Fields per answer:
+#   question_id    : the id from questions.toml (q01 … q10).
+#   answer_text    : the free-text answer.
+#   cited_chunk_ids: the passages relied on, each "<doc_id>: <verbatim quote>" (traceability —
+#                    be complete). The RAG rungs put chunk ids here; passage anchors play the
+#                    same role for the expert.
+#   confidence     : the expert's calibrated belief in [0, 1] that the answer is correct.
+#   time_minutes   : minutes spent on the question (the expert rung's cost signal).
+#
+# A question the expert cannot answer in the time box goes under [[unanswered]] with a reason —
+# never leave it out.
+
+[meta]
+baseline = "expert_search"
+corpus = "tests/fixtures/gate_corpus"
+expert = "FILL IN — initials or role, NOT the developer"
+date = "FILL IN — YYYY-MM-DD"
+
+# ── One block per question. The example below uses a FICTIONAL question id and answer; delete it
+#    and fill q01 … q10 from questions.toml. ──────────────────────────────────────────────────
+[[answers]]
+question_id = "qXX-EXAMPLE-DELETE-ME"
+answer_text = "Example: the evidence points to X, but a later document corrects an earlier claim, so Y."
+cited_chunk_ids = ["dNN: a short verbatim quote from the document", "dMM: another relied-on quote"]
+confidence = 0.0
+time_minutes = 0
+
+# [[answers]]
+# question_id = "q01"
+# answer_text = ""
+# cited_chunk_ids = []
+# confidence = 0.0
+# time_minutes = 0
+
+# ── Questions the expert could not answer within the time box (loudly recorded). ──────────────
+# [[unanswered]]
+# question_id = "qNN"
+# reason = "could not locate sufficient evidence within the 25-minute box"

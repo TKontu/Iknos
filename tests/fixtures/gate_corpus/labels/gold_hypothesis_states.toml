@@ -1,0 +1,23 @@
+# gold_hypothesis_states.toml — TEMPLATE (Trial V2). How believable each cause is, before/after
+# the later correction document.
+#
+# See INSTRUCTIONS.md §2. One [[state]] per hypothesis (four rows total: H1–H4). For each, record
+# how believable it is on the evidence BEFORE the later correction, and AFTER it. Use the same
+# four-step scale for both columns. Fill in both even when they are the same.
+#
+# Columns:
+#   hypothesis  : H1, H2, H3, or H4 (the four candidate causes — see gold_edges.toml for names).
+#   before      : believability before the correction — one of:
+#                 "false" | "implausible" | "plausible" | "true"
+#   after       : believability after the correction — same four-step scale.
+#   note        : optional — anything you were unsure about.
+#   consensus_before / consensus_after : leave blank; filled during reconciliation on disagreement.
+
+# Example row — FICTIONAL, delete it and add H1–H4.
+[[state]]
+hypothesis = "HX"
+before = "plausible"
+after = "false"
+note = "example row — delete me"
+consensus_before = ""
+consensus_after = ""
