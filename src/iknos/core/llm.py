@@ -70,6 +70,8 @@ class LLMClient:
         messages: list[dict[str, str]],
         json_schema: dict[str, Any],
         sampling: dict[str, Any] | None = None,
+        *,
+        usage_out: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         """Run a chat completion constrained to ``json_schema``; return parsed JSON.
 
@@ -78,9 +80,22 @@ class LLMClient:
         ``TimeoutError``, so it can never hold its concurrency permit (and starve the batch)
         indefinitely. The deadline sits *above* the tenacity backoff ceiling — it is a backstop
         for a pathological hang, not the normal per-attempt timeout (the OpenAI client owns that).
+
+        ``usage_out`` (R12): an optional caller-owned dict that, when supplied, is populated in
+        place with this call's ``{"prompt_tokens", "completion_tokens"}`` — the cost-discipline
+        signal the §6.1 / Trials-A-C consumers read off ``actions.metrics``. It is left **empty**
+        when the endpoint returned no usage block (some vLLM configs), so a caller records *absent*
+        (key omitted) rather than a fabricated zero. A side channel, not a return value, so the
+        bare-``dict`` return every existing caller (and test mock) relies on is unchanged; only the
+        cost-instrumented paths (extract/verify) pass it.
         """
         async with asyncio.timeout(self.call_timeout_s):
-            return await self._guided_complete_with_retries(messages, json_schema, sampling)
+            parsed, usage = await self._guided_complete_with_retries(
+                messages, json_schema, sampling
+            )
+        if usage_out is not None:
+            usage_out.update(usage)
+        return parsed
 
     @retry(
         retry=retry_if_exception_type(_RETRYABLE),
@@ -93,10 +108,11 @@ class LLMClient:
         messages: list[dict[str, str]],
         json_schema: dict[str, Any],
         sampling: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, int]]:
         """The retried inner call: transient transport/5xx failures are retried (see
         ``_RETRYABLE``); 4xx and JSON errors are not. Wrapped by :meth:`guided_complete`'s
-        outer deadline."""
+        outer deadline. Returns ``(parsed, usage)``; ``usage`` is ``{}`` when the endpoint omits
+        its usage block (some vLLM configs), so a caller never reads a fabricated zero."""
         response = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,  # type: ignore[arg-type]
@@ -105,4 +121,10 @@ class LLMClient:
         )
         content = response.choices[0].message.content or ""
         parsed: dict[str, Any] = json.loads(content)
-        return parsed
+        usage: dict[str, int] = {}
+        if response.usage is not None:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+            }
+        return parsed, usage

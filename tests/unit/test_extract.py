@@ -185,13 +185,18 @@ def test_seed_sensitivity_lubs_level_and_unions_compartments():
 
 
 class _FakeLLM:
-    def __init__(self, payload):
+    def __init__(self, payload, usage=None):
         self.model = "test-model"
         self._payload = payload
+        # Optional usage block the endpoint "reports" (R12); None mimics a vLLM config that
+        # returns no usage, so guided_complete leaves usage_out empty and the token keys omitted.
+        self._usage = usage
         self.calls: list = []
 
-    async def guided_complete(self, messages, schema, sampling):
+    async def guided_complete(self, messages, schema, sampling, *, usage_out=None):
         self.calls.append((messages, schema, sampling))
+        if usage_out is not None and self._usage is not None:
+            usage_out.update(self._usage)
         return self._payload
 
 
@@ -206,7 +211,7 @@ async def test_infer_assigns_fresh_ids_and_maps_kind_role():
         }
     )
     ex = Extractor(llm)  # type: ignore[arg-type]
-    entities = await ex._infer(asyncio.Semaphore(2), "The operator restarted the pump.")
+    entities, _metrics = await ex._infer(asyncio.Semaphore(2), "The operator restarted the pump.")
 
     assert [e.label for e in entities] == ["operator", "pump"]
     assert [e.kind for e in entities] == [NodeKind.ACTOR, NodeKind.OBJECT]
@@ -228,7 +233,9 @@ async def test_infer_two_mentions_become_two_nodes_no_dedup():
         }
     )
     ex = Extractor(llm)  # type: ignore[arg-type]
-    entities = await ex._infer(asyncio.Semaphore(1), "The bearing damaged the bearing housing.")
+    entities, _metrics = await ex._infer(
+        asyncio.Semaphore(1), "The bearing damaged the bearing housing."
+    )
     assert len(entities) == 2
     assert entities[0].id != entities[1].id  # same label, still two fresh nodes
 
@@ -236,7 +243,31 @@ async def test_infer_two_mentions_become_two_nodes_no_dedup():
 @pytest.mark.asyncio
 async def test_infer_empty_returns_no_entities():
     ex = Extractor(_FakeLLM({"entities": []}))  # type: ignore[arg-type]
-    assert await ex._infer(asyncio.Semaphore(1), "Well, anyway.") == []
+    entities, _metrics = await ex._infer(asyncio.Semaphore(1), "Well, anyway.")
+    assert entities == []
+
+
+@pytest.mark.asyncio
+async def test_infer_metrics_carry_cost_signals():
+    # R12: a fresh Phase-2 extraction reports duration_ms, n_samples=1, cache_hit=False, and the
+    # endpoint's token usage when present.
+    llm = _FakeLLM({"entities": []}, usage={"prompt_tokens": 41, "completion_tokens": 7})
+    ex = Extractor(llm)  # type: ignore[arg-type]
+    _entities, metrics = await ex._infer(asyncio.Semaphore(1), "The pump tripped.")
+    assert metrics["n_samples"] == 1
+    assert metrics["cache_hit"] is False
+    assert metrics["prompt_tokens"] == 41
+    assert metrics["completion_tokens"] == 7
+    assert "duration_ms" in metrics
+
+
+@pytest.mark.asyncio
+async def test_infer_metrics_omit_tokens_when_endpoint_reports_none():
+    # absent usage ⇒ token keys omitted, never zeroed (the R12 discipline).
+    ex = Extractor(_FakeLLM({"entities": []}))  # type: ignore[arg-type]
+    _entities, metrics = await ex._infer(asyncio.Semaphore(1), "The pump tripped.")
+    assert "prompt_tokens" not in metrics and "completion_tokens" not in metrics
+    assert metrics["n_samples"] == 1 and metrics["cache_hit"] is False
 
 
 def test_schema_version_is_recorded_constant():

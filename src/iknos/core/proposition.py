@@ -19,6 +19,7 @@ concurrently; each span's writes commit in their own short transaction.
 import asyncio
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
@@ -41,6 +42,7 @@ from iknos.core.prompts import vocab
 from iknos.core.reuse import ReusableExtraction, find_reusable_extraction
 from iknos.db.orm import PropositionEmbedding
 from iknos.provenance.action_log import record_action
+from iknos.provenance.metrics import elapsed_ms, llm_metrics
 from iknos.types.epistemic import (
     Attribution,
     EpistemicClass,
@@ -360,7 +362,7 @@ class Propositionizer:
 
     async def _infer_span(
         self, sem: asyncio.Semaphore, spans: list[Span], index: int, raw_text: str
-    ) -> tuple[list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]]]:
+    ) -> tuple[list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]], dict[str, Any]]:
         """Extract one span's propositions, scoring each by cross-sample agreement (G1.3/G1.14).
 
         Samples the extractor ``n_samples`` times, embeds every candidate, then consolidates
@@ -372,22 +374,37 @@ class Propositionizer:
         budget with every other in-flight call and never deadlock by holding an outer permit while
         awaiting inner ones — the same permit discipline as ``_verify_all``.
 
-        Returns ``(results, twin_pairs)`` where ``twin_pairs`` are ``(id, id)`` proposition pairs
-        the sampler wavered the *sign* of (polarity twins, G1.14) — both flagged ``provisional`` and
-        recorded on the extract ``Action``. n_samples=1 short-circuits the clustering (1:1
-        candidate→proposition, ``agreement`` null, no twins), so single-pass behavior is
-        byte-identical to pre-G1.3.
+        Returns ``(results, twin_pairs, metrics)`` where ``twin_pairs`` are ``(id, id)`` proposition
+        pairs the sampler wavered the *sign* of (polarity twins, G1.14) — both flagged
+        ``provisional`` and recorded on the extract ``Action``. n_samples=1 short-circuits the
+        clustering (1:1 candidate→proposition, ``agreement`` null, no twins), so single-pass
+        behavior is byte-identical to pre-G1.3. ``metrics`` is the R12 cost payload for the extract
+        ``Action``: the wall-clock of the N-sample gather (a ``time.monotonic()`` delta covering
+        only the LLM fan-out, not the downstream embed) and the summed token usage across the
+        samples that reported it; ``n_samples`` is ``self.n_samples`` and ``cache_hit`` is ``False``
+        (a fresh extraction — the G1.7b replay path carries its own cache-hit metrics).
         """
         target = spans[index]
         _, context_text = build_context(spans, index, raw_text, self.context_window)
         messages = build_messages(context_text, span_text(raw_text, target))
 
-        async def sample_once() -> list[_PropositionOut]:
+        sample_usages: list[dict[str, int]] = [{} for _ in range(self.n_samples)]
+
+        async def sample_once(slot: int) -> list[_PropositionOut]:
             async with sem:
-                raw = await self.llm.guided_complete(messages, EXTRACTION_SCHEMA, self.sampling)
+                raw = await self.llm.guided_complete(
+                    messages, EXTRACTION_SCHEMA, self.sampling, usage_out=sample_usages[slot]
+                )
             return PropositionExtraction.model_validate(raw).propositions
 
-        samples = await asyncio.gather(*(sample_once() for _ in range(self.n_samples)))
+        t0 = time.monotonic()
+        samples = await asyncio.gather(*(sample_once(i) for i in range(self.n_samples)))
+        metrics = llm_metrics(
+            duration_ms=elapsed_ms(t0),
+            usages=sample_usages,
+            n_samples=self.n_samples,
+            cache_hit=False,
+        )
 
         # Flatten the N samples into candidates, preserving (sample_index, position) so the
         # downstream clustering/medoid order is deterministic.
@@ -395,7 +412,7 @@ class Propositionizer:
             (s_idx, pos, p) for s_idx, props in enumerate(samples) for pos, p in enumerate(props)
         ]
         if not flat:
-            return [], []
+            return [], [], metrics
 
         # One batched torch forward pass over every candidate (off the event loop so concurrent
         # LLM calls keep flowing). The medoid's vector is reused at persist time — no re-embed.
@@ -444,7 +461,7 @@ class Propositionizer:
         # polarity twins possible), exactly as before G1.3.
         if self.n_samples == 1:
             results = [_to_result(c, None, provisional_reasons=[]) for c in candidates]
-            return results, []
+            return results, [], metrics
 
         # Multi-sample: polarity-aware consolidation + twin detection (G1.14).
         consolidated, twin_idx = consolidate_samples(
@@ -461,7 +478,7 @@ class Propositionizer:
             for c in consolidated
         ]
         twin_pairs = [(results[i].id, results[j].id) for i, j in twin_idx]
-        return results, twin_pairs
+        return results, twin_pairs, metrics
 
     async def _verify_all(
         self,
@@ -469,14 +486,17 @@ class Propositionizer:
         spans: list[Span],
         raw_text: str,
         inferred: list[tuple[int, list[PropositionResult]]],
-    ) -> list[tuple[int, list[PropositionResult], list["_VerifyOut | None"]]]:
+    ) -> list[tuple[int, list[PropositionResult], list["_VerifyOut | None"], dict[str, Any]]]:
         """Verify each inferred proposition against its source span (G1.4) and attach the
         derived faithfulness/provisional (G1.5).
 
         A separate concurrent fan-out, run after extraction completes and bounded by the
         *same* semaphore — each verify call acquires its own permit, so it never nests
-        inside an extract permit (which would serialize throughput). Returns the results
-        re-scored, paired with the raw verdicts for the verify Action.
+        inside an extract permit (which would serialize throughput). Returns, per span, the
+        results re-scored, the raw verdicts for the verify Action, and that span's R12 verify
+        metrics — the wall-clock of its verify fan-out, the token usage summed across its
+        per-proposition calls, and ``n_samples`` = the number of those calls (one verify call per
+        proposition; a degraded/raised call still counts, contributing no usage).
 
         **Verifier failure degrades, never crashes (G1.17 R2).** If one verify call raises
         (endpoint down past retries, unparseable response, an enum that won't cast), that
@@ -491,11 +511,11 @@ class Propositionizer:
         assert verifier is not None  # only called when a verifier is configured
 
         async def verify_one(
-            source: str, r: PropositionResult, parse_quality: float
+            source: str, r: PropositionResult, parse_quality: float, usage_out: dict[str, int]
         ) -> tuple[PropositionResult, "_VerifyOut | None"]:
             try:
                 async with sem:
-                    verdict = await verifier.verify_proposition(source, r)
+                    verdict = await verifier.verify_proposition(source, r, usage_out=usage_out)
             except Exception as exc:
                 # Degraded mode (R2): no verdict → faithfulness stays null. The proposition is
                 # still persisted (the failure is recorded on the verify Action by _persist), but
@@ -525,13 +545,26 @@ class Propositionizer:
 
         async def verify_group(
             i: int, results: list[PropositionResult]
-        ) -> tuple[int, list[PropositionResult], list["_VerifyOut | None"]]:
+        ) -> tuple[int, list[PropositionResult], list["_VerifyOut | None"], dict[str, Any]]:
             source = span_text(raw_text, spans[i])
             # The source span's parse-quality penalty (G1.0) — per span, shared by its
             # propositions; the worst region the span draws on governs (worst_source_quality).
             parse_quality = parse_quality_factor(worst_source_quality(spans[i].layout))
-            pairs = await asyncio.gather(*(verify_one(source, r, parse_quality) for r in results))
-            return i, [scored for scored, _ in pairs], [verdict for _, verdict in pairs]
+            # One usage slot per proposition's verify call (R12), folded into the span's metrics.
+            usages: list[dict[str, int]] = [{} for _ in results]
+            t0 = time.monotonic()
+            pairs = await asyncio.gather(
+                *(verify_one(source, r, parse_quality, usages[j]) for j, r in enumerate(results))
+            )
+            metrics = llm_metrics(
+                duration_ms=elapsed_ms(t0), usages=usages, n_samples=len(results), cache_hit=False
+            )
+            return (
+                i,
+                [scored for scored, _ in pairs],
+                [verdict for _, verdict in pairs],
+                metrics,
+            )
 
         return list(await asyncio.gather(*(verify_group(i, results) for i, results in inferred)))
 
@@ -845,6 +878,10 @@ class Propositionizer:
             outputs=replay_outputs,
             model=self.llm.model,
             sampling=extract_sampling,
+            # R12: a G1.7b replay paid no LLM — record cache_hit=True and omit token/n_samples/
+            # duration (no sample was drawn here), so the §6.1 cost sum correctly attributes zero
+            # extractor cost to a reuse while still counting it as an Action.
+            metrics=llm_metrics(usages=[], cache_hit=True),
         )
         await session.commit()
         return action_id
@@ -859,6 +896,8 @@ class Propositionizer:
         results: list[PropositionResult],
         verdicts: "list[_VerifyOut | None] | None" = None,
         twins: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
+        extract_metrics: dict[str, Any] | None = None,
+        verify_metrics: dict[str, Any] | None = None,
         purge_existing: bool = False,
     ) -> uuid.UUID:
         """Persist one span's propositions + edges + indexes + Action in a single transaction.
@@ -868,6 +907,9 @@ class Propositionizer:
         the swap is atomic. When verify verdicts are supplied (G1.4), a second Action (actor
         ``verifier``) records them in the *same* transaction — so a committed proposition's
         faithfulness always has an auditable verdict behind it. Returns the extract Action id.
+
+        ``extract_metrics``/``verify_metrics`` are the R12 cost payloads (duration/usage/n_samples)
+        built by :meth:`_infer_span` and :meth:`_verify_all` and recorded on the respective Actions.
         """
         superseded = await self._purge_span_propositions(session, span_id) if purge_existing else []
         prop_ids, edge_ids = await self._write_propositions(session, document_id, results)
@@ -918,6 +960,7 @@ class Propositionizer:
             outputs=extract_outputs,
             model=self.llm.model,
             sampling=extract_sampling,
+            metrics=extract_metrics,
         )
 
         # The verify pass is a distinct judgement by a distinct model (§13) — record it as
@@ -925,7 +968,9 @@ class Propositionizer:
         # faithfulness-gate metric (Trial A5) straight from actions.outputs. Skip when there
         # are no propositions to verify (empty span).
         if verdicts:
-            await self._record_verify_action(session, span_id, prop_ids, results, verdicts)
+            await self._record_verify_action(
+                session, span_id, prop_ids, results, verdicts, metrics=verify_metrics
+            )
 
         await session.commit()
         return action_id
@@ -937,6 +982,8 @@ class Propositionizer:
         prop_ids: list[str],
         results: list[PropositionResult],
         verdicts: "list[_VerifyOut | None]",
+        *,
+        metrics: dict[str, Any] | None = None,
     ) -> None:
         """Record one span's verify ``Action`` — shared by inline verify and backfill (G1.22).
 
@@ -985,6 +1032,7 @@ class Propositionizer:
             outputs={"verdicts": verdict_rows},
             model=self.verifier.llm.model,
             sampling=self.verifier.sampling,
+            metrics=metrics,
         )
 
     def _verify_sig(self) -> dict[str, Any] | None:
@@ -1139,11 +1187,11 @@ class Propositionizer:
         sem = asyncio.Semaphore(self.concurrency)
 
         async def verify_one(
-            r: PropositionResult,
+            r: PropositionResult, usage_out: dict[str, int]
         ) -> tuple[PropositionResult, "_VerifyOut | None"]:
             try:
                 async with sem:
-                    verdict = await verifier.verify_proposition(source, r)
+                    verdict = await verifier.verify_proposition(source, r, usage_out=usage_out)
             except Exception as exc:  # noqa: BLE001 — degrade (R2), do not crash the backfill
                 logger.warning(
                     "verifier unavailable for proposition %s (span %s): %s", r.id, span.id, exc
@@ -1166,13 +1214,19 @@ class Propositionizer:
             )
             return scored, verdict
 
-        pairs = await asyncio.gather(*(verify_one(r) for r in props))
+        # One usage slot per re-verify call (R12), folded into this verify Action's metrics.
+        usages: list[dict[str, int]] = [{} for _ in props]
+        t0 = time.monotonic()
+        pairs = await asyncio.gather(*(verify_one(r, usages[j]) for j, r in enumerate(props)))
+        verify_metrics = llm_metrics(
+            duration_ms=elapsed_ms(t0), usages=usages, n_samples=len(props), cache_hit=False
+        )
         scored = [s for s, _ in pairs]
         verdicts = [v for _, v in pairs]
         for r in scored:
             await self._update_proposition_faithfulness(session, r)
         await self._record_verify_action(
-            session, span.id, [str(r.id) for r in scored], scored, verdicts
+            session, span.id, [str(r.id) for r in scored], scored, verdicts, metrics=verify_metrics
         )
         await session.commit()
         return True
@@ -1366,29 +1420,38 @@ class Propositionizer:
         async def infer(
             i: int,
         ) -> tuple[
-            int, list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]], BaseException | None
+            int,
+            list[PropositionResult],
+            list[tuple[uuid.UUID, uuid.UUID]],
+            dict[str, Any],
+            BaseException | None,
         ]:
             try:
-                results, twins = await self._infer_span(sem, spans, i, raw_text)
-                return i, results, twins, None
+                results, twins, metrics = await self._infer_span(sem, spans, i, raw_text)
+                return i, results, twins, metrics, None
             except Exception as exc:  # noqa: BLE001 — isolate; the span re-runs via idempotency
                 logger.exception("extraction failed for span %s; isolating", spans[i].id)
-                return i, [], [], exc
+                return i, [], [], {}, exc
 
         inferred_raw = await asyncio.gather(*(infer(i) for i in pending))
-        ok_raw: list[tuple[int, list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]]]] = []
-        for i, results, twins, exc in inferred_raw:
+        ok_raw: list[
+            tuple[int, list[PropositionResult], list[tuple[uuid.UUID, uuid.UUID]], dict[str, Any]]
+        ] = []
+        for i, results, twins, metrics, exc in inferred_raw:
             if exc is not None:
                 failed_spans.append(FailedSpan(span_id=spans[i].id, phase="infer", error=str(exc)))
             else:
-                ok_raw.append((i, results, twins))
+                ok_raw.append((i, results, twins, metrics))
 
-        # Twins are carried alongside the per-span hash for persistence; the verify fan-out
-        # below operates only on (index, results), so split them out here (G1.14).
+        # Twins and the R12 extract metrics ride alongside the per-span hash for persistence; the
+        # verify fan-out below operates only on (index, results), so split them out here (G1.14).
         twins_by_index: dict[int, list[tuple[uuid.UUID, uuid.UUID]]] = {
-            i: twins for i, _, twins in ok_raw
+            i: twins for i, _, twins, _ in ok_raw
         }
-        inferred = [(i, results) for i, results, _ in ok_raw]
+        extract_metrics_by_index: dict[int, dict[str, Any]] = {
+            i: metrics for i, _, _, metrics in ok_raw
+        }
+        inferred = [(i, results) for i, results, _, _ in ok_raw]
 
         # Phase 2-replay (G1.7b): build replay results for the reusable spans — re-embed the cached
         # proposition text under the current substrate, no LLM and no verify (the reused
@@ -1419,16 +1482,19 @@ class Propositionizer:
         # §3.1 D2: unassessed is provisional, never coerced toward trusted), so a verifier-off
         # ingest quarantines its atoms until G1.22 backfill completes their faithfulness.
         verified: list[tuple[int, list[PropositionResult], list[_VerifyOut | None] | None]]
+        # R12 verify metrics ride a side dict keyed by span index, like the extract metrics: the
+        # verifier-off path records no verify Action, so it contributes nothing here.
+        verify_metrics_by_index: dict[int, dict[str, Any]] = {}
         if self.verifier is None:
             verified = [
                 (i, [_with_faithfulness_reason(r) for r in results], None)
                 for i, results in inferred
             ]
         else:
-            verified = [
-                (i, results, verdicts)
-                for i, results, verdicts in await self._verify_all(sem, spans, raw_text, inferred)
-            ]
+            verified = []
+            for i, results, vd, vmetrics in await self._verify_all(sem, spans, raw_text, inferred):
+                verified.append((i, results, vd))
+                verify_metrics_by_index[i] = vmetrics
 
         # Phase 3: serial persistence — one short transaction per span. Per-span isolation again
         # (G1.17 R1): a write failure on one span rolls back *its* transaction and is recorded,
@@ -1450,6 +1516,8 @@ class Propositionizer:
                         results,
                         verdicts,
                         twins_by_index.get(i),
+                        extract_metrics=extract_metrics_by_index.get(i),
+                        verify_metrics=verify_metrics_by_index.get(i),
                         purge_existing=i in stale,  # G1.7r cascade: purge superseded props first
                     )
                 )

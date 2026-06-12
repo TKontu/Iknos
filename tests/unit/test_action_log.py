@@ -75,6 +75,16 @@ def test_optional_fields_stay_none_when_absent() -> None:
     assert action.calibration is None
 
 
+def test_metrics_defaults_to_empty_dict_and_passes_through() -> None:
+    # R12 observability floor: like inputs/outputs, metrics coerces None → {} so every Action row
+    # has an object to read (the column is NOT NULL DEFAULT '{}'); an explicit payload passes
+    # through unchanged.
+    assert build_action(actor="parser", action_type="parse").metrics == {}
+    metrics = {"duration_ms": 12, "n_samples": 3, "prompt_tokens": 40, "cache_hit": False}
+    action = build_action(actor="extractor", action_type="extract", metrics=metrics)
+    assert action.metrics == metrics
+
+
 def test_payloads_are_json_serializable() -> None:
     # The four payload columns are JSONB; whatever an operator passes must round-trip through
     # JSON or the flush fails opaquely. Pin it here on representative provenance payloads.

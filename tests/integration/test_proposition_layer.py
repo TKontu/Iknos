@@ -72,7 +72,13 @@ def _with_verifier(p: Propositionizer, verdict_for: Callable[[str], dict]) -> Pr
     vllm = MagicMock()
     vllm.model = "verifier-model"
 
-    async def _guided(messages: list[dict], schema: dict, sampling: dict | None = None) -> dict:
+    async def _guided(
+        messages: list[dict],
+        schema: dict,
+        sampling: dict | None = None,
+        *,
+        usage_out: dict | None = None,
+    ) -> dict:
         return {"verdicts": [verdict_for(messages[1]["content"])]}
 
     vllm.guided_complete = AsyncMock(side_effect=_guided)
@@ -574,7 +580,13 @@ def _failing_propositionizer(fail_marker: str) -> Propositionizer:
     llm = MagicMock()
     llm.model = "test-model"
 
-    async def _guided(messages: list[dict], schema: dict, sampling: dict | None = None) -> dict:
+    async def _guided(
+        messages: list[dict],
+        schema: dict,
+        sampling: dict | None = None,
+        *,
+        usage_out: dict | None = None,
+    ) -> dict:
         target = messages[1]["content"]
         if fail_marker in target:
             raise RuntimeError("extractor exploded on this span")

@@ -22,15 +22,19 @@ def build_action(
     sampling: dict[str, Any] | None = None,
     raw_judgment: str | None = None,
     calibration: dict[str, Any] | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> Action:
     """Construct (but do not persist) the ``Action`` row for an operator's write.
 
     The pure, DB-free seam of :func:`record_action`: it maps the operator's arguments
     onto the ORM row and applies the one piece of defaulting logic — ``inputs``/``outputs``
-    coerce ``None`` → ``{}`` so the §10.1 provenance edges always have an object to read,
-    while the optional ``model``/``sampling``/``raw_judgment``/``calibration`` stay ``None``
-    when absent (never zeroed). ``id`` and ``timestamp`` are DB-side server defaults, so the
-    returned row carries neither until it is flushed.
+    /``metrics`` coerce ``None`` → ``{}`` so the §10.1 provenance edges and the §6.1 cost
+    consumers always have an object to read, while the optional
+    ``model``/``sampling``/``raw_judgment``/``calibration`` stay ``None`` when absent (never
+    zeroed). ``metrics`` (R12) carries per-Action operational numbers (token counts, durations,
+    span counts); callers omit a *key* (never zero it) when its source is absent. ``id`` and
+    ``timestamp`` are DB-side server defaults, so the returned row carries neither until it is
+    flushed.
     """
     return Action(
         actor=actor,
@@ -41,6 +45,7 @@ def build_action(
         sampling=sampling,
         raw_judgment=raw_judgment,
         calibration=calibration,
+        metrics=metrics or {},
     )
 
 
@@ -55,6 +60,7 @@ async def record_action(
     sampling: dict[str, Any] | None = None,
     raw_judgment: str | None = None,
     calibration: dict[str, Any] | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> uuid.UUID:
     action = build_action(
         actor=actor,
@@ -65,6 +71,7 @@ async def record_action(
         sampling=sampling,
         raw_judgment=raw_judgment,
         calibration=calibration,
+        metrics=metrics,
     )
     session.add(action)
     await session.flush()
