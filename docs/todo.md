@@ -314,15 +314,27 @@ cite a gap file by name resolve there):
       property tests for every manual serde pair (`Sensitivity.flatten` /
       `from_props`, `SourceInterest`, box serde, `same_as_to_props`) so a
       write/read format drift cannot ship without a test going red.
-- [ ] **W11 — small hardening batch** *(assessment, minor findings — one PR)*:
-      embedding-model identity checked at substrate construction, not first
-      write (fail before the expensive re-embed, `core/embeddings.py`);
-      verifier-down degraded mode surfaced as a triage-visible reason, not only
-      a log line; the segment `Action` records the per-reason span-skip split
-      (whitespace vs zero-vector); `DEFAULT_AGREEMENT_THRESHOLD` becomes a
-      config knob; `types/nodes.py` gains the `Mention` placeholder (or an
-      explicit docstring pointer) so the §3.1 binding seam is visible in the
-      schema module, not only in `core/reference.py` prose.
+- [x] **W11 — small hardening batch** *(assessment, minor findings — one PR)*:
+      embedding-model identity checked **before the embedding pass**, not only at
+      the per-document write — `core/ingest.py::assert_embedding_model_compatible`
+      is the early, *global* G1.16 guard (run at the top of `_ingest_parsed`), and
+      it also closes the new-document hole the per-document `persist_spans` guard
+      cannot see (a fresh doc embedded under a swapped model would silently mix the
+      shared ANN space); the segment `Action` now records the **per-reason span-skip
+      split** (`n_skipped_whitespace` / `n_skipped_zero_vector` + `outputs.skipped_by_reason`,
+      `SpanPersistResult.skipped_whitespace`/`skipped_zero_vector`), `_skip_reason`
+      classifying whitespace (pooled to `None`) vs the zero-vector sentinel;
+      `DEFAULT_AGREEMENT_THRESHOLD` (consistency.py) is now the **single source** for
+      `config.prop_agreement_threshold` (the `PROP_AGREEMENT_THRESHOLD` knob already
+      existed — the duplicated literal is removed); `types/nodes.py` gains the explicit
+      `Mention` **docstring pointer** (the canonical schema + `mention_to_props` write
+      contract live in `core/reference.py`; a Pydantic placeholder would only risk
+      drift). **Verifier-down degraded mode: already covered, not duplicated** — a
+      configured verifier that *fails at runtime* (G1.17 R2) leaves faithfulness null
+      → `UNASSESSED_FAITHFULNESS` (G1.21), a triage-visible `ProvisionalReason` on the
+      node *and* a `verifier_unavailable` row on the verify `Action`; so it is surfaced
+      to triage, not only logged. Tests: unit (`_skip_reason`, config single-source +
+      env override) + integration (per-reason skip audit, early model-swap guard).
 
 ## Conventions for executing agents *(applies to every task in every phase file)*
 

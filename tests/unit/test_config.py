@@ -60,6 +60,20 @@ def test_env_overrides_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.log_level == "DEBUG"
 
 
+def test_agreement_threshold_single_sources_the_clustering_default() -> None:
+    # W11: PROP_AGREEMENT_THRESHOLD defaults to the one canonical constant in consistency.py, so the
+    # runtime knob and the in-module clustering default can never be two separate magic literals.
+    from iknos.core.consistency import DEFAULT_AGREEMENT_THRESHOLD
+
+    assert Settings.model_fields["prop_agreement_threshold"].default == DEFAULT_AGREEMENT_THRESHOLD
+
+
+def test_agreement_threshold_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    _minimal_env(monkeypatch)
+    monkeypatch.setenv("PROP_AGREEMENT_THRESHOLD", "0.9")
+    assert Settings(_env_file=None).prop_agreement_threshold == 0.9
+
+
 def test_database_url_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(ValidationError):

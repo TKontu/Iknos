@@ -4,6 +4,15 @@ Phase 0 covers the minimal set needed for the exit-criteria smoke test.
 Remaining labels (Actor, Object, DeductiveConclusion, InductiveConclusion,
 Hypothesis) are pre-created in the AGE graph by the initial migration but get
 their Pydantic models in later phases. Proposition lands in Phase 1 Increment 3.
+
+**``Mention`` (Phase 2, G2.4) — schema seam, deliberately not modelled here.** The
+``Mention`` AGE vertex (a detected referring expression bound to a canonical entity by a
+scored ``REFERS_TO`` edge, §3.1/§6) is a **provenance/text object, not a reasoning node**, so
+its schema and the single ``mention_to_props`` write contract live with the binding pipeline
+in :mod:`iknos.core.reference` (the ``Mention`` dataclass), *not* as a Pydantic model here.
+This pointer keeps the Phase-2 binding seam visible from the schema module rather than only in
+``reference.py`` prose (W11). A Pydantic projection would land here only if a reader path ever
+needs to deserialize ``Mention`` vertices the way the reasoning nodes are.
 """
 
 import uuid

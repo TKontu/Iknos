@@ -3,6 +3,12 @@ import re
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Single source of truth for the cosine "same claim" cutoff (G1.3/G1.14) — the pure clustering
+# module owns the value; this config exposes it as the PROP_AGREEMENT_THRESHOLD knob so the two are
+# never separate magic literals. consistency.py is DB-free (imports only types), so importing it
+# here adds no DATABASE_URL coupling and cannot cycle back into config.
+from iknos.core.consistency import DEFAULT_AGREEMENT_THRESHOLD
+
 # A bare SQL identifier: a letter/underscore start, then alphanumerics/underscores. AGE
 # graph names are Postgres identifiers (≤63 bytes), so this is their real shape — and the
 # guard the cypher() interpolation relies on (see graph_name below).
@@ -73,7 +79,9 @@ class Settings(BaseSettings):
     # this), else the N samples are identical and carry no signal. prop_agreement_threshold is the
     # cosine cutoff at which two extractions count as the same claim (a Trial-A5 tunable).
     llm_extract_samples: int = Field(1, alias="LLM_EXTRACT_SAMPLES")
-    prop_agreement_threshold: float = Field(0.86, alias="PROP_AGREEMENT_THRESHOLD")
+    prop_agreement_threshold: float = Field(
+        DEFAULT_AGREEMENT_THRESHOLD, alias="PROP_AGREEMENT_THRESHOLD"
+    )
 
     # Cross-document "extract once" reuse (§6.1, G1.7b). When a never-extracted span's pipeline
     # content_hash matches a prior committed extraction (the same text under the same model/prompt/

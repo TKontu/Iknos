@@ -19,8 +19,10 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from iknos.core.embeddings import EmbeddingModelMismatchError
 from iknos.core.ingest import (
     DocumentResegmentationError,
+    assert_embedding_model_compatible,
     load_document_spans,
     load_document_text,
     persist_spans,
@@ -332,6 +334,72 @@ async def test_whitespace_span_is_skipped(session: AsyncSession) -> None:
     assert len(result.spans) == 1
     assert await _count(session, f"MATCH (s:Span {{document_id: '{doc_id}'}}) RETURN count(s)") == 1
     assert await _emb_count(session, doc_id) == 1
+
+
+async def test_skip_reasons_are_audited_per_reason(session: AsyncSession) -> None:
+    """W11: a whitespace span (pooled to ``None``) and a zero-vector span (the legacy sentinel) are
+    counted under *different* reasons on the result and the segment Action — not lumped as one
+    ``skipped`` total — so triage tells the expected whitespace drop from a pooling regression."""
+    await bootstrap_session(session)
+    raw = "Real claim sentence. ws zv"
+    doc_id = await _seed_document(session, raw)
+    # span 0 real, span 1 whitespace (None embedding), span 2 zero-vector.
+    char_spans = [(0, 20), (21, 23), (24, 26)]
+    ch = span_content_hash(raw, segmenter_params=_PARAMS, model=_MODEL)
+
+    result = await persist_spans(
+        session,
+        doc_id,
+        char_spans,
+        [_VEC, None, _ZERO],
+        content_hash=ch,
+        segmenter_params=_PARAMS,
+        model=_MODEL,
+    )
+    await session.commit()
+
+    assert result.skipped == 2  # the total is preserved
+    assert result.skipped_whitespace == 1
+    assert result.skipped_zero_vector == 1
+    assert len(result.spans) == 1
+
+    row = await session.execute(
+        text(
+            "SELECT metrics->>'n_skipped_whitespace', metrics->>'n_skipped_zero_vector', "
+            "outputs->'skipped_by_reason' FROM actions WHERE action_type = 'segment' "
+            "AND inputs->>'document_id' = :d"
+        ),
+        {"d": str(doc_id)},
+    )
+    n_ws, n_zv, by_reason = row.one()
+    assert int(n_ws) == 1 and int(n_zv) == 1
+    assert by_reason == {"whitespace": 1, "zero_vector": 1}
+
+
+async def test_early_model_guard_refuses_a_swap_before_embedding(session: AsyncSession) -> None:
+    """W11: ``assert_embedding_model_compatible`` is the early, *global* G1.16 guard — once the
+    dense index holds one model, a different backend identity is refused (fail-fast, before any
+    embed), and it catches the new-document hole the per-document persist_spans guard cannot see."""
+    await bootstrap_session(session)
+    raw = "A grounded claim."
+    doc_id = await _seed_document(session, raw)
+    ch = span_content_hash(raw, segmenter_params=_PARAMS, model=_MODEL)
+    await persist_spans(
+        session,
+        doc_id,
+        [(0, len(raw))],
+        [_VEC],
+        content_hash=ch,
+        segmenter_params=_PARAMS,
+        model=_MODEL,
+    )
+    await session.commit()
+
+    # Same identity / empty-index → no-op; a different identity → fail loud (even for a *new* doc,
+    # whose own rows are empty, so the per-document guard would have missed the silent mixing).
+    await assert_embedding_model_compatible(session, _MODEL)
+    with pytest.raises(EmbeddingModelMismatchError):
+        await assert_embedding_model_compatible(session, "some-other-model")
 
 
 async def test_layout_is_persisted_when_supplied(session: AsyncSession) -> None:
