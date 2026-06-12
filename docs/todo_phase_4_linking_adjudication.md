@@ -507,59 +507,62 @@ side of the seam:
 Do not: flip the default; remove the in-memory path (it is the oracle); touch
 `funnel` or the structural stage.
 
-### V14 — V9 push-down verification hardening *(needs V9; 2026-06-12 residual review, findings 4/7 — `archive/review_2026-06-12_completed_scope_residuals.md`; land before the G4.6 decision can flip `CANDIDATES_KNN_PUSHDOWN`)*
+### V14 — V9 push-down verification hardening *(needs V9; 2026-06-12 residual review, findings 4/7 — `archive/review_2026-06-12_completed_scope_residuals.md`)* — ✅ **shipped** *(#97)*
 
-The V9 implementation is spec-faithful and the ranking math is correct, but the
-verification doesn't cover the *production* query, and the real query's plan
+The V9 implementation was spec-faithful and the ranking math correct, but the
+verification didn't cover the *production* query, and the real query's plan
 behavior and recall mode are exactly what the G4.6 flip decision needs to know.
-One PR:
+All five items landed in one PR (#97); the empirical finding **revised the
+review's starvation hypothesis** — recorded here so the G4.6 decision reads the
+verified behavior, not the original concern:
 
-1. **EXPLAIN the real statement.** The integration test
-   (`test_candidates_knn_pushdown.py:103-113`) EXPLAINs a hand-written
-   `SELECT … WHERE model = … ORDER BY embedding <=> … LIMIT k`; the production
-   statement (`candidates.py:609-617`) differs in two plan-relevant ways — a
-   potentially large `proposition_id IN (…)` predicate and a **secondary sort key**
-   (`ORDER BY distance, proposition_id`). An HNSW scan provides only the `<=>`
-   pathkey; the secondary sort forces an Incremental Sort on top or loses the index
-   entirely, and a big `IN` list may flip the planner to a bitmap scan. EXPLAIN the
-   actual SQLAlchemy-compiled statement through the real call path and assert
-   `hnsw` appears; if it doesn't, fix the query (session-level `hnsw.ef_search` /
-   pgvector ≥0.8 `hnsw.iterative_scan`, or restructure) — a silent full-scan makes
-   the feature pointless.
-2. **Document + exercise the post-filter starvation mode.** pgvector applies WHERE
-   as a *post-filter* on the index scan's candidate stream (default
-   `hnsw.ef_search = 40`): when the active-evidence set is a small fraction of
-   `proposition_embeddings` (it will be — embeddings of retracted/out-of-box nodes
-   are never deleted), the query can return ≪ k rows, even zero, regardless of how
-   close true neighbours are. The current test masks this (100% of seeded rows
-   match the filter, `ef_search = 400`). Add a starvation-shaped integration case
-   (matching rows a small fraction of the table) and record the failure mode in the
-   `candidates.py` docstring next to the existing HNSW-recall caveat (~:584-587) —
-   today it attributes the subset gap only to HNSW recall and the prop-vs-node
-   LIMIT.
-3. **Tie-break parity at the LIMIT boundary.** The exact path breaks distance ties
-   by **evidence node id** (`candidates.py:343`); the push-down breaks them by
-   **proposition_id** inside the DB *before* `LIMIT k` (`:615`), re-applying the
-   node-id order only afterwards (`:627`). A tie group straddling the k boundary
-   where prop-uuid order disagrees with node-id order keeps a node the oracle would
-   not — violating both the spec's "same deterministic tie-break" and the
-   docstring's "never a superset" claim. Ties are realistic (identical proposition
-   texts ⇒ identical vectors). Either make the SQL tie-break match the oracle's
-   effective order, or — if that's not expressible without dragging node ids into
-   the SQL — document the divergence at the docstring's subset claim and pin it
-   with a deliberate-tie test. While here: note the float4 (`<=>`) vs float64
-   (Python) boundary-ordering caveat in the same docstring paragraph.
-4. **Cover `generate()`'s push-down branch.** No test sets
-   `candidates_knn_pushdown=True`; the wiring at `candidates.py:535-553`
-   (`prop_to_ev_nodes` construction, hypothesis-only vector loading, `hyp_embedded`)
-   is dead under test — a swapped mapping would ship green. Route at least one
-   integration case through `generate()` with the flag on.
-5. **Strengthen the subset assertion.** At `ef_search ≥ N` with one prop per node
-   and no ties, push-down should **equal** exact — assert equality (or recall ≥
-   0.9) instead of non-empty + `⊆`, which a 1-of-10 regression passes today.
+1. **EXPLAIN the real statement — shipped, with a revised conclusion.** The
+   production statement differs from the original hand-written EXPLAIN target by
+   bounding to the active set via `proposition_id IN (…)`. Empirically verified
+   (plan stable across default / `enable_seqscan=off` / `hnsw.iterative_scan`):
+   against that selective predicate the planner fetches the bounded set through
+   the `ix_proposition_embeddings_proposition_id` index and sorts it **exactly**
+   by `<=>` — it does **not** use the HNSW index, and that is the correct optimal
+   plan for a bounded `IN` query (HNSW is the *unbounded* k-NN mechanism; a query
+   already bounded to a candidate set neither needs nor benefits from it). The
+   test EXPLAINs the actual SQLAlchemy-compiled statement through the real call
+   path and asserts **both** that `ix_proposition_embeddings_proposition_id`
+   appears **and** that the HNSW index does **not**
+   (`test_candidates_knn_pushdown.py::test_pushdown_query_is_index_driven…`).
+   The HNSW-absence assertion is the load-bearing tripwire: a seq scan would
+   still be *exact* (slow, not wrong), but an HNSW plan would reintroduce the
+   post-filter recall gap.
+2. **No starvation — under the bounded plan, with a scale caveat.** Because the
+   query is an exact sort over the active set, there is no post-filter
+   "starvation" and no HNSW-recall gap *while the planner chooses that plan*:
+   pinned by a starvation-shaped test (200 near-hypothesis decoys outside the
+   active set, 3 distant active rows, default `ef_search`, no tuning — push-down
+   **equals** the oracle). The claim is conditional, not categorical: plan choice
+   is statistics- and scale-dependent and was verified at integration-test scale,
+   so the EXPLAIN tripwire in (1) is the standing guard — **re-verify the plan
+   shape at realistic corpus scale as part of the G4.6 run before flipping the
+   default** (a large absolute active set that is still a small fraction of a big
+   table is where a flip to HNSW would matter). The `candidates.py` push-down
+   docstring records the verified behavior and that the push-down's value is
+   keeping vectors in the DB, not the ANN index.
+3. **Tie-break at the LIMIT boundary — documented + pinned (the spec's second
+   fork).** The oracle breaks distance ties by evidence node id; the SQL `LIMIT`
+   cut is on proposition order (node ids cannot enter the SQL without dragging
+   the `EVIDENCED_BY` join in and defeating the index), so at a tie straddling
+   the k boundary the push-down may keep a node the oracle would not — a rare
+   superset on *exact* ties. Documented at the docstring's subset claim (with the
+   float4 `<=>` vs float64 Python boundary-ordering caveat) and pinned by a
+   deliberate-tie integration test (identical vectors, k=1).
+4. **`generate()`'s push-down branch covered** —
+   `test_candidates.py::test_generate_through_the_pushdown_branch` routes the
+   real `generate()` through `candidates_knn_pushdown=True`; compiled-SQL unit
+   tests pin the bare `<=>` ordering and the G1.16 `WHERE model =` guard.
+5. **Subset assertion strengthened to equality** where the setup affords it (one
+   prop per node, no ties) instead of the old non-empty + `⊆`.
 
-Do not: flip the `CANDIDATES_KNN_PUSHDOWN` default (still a G4.6 decision, now
-properly informed); change the exact path; touch `funnel` or the structural stage.
+Still in force: do not flip the `CANDIDATES_KNN_PUSHDOWN` default — that is the
+G4.6 decision, now properly informed by (1)/(2); the in-memory path stays the
+oracle; `funnel` and the structural stage untouched.
 
 ### W1 — composed-loop orchestrator (the missing spine) *(needs V7+V8; P1) — shipped*
 
