@@ -30,10 +30,11 @@ from iknos.baselines.contract import (
     QuestionTrace,
     UnansweredQuestion,
 )
-from iknos.baselines.rag import ANSWER_SCHEMA, RetrievedChunk, parse_answer
+from iknos.baselines.rag import ANSWER_SCHEMA, DEFAULT_SAMPLING, RetrievedChunk, parse_answer
 
-# Budget (V5 spec): up to MAX_SEARCH_STEPS decision calls, then one forced answer call if the
-# model never chose to answer — so at most MAX_SEARCH_STEPS + 1 LLM calls per question.
+# Budget (V5 spec, corrected by V12): the budget is counted in **decision LLM calls**, not loop
+# iterations. At most MAX_SEARCH_STEPS decision calls, then one forced answer call if the model
+# never chose to answer — so at most MAX_SEARCH_STEPS + 1 LLM calls per question, full stop.
 MAX_SEARCH_STEPS = 6
 
 # One flat guided schema for a step: an action plus the fields each action needs. Guided JSON
@@ -155,18 +156,18 @@ class AgenticRagBaseline:
         self._retriever = retriever
         self._llm = llm
         self._max_search_steps = max_search_steps
-        self._sampling = sampling
-
-    async def _step_call(self, messages: list[dict[str, str]]) -> dict[str, Any] | None:
-        """One step decision with a single retry on a malformed (semantically invalid) call."""
-        for _ in range(2):  # the initial call + one retry
-            raw = await self._llm.guided_complete(messages, STEP_SCHEMA, self._sampling)
-            if _validate_step(raw) is None:
-                return raw
-        return None
+        # Pin greedy by default (V12) — matches the V4 rung and every other LLM consumer.
+        self._sampling = DEFAULT_SAMPLING if sampling is None else sampling
 
     async def answer(self, question: BaselineQuestion) -> AgenticResult:
-        """Run the search→answer loop for one question; return an answer or unanswered, + trace."""
+        """Run the search→answer loop for one question; return an answer or unanswered, + trace.
+
+        The budget is **MAX_SEARCH_STEPS decision calls** total (V12): each guided step call —
+        valid or malformed — consumes one, so the hard ceiling is ``max_search_steps`` decision
+        calls + 1 forced answer, never more. A malformed call is recorded **unanswered loudly**
+        rather than retried: under the pinned greedy regime a byte-identical retry deterministically
+        reproduces the malformed output, so a retry would only burn budget for nothing.
+        """
         seen: list[RetrievedChunk] = []
         seen_ids: set[str] = set()
         queries: list[str] = []
@@ -179,11 +180,14 @@ class AgenticRagBaseline:
             )
 
         for _ in range(self._max_search_steps):
-            raw = await self._step_call(build_step_messages(question.text, queries, seen))
-            if raw is None:
+            raw = await self._llm.guided_complete(
+                build_step_messages(question.text, queries, seen), STEP_SCHEMA, self._sampling
+            )
+            err = _validate_step(raw)
+            if err is not None:
                 return AgenticResult(
                     trace=trace(),
-                    unanswered=UnansweredQuestion(question.id, "malformed tool call after retry"),
+                    unanswered=UnansweredQuestion(question.id, f"malformed tool call: {err}"),
                 )
             if raw["action"] == "answer":
                 return AgenticResult(trace=trace(), answer=parse_answer(question.id, raw, seen))
