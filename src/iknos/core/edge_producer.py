@@ -102,6 +102,12 @@ logger = logging.getLogger(__name__)
 PRODUCER_ACTOR = "edge-judge"
 PRODUCER_ACTION_TYPE = "judge"
 
+# The corroborate operator's own Action (§12 named entry point). It wraps a hypothesis-scoped run
+# of the edge producer — an operator envelope over the per-hypothesis edge-judge Action(s), never a
+# replacement, so edge provenance stays greppable under PRODUCER_ACTOR.
+CORROBORATE_ACTOR = "corroborate"
+CORROBORATE_ACTION_TYPE = "corroborate"
+
 # A producer-local provisional reason (not a §3.1 ProvisionalReason): an evidence node with no
 # EVIDENCED_BY Proposition has no provenance to gate on, so its high-stakes moves are quarantined
 # conservatively (V7) — surfaced, never silently driven. A deductive conclusion's DERIVED_FROM
@@ -636,9 +642,6 @@ class EdgeProducer:
         sign-unstable edges are surfaced on the result (``unstable`` / ``is_finding``) for the §7.2
         gate (G4.5).
         """
-        from iknos.db.age import merge_edge
-        from iknos.provenance.action_log import record_action
-
         pool = await self.candidates.generate(session, k=k)
         if not pool.candidates:
             return EdgeProductionResult()
@@ -647,6 +650,26 @@ class EdgeProducer:
         grouped = build_evidence(pool, node_meta)
         if not grouped:
             return EdgeProductionResult()
+
+        result = await self._judge_plan_persist(session, grouped, node_meta)
+        await session.commit()  # type: ignore[attr-defined]
+        return result
+
+    async def _judge_plan_persist(
+        self,
+        session: object,
+        grouped: Mapping[NodeId, tuple[str, list[JudgeEvidence]]],
+        node_meta: Mapping[NodeId, NodeMeta],
+    ) -> EdgeProductionResult:
+        """Phases 2–3 (judge → plan → persist) over a set of grouped hypotheses — **no commit**.
+
+        Factored out of :meth:`produce` so the single-hypothesis :meth:`corroborate` shares the
+        exact judge/plan/persist path (no divergence) and the caller owns the commit: an operator's
+        edges, their per-hypothesis edge-judge Actions, and any envelope Action it records all land
+        in one transaction. ``grouped`` is the :func:`build_evidence` output (caller-scoped).
+        """
+        from iknos.db.age import merge_edge
+        from iknos.provenance.action_log import record_action
 
         evidence_ids = {e.id for _hyp, (_text, evs) in grouped.items() for e in evs}
         credibility = await self._load_credibility(session, evidence_ids)
@@ -661,7 +684,7 @@ class EdgeProducer:
             )
         )
 
-        # Phase 3 — plan (pure) then persist serially, one transaction.
+        # Phase 3 — plan (pure) then persist serially; the caller commits.
         now = datetime.now(UTC)
         produced: list[ProducedEdge] = []
         dropped: list[tuple[NodeId, NodeId]] = []
@@ -718,13 +741,98 @@ class EdgeProducer:
                     )
                 )
 
-        await session.commit()  # type: ignore[attr-defined]
         return EdgeProductionResult(
             edges=tuple(produced),
             dropped=tuple(dropped),
             quarantined=tuple(quarantined),
             action_ids=tuple(action_ids),
         )
+
+    async def corroborate(
+        self,
+        session: object,
+        hypothesis_id: object,
+        *,
+        k: int = DEFAULT_K,
+    ) -> "CorroborateResult":
+        """§12 named entry point: gather a single hypothesis's supporting/refuting evidence.
+
+        Composes the **existing** pieces — the G4.2 candidate funnel → the §8 edge judge/producer —
+        scoped to ``hypothesis_id``, and records the operator's own ``corroborate`` Action as an
+        **envelope** over the per-hypothesis edge-judge Action(s) it produced (never a replacement —
+        edge provenance stays greppable under :data:`PRODUCER_ACTOR`). No new judgment machinery:
+        the value is the named entry point + its provenance, the §12 seam the composed loop and the
+        ``find-contradiction`` operator build on. Atomic: the edges, their judge Actions, and the
+        corroborate Action commit **together**. Recorded even when nothing is found (an auditable
+        "looked, gathered nothing"), so the operator's run is never invisible.
+
+        Candidate generation runs the full funnel then filters to this hypothesis — exact-cosine
+        over the active subgraph is investigation-scale, and a hypothesis-scoped funnel is a later
+        efficiency seam, not a judgment change.
+        """
+        from iknos.provenance.action_log import record_action
+
+        target = str(hypothesis_id)
+        pool = await self.candidates.generate(session, k=k)
+        scoped = CandidatePool(
+            candidates=tuple(c for c in pool.candidates if c.hypothesis == target)
+        )
+        node_meta = await self._load_node_meta(session) if scoped.candidates else {}
+        grouped = build_evidence(scoped, node_meta) if scoped.candidates else {}
+        result = (
+            await self._judge_plan_persist(session, grouped, node_meta)
+            if grouped
+            else EdgeProductionResult()
+        )
+
+        supporters = tuple(e for e in result.edges if e.sign is EdgeSign.SUPPORTS)
+        refuters = tuple(e for e in result.edges if e.sign is EdgeSign.REFUTES)
+        action_id = await record_action(
+            session,  # type: ignore[arg-type]
+            actor=CORROBORATE_ACTOR,
+            action_type=CORROBORATE_ACTION_TYPE,
+            inputs={"hypothesis": target, "k": k},
+            outputs={
+                "supporters": [e.evidence for e in supporters],
+                "refuters": [e.evidence for e in refuters],
+                # The lower-level edge-judge Actions this operator drove (the envelope's children).
+                "edge_actions": [str(a) for a in result.action_ids],
+                "dropped_irrelevant": [list(p) for p in result.dropped],
+                "quarantined": [q.to_audit() for q in result.quarantined],
+            },
+            model=getattr(self.judge.llm, "model", None),
+            sampling=self.judge.sampling,
+        )
+        await session.commit()  # type: ignore[attr-defined]
+        return CorroborateResult(
+            hypothesis=target,
+            production=result,
+            action_id=action_id,
+            supporters=supporters,
+            refuters=refuters,
+        )
+
+
+@dataclass(frozen=True)
+class CorroborateResult:
+    """The outcome of :meth:`EdgeProducer.corroborate` (§12) — one hypothesis's gathered evidence.
+
+    ``production`` is the underlying edge-production result (persisted edges, dropped-irrelevant
+    pairs, §3.1 quarantine drops, the edge-judge Action ids); ``action_id`` is the corroborate
+    operator's own envelope Action. ``supporters`` / ``refuters`` split the persisted edges by sign
+    for the caller. ``is_finding`` forwards the §7.2 sign-instability signal so a hypothesis whose
+    only refuter is sign-unstable surfaces for the gate, not silently.
+    """
+
+    hypothesis: NodeId
+    production: EdgeProductionResult
+    action_id: uuid.UUID
+    supporters: tuple[ProducedEdge, ...] = ()
+    refuters: tuple[ProducedEdge, ...] = ()
+
+    @property
+    def is_finding(self) -> bool:
+        return self.production.is_finding
 
 
 def _decode_reasons_list(raw: object) -> list[str]:
