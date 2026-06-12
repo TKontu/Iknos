@@ -297,6 +297,49 @@ async def load_hypothesis_ids(session: object) -> set[NodeId]:
     return {unquote_agtype(hid) for (hid,) in rows}
 
 
+async def load_base_fact_ids(session: object) -> set[NodeId]:
+    """The ids of current nodes grounded by ``EVIDENCED_BY`` — the Layer A base anchor (§12).
+
+    Only a ``Fact`` carries ``EVIDENCED_BY`` (to its Proposition/Span), so this is the base-fact
+    set; the target node type is irrelevant (we only need that evidence exists). Shared module-level
+    read so the revision loop (W1) re-assembles the same well-founded base the adapter does.
+    """
+    from iknos.db.age import execute_cypher, unquote_agtype
+
+    raw = await execute_cypher(
+        session,  # type: ignore[arg-type]
+        "MATCH (f)-[:EVIDENCED_BY]->() WHERE f.valid_to IS NULL RETURN DISTINCT f.id",
+        returns="fid agtype",
+    )
+    return {unquote_agtype(fid) for (fid,) in raw}
+
+
+async def load_derived_rows(session: object) -> list[DerivedRow]:
+    """All current ``DERIVED_FROM`` edges between current nodes, with group-id + strength (§12).
+
+    Shared module-level read (W1 reuses it to re-assemble the derivation structure per retracted
+    set); the adapter's ``load_active`` consumes the same rows.
+    """
+    from iknos.db.age import execute_cypher, unquote_agtype
+
+    raw = await execute_cypher(
+        session,  # type: ignore[arg-type]
+        "MATCH (c)-[d:DERIVED_FROM]->(a) "
+        "WHERE c.valid_to IS NULL AND a.valid_to IS NULL AND d.valid_to IS NULL "
+        "RETURN c.id, a.id, d.derivation, d.strength",
+        returns="cid agtype, aid agtype, deriv agtype, strength agtype",
+    )
+    return [
+        DerivedRow(
+            conclusion=unquote_agtype(cid),
+            antecedent=unquote_agtype(aid),
+            derivation=_opt_str(deriv),
+            strength=_opt_float(strength, default=1.0),
+        )
+        for cid, aid, deriv, strength in raw
+    ]
+
+
 class DerivationGraphAdapter:
     """Loads the active reasoning subgraph from AGE into an :class:`ActiveSubgraph`.
 
@@ -313,40 +356,12 @@ class DerivationGraphAdapter:
         return await load_reasoning_nodes(session)
 
     async def _load_base_fact_ids(self, session: object) -> set[NodeId]:
-        """The ids of current nodes grounded by ``EVIDENCED_BY`` — the Layer A base anchor.
-
-        Only a ``Fact`` carries ``EVIDENCED_BY`` (to its Proposition/Span), so this is the
-        base-fact set; the target node type is irrelevant (we only need that evidence exists).
-        """
-        from iknos.db.age import execute_cypher, unquote_agtype
-
-        raw = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            "MATCH (f)-[:EVIDENCED_BY]->() WHERE f.valid_to IS NULL RETURN DISTINCT f.id",
-            returns="fid agtype",
-        )
-        return {unquote_agtype(fid) for (fid,) in raw}
+        """Deprecated alias — delegates to the shared :func:`load_base_fact_ids` (W1 reuses it)."""
+        return await load_base_fact_ids(session)
 
     async def _load_derived(self, session: object) -> list[DerivedRow]:
-        """All current ``DERIVED_FROM`` edges between current nodes, with group-id + strength."""
-        from iknos.db.age import execute_cypher, unquote_agtype
-
-        raw = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            "MATCH (c)-[d:DERIVED_FROM]->(a) "
-            "WHERE c.valid_to IS NULL AND a.valid_to IS NULL AND d.valid_to IS NULL "
-            "RETURN c.id, a.id, d.derivation, d.strength",
-            returns="cid agtype, aid agtype, deriv agtype, strength agtype",
-        )
-        return [
-            DerivedRow(
-                conclusion=unquote_agtype(cid),
-                antecedent=unquote_agtype(aid),
-                derivation=_opt_str(deriv),
-                strength=_opt_float(strength, default=1.0),
-            )
-            for cid, aid, deriv, strength in raw
-        ]
+        """Deprecated alias — delegates to the shared :func:`load_derived_rows` (W1 reuses it)."""
+        return await load_derived_rows(session)
 
     async def load_active(self, session: object) -> ActiveSubgraph:
         """Read the active reasoning subgraph and assemble it for Layer A/B.
