@@ -204,3 +204,47 @@ async def test_generate_proposes_embedding_knn_and_respects_the_model_guard_and_
     # The G1.16 vector-space guard and the active-box scope both exclude their claim.
     assert (str(f_other_model), hs) not in by_key
     assert (str(f_dead), hs) not in by_key
+
+
+async def test_generate_through_the_pushdown_branch(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """V14 point 4: route generate() through the DB push-down branch (candidates_knn_pushdown=True).
+
+    The push-down wiring (prop→evidence-node mapping, hypothesis-only vector load) is otherwise dead
+    under test — a swapped mapping would ship green. Here the flag is on, so the EMBEDDING_KNN
+    candidate is produced via the `<=>` push-down, and the G1.16 model guard still holds through it.
+    """
+    from iknos.config import settings
+
+    monkeypatch.setattr(settings, "candidates_knn_pushdown", True)
+
+    await bootstrap_session(session)
+    box = case_box("g42-knn-pushdown", "1", "test", 0.8)
+    await _put_box(session, box)
+
+    doc_id = uuid.uuid4()
+    await session.execute(
+        text("INSERT INTO document_content (document_id, raw_text) VALUES (:id, :t)"),
+        {"id": doc_id, "t": "g42 knn push-down corpus"},
+    )
+    h = await _put_node(session, "Hypothesis", box.id)
+    await _embed_node(session, node=h, document_id=doc_id, vector=_vec((0, 1.0)))
+    f_near = await _put_node(session, "Fact", box.id)
+    await _embed_node(session, node=f_near, document_id=doc_id, vector=_vec((0, 1.0), (1, 0.1)))
+    # Same near vector but a different embedding model — the G1.16 guard must exclude it.
+    f_other_model = await _put_node(session, "Fact", box.id)
+    await _embed_node(
+        session, node=f_other_model, document_id=doc_id, vector=_vec((0, 1.0)), model="g42-other"
+    )
+    await session.commit()
+    # Exhaustive HNSW so the small active set is not post-filter-starved (V14 point 2).
+    await session.execute(text("SET LOCAL hnsw.ef_search = 400"))
+
+    pool = await CandidateGenerationAdapter().generate(session, k=1000)
+    by_key = {c.key: c for c in pool.candidates}
+    hs = str(h)
+
+    assert (str(f_near), hs) in by_key, "push-down branch produced no embedding candidate"
+    assert CandidateSource.EMBEDDING_KNN in by_key[(str(f_near), hs)].sources
+    assert (str(f_other_model), hs) not in by_key  # G1.16 guard holds through the push-down

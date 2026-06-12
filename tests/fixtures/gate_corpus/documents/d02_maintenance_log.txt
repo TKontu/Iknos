@@ -8,7 +8,7 @@ This extract lists drivetrain maintenance activity recorded against turbine WTG-
 
 2022-03-14 — WTG-14 gearbox: routine 6-monthly inspection. Borescope of high-speed stage; no defects noted. Gear-oil sample drawn and sent for analysis (results within limits). Work order 3902.
 
-2022-09-21 — WTG-14 gearbox: routine 6-monthly inspection. Oil filter changed. Vibration spot-check normal. Work order 4108.
+2022-09-21 — WTG-14 gearbox: routine 6-monthly inspection. Oil filter changed. Vibration spot-check normal. Coupling alignment checked and found within tolerance. Work order 4108.
 
 2023-03-08 — WTG-14 gearbox: routine 6-monthly inspection. Borescope of high-speed stage; light frosting noted on intermediate gear, within acceptance. Work order 4290.
 

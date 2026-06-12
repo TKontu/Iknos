@@ -10,6 +10,8 @@ AGE quirks driving this module:
 """
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy import text
@@ -54,6 +56,42 @@ def cypher_map(props: dict[str, Any]) -> str:
         else:
             parts.append(f"{k}: {cypher_string_literal(json.dumps(v))}")
     return "{" + ", ".join(parts) + "}"
+
+
+@asynccontextmanager
+async def atomic_write(session: AsyncSession) -> AsyncIterator[AsyncSession]:
+    """One transaction for an operator's graph write + relational write + ``Action`` append (W7).
+
+    Graph writes (raw Cypher on ``session.connection()``) and ORM writes (the ``Action`` row, dense
+    index rows) already share the session's single implicit transaction, but ``record_action`` only
+    flushes — so without a rollback discipline a failure *after* the ``Action`` is buffered orphans
+    the audit log from the artifact it points at: §10.2 point auditability (principle 9) breaks
+    exactly where it must hold. This wrapper makes the discipline explicit and
+    construction-enforced: every write in the block commits **together** on clean exit, and **any**
+    exception rolls the whole unit back before re-raising — no orphaned ``Action``, no orphaned
+    vertex, no half-written edge set. One commit per unit, so an operator does *all* its writes
+    inside one block and must **not** commit itself (a nested commit defeats the guarantee).
+
+    Phase 5 supersession — which multiplies multi-statement writes (set predecessor ``valid_to`` +
+    write successor + re-point edges + ``Action``) — inherits the guarantee by adopting this::
+
+        async with atomic_write(session):
+            await merge_vertex(...)      # graph
+            session.add(row)             # relational
+            await record_action(...)     # audit, last
+
+    The body yields the same ``session``; it is the *commit/rollback* bracket that matters, not a
+    new session. Generalizes the per-span isolation hand-rolled in ``core/proposition.py``
+    (try/``_persist``/except-rollback) for every operator. Lives here, beside the graph-write
+    helpers operators already import, and stays DB-free on import (no engine), unlike
+    ``db/session.py``.
+    """
+    try:
+        yield session
+        await session.commit()
+    except BaseException:
+        await session.rollback()
+        raise
 
 
 async def bootstrap_session(session: AsyncSession) -> None:

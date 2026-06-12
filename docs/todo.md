@@ -145,15 +145,16 @@ must land before the remaining G4.5 slices — **complete: R8/R9/V7/V8 all
 shipped** — specs in
 `todo_phase_4_linking_adjudication.md` *Open task specs*. Gate infrastructure
 (R10/R11 out-of-process embeddings + job queue; R4/V9 ANN) lands before the trials
-run — **R4 (HNSW indexes) and V9 (k-NN push-down + recall measurement) shipped;
-R10/R11 next.** A 2026-06-12 residual review of the landed gate assets + ingest
-batch (record: `archive/review_2026-06-12_completed_scope_residuals.md`) found no
-blockers but folded four fix tasks into the plan: **V12** (baseline-rig hardening —
-land before any E1 measurement run) and **V13** (gate-corpus touch-ups — land
-**before V2 labeling starts**, after which the corpus freezes) in `todo_trials.md`;
-**V14** (V9 push-down verification hardening — before the G4.6 flip decision) in
-`todo_phase_4_*.md`; **G1.25** (G1.22 backfill-skip fix + docstring sync) in
-`todo_phase_1_ingest.md`.
+run — **complete: R4, V9, R10 (#99) and R11 (#100) all shipped.** A 2026-06-12
+residual review of the landed gate assets + ingest batch (record:
+`archive/review_2026-06-12_completed_scope_residuals.md`) found no blockers but
+folded four fix tasks into the plan: **V12** (baseline-rig hardening, #94) and
+**V13** (gate-corpus touch-ups before the V2 labeling freeze, #96) in
+`todo_trials.md` — **both shipped**; **V14** (V9 push-down verification hardening,
+#97) in `todo_phase_4_*.md` — **shipped**, with the empirical finding that the
+bounded push-down is an exact sort, not an HNSW scan (see the V14 build record;
+re-verify the plan shape at G4.6 scale before flipping the default); **G1.25**
+(G1.22 backfill-skip fix + docstring sync) in `todo_phase_1_ingest.md` — **open**.
 
 **The composed loop now runs as a system (2026-06-11 architecture assessment,
 W1/W2/W3 — all shipped).** The `REFUTES → retract → A → B → QBAF → gate` feedback
@@ -184,7 +185,7 @@ into the owning phase/gap doc as an active task.
 | Ensemble-gate SYMBOLIC channel producer (W3) | `todo_phase_4_*.md` *Open task specs* (W3), `core/ensemble_gate.py` docstring | the differentiator must auto-refute (gate-trial window / G4.6) | **CLOSED** — W3 chose option (a): clingo producer shipped (`core/symbolic_gate.py`) |
 | Ensemble-gate TEMPORAL channel producer (§7.4) | `core/ensemble_gate.py` docstring (`temporal_channel`) | a time-sensitive sub-domain needs the bitemporal-overlap veto, or `STRICT_GATE` is adopted | waiting (later G4.5 / Phase 5 bitemporal) |
 | Ensemble-gate-only `refuted` flip (§7.2) | `todo_phase_4_*.md` *Open task specs* (V8) | any consumer writes `Hypothesis.state` | **FIRED** (G4.4 `persist_verdicts`) → **V8 shipped** |
-| pgvector ANN index + k-NN push-down | `todo_phase_4_*.md` *Open task specs* (R4/V9), `core/candidates.py` docstring | k-NN runs beyond working-set scale, or the gate measures recall | **CLOSED** — R4 + V9 shipped; V14 (verification hardening) open before the G4.6 flip |
+| pgvector ANN index + k-NN push-down | `todo_phase_4_*.md` *Open task specs* (R4/V9/V14), `core/candidates.py` docstring | k-NN runs beyond working-set scale, or the gate measures recall | **CLOSED** — R4 + V9 + V14 shipped; the bounded push-down is an exact sort (no HNSW); re-verify the plan shape at G4.6 scale before flipping the default |
 | Out-of-process embeddings + job queue (R10/R11) | `todo_trials.md` *Gate prerequisites* | first real multi-document corpus ingest | **FIRED** (V1 corpus is that ingest) → land before gate trials |
 | G1.10 Part B — RAPTOR summary levels | `todo_phase_1_ingest.md` *Open work* | coarse-to-fine candidate stage (§5.1 stage 3) or retrieval needs coarse levels | waiting |
 | G1.11 — box scoping on dense/sparse indexes | `todo_phase_1_ingest.md` *Open work* | first hybrid-retrieval consumer (Phase 6 `retrieve`) | waiting |
@@ -273,16 +274,26 @@ cite a gap file by name resolve there):
       `test_config.py` (defaults without env; env overrides; no DB on import).
       Pure where the module is pure; integration tests keep owning round-trips;
       don't chase coverage into ORM/type modules.
-- [ ] **W7 — dual-write transaction discipline** *(2026-06-11 architecture
-      assessment, P7 — **land before Phase 5**, see that file's entry criteria)*.
-      Graph writes (raw Cypher via `execute_driver_sql`) and relational writes
-      (ORM) share one session, but no call site has a rollback discipline: a
-      failed Fact write after a persisted `Action` leaves the audit log pointing
-      at an artifact that does not exist — breaking §10.2 point auditability
-      (principle 9) precisely where it must hold. One transactional wrapper
-      (context manager) covering graph write + relational write + `Action`
-      append; operators adopt it; rollback tests inject a failure between the
-      writes and assert no orphaned `Action` and no orphaned vertex.
+- [x] **W7 — dual-write transaction discipline** *(2026-06-11 architecture assessment, P7 —
+      Phase-5 entry criterion)* *(shipped)*. `db/age.py::atomic_write(session)` is the wrapper —
+      an `@asynccontextmanager` that commits the bracketed writes together on clean exit and
+      **rolls the whole unit back on any exception** before re-raising (no orphaned `Action`, no
+      orphaned vertex, no half-written edge set). It lives beside the graph-write helpers operators
+      already import and stays DB-free on import (no engine), unlike `db/session.py`. Adopted in the
+      §6 graph operators that commit: `derive._propose`, `extract._persist`, `resolve.resolve_box`,
+      `anchor.anchor_box`, `component_aggregate._revise`, and `partwhole` — where it also **fixes
+      the genuine multi-commit hazard**: `_persist_direct` (per-proposition isolation preserved) and
+      `_rebuild_closure` are each their own atomic unit instead of an unbracketed internal commit.
+      Tests: `test_age_cypher.py` (commit-once / rollback-and-reraise on a mock); integration
+      `test_atomic_write.py` (a failure injected *between* a graph write and the `Action` rolls both
+      back — no orphaned vertex, no orphaned `Action`; the success direction commits both).
+      **Remaining mechanical adoptions** (already single-commit / orphan-safe today — `atomic_write`
+      only adds the rollback-on-mid-failure hardening, identical pattern): `reference.bind_proposition`,
+      `edge_producer.produce_edges` (keep its single-transaction-for-all-plans semantics on wrap),
+      `reembed` (ORM-only). `proposition.py` already hand-rolls the discipline (per-span
+      try/`_persist`/except-rollback) — the reference implementation `atomic_write` generalizes; the
+      "caller owns transaction" operators (`domain/loader`, `boxes/registry`, `reference_corpus`,
+      `ingest`) correctly defer the commit to a caller that should wrap with `atomic_write`.
 - [ ] **W8 — Cypher chokepoint + serde round-trips** *(assessment, P10)*. ~140
       call sites interpolate labels/edge types/ids/timestamps into f-string
       Cypher outside the `db/age.py` helpers — safe today (values come from

@@ -153,3 +153,21 @@ async def test_answer_orchestrates_retrieve_build_parse(monkeypatch: pytest.Monk
     ((messages, schema),) = llm.calls
     assert "[2] the oil was degraded" in messages[1]["content"]
     assert schema is ANSWER_SCHEMA
+
+
+def test_sampling_defaults_to_pinned_greedy_and_is_overridable() -> None:
+    # V12: every other LLM consumer pins temperature 0.0; the baseline must too (reproducibility),
+    # while still allowing an explicit regime.
+    from iknos.baselines.rag import DEFAULT_SAMPLING
+
+    assert DEFAULT_SAMPLING == {"temperature": 0.0}
+    assert _rig(_MockLLM({}))._sampling == {"temperature": 0.0}
+    explicit = RagBaseline(
+        embedder=_NullEmbedder(),
+        llm=_MockLLM({}),
+        session_factory=lambda: (_ for _ in ()).throw(AssertionError("no DB")),  # type: ignore[arg-type,return-value]
+        tokenizer=type("T", (), {"offsets": lambda self, text: []})(),
+        model_name="m",
+        sampling={"temperature": 0.7},
+    )
+    assert explicit._sampling == {"temperature": 0.7}

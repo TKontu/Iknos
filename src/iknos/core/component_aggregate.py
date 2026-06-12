@@ -265,24 +265,28 @@ class ComponentReasoner:
         retracted: tuple[uuid.UUID, uuid.UUID] | None,
     ) -> RevisionResult:
         """Record the belief-revision Action and return the re-aggregation. One transaction."""
+        from iknos.db.age import atomic_write
+
         components = await self.aggregate(session)
-        action_id = await record_action(
-            session,
-            actor="belief-revision",
-            action_type="revise_components",
-            inputs={
-                "asserted": [str(asserted[0]), str(asserted[1])] if asserted else None,
-                "retracted": [str(retracted[0]), str(retracted[1])] if retracted else None,
-                "schema_version": AGGREGATE_SCHEMA_VERSION,
-            },
-            outputs={
-                "components": {
-                    c.canonical: {"support_count": c.support_count, "confidence": c.confidence}
-                    for c in components.values()
-                }
-            },
-        )
-        await session.commit()
+        # W7: the caller's SAME_AS valid_to SET (uncommitted on this session) + the revision Action
+        # commit as one unit — a failed Action can never leave a retraction half-applied.
+        async with atomic_write(session):
+            action_id = await record_action(
+                session,
+                actor="belief-revision",
+                action_type="revise_components",
+                inputs={
+                    "asserted": [str(asserted[0]), str(asserted[1])] if asserted else None,
+                    "retracted": [str(retracted[0]), str(retracted[1])] if retracted else None,
+                    "schema_version": AGGREGATE_SCHEMA_VERSION,
+                },
+                outputs={
+                    "components": {
+                        c.canonical: {"support_count": c.support_count, "confidence": c.confidence}
+                        for c in components.values()
+                    }
+                },
+            )
         return RevisionResult(action_id=action_id, components=components)
 
     async def _load_involves(self, session: AsyncSession) -> dict[NodeId, frozenset[NodeId]]:

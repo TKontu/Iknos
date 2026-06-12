@@ -488,34 +488,37 @@ class Resolver:
         The §6 operator shape. Emits one ``resolve`` Action (``actor="entity-resolver"``)
         naming the entities consulted and the edges written by state (§10.1), then commits.
         """
+        from iknos.db.age import atomic_write
+
         now = datetime.now(UTC)
         entities = await self._load_entities(session, box)
 
         confirmed: list[SameAsEdge] = []
         candidate: list[SameAsEdge] = []
-        for a, b in block_candidates(entities):
-            score = score_pair(a, b)
-            state = decide(score)
-            if state is None:
-                continue
-            edge = await self._persist_same_as(session, a, b, state, score, box, now)
-            (confirmed if state is SameAsState.CONFIRMED else candidate).append(edge)
+        # W7: all SAME_AS edges + the resolve Action as one unit.
+        async with atomic_write(session):
+            for a, b in block_candidates(entities):
+                score = score_pair(a, b)
+                state = decide(score)
+                if state is None:
+                    continue
+                edge = await self._persist_same_as(session, a, b, state, score, box, now)
+                (confirmed if state is SameAsState.CONFIRMED else candidate).append(edge)
 
-        action_id = await record_action(
-            session,
-            actor="entity-resolver",
-            action_type="resolve",
-            inputs={
-                "box": str(box),
-                "entities": [str(e.id) for e in entities],
-                "schema_version": RESOLVE_SCHEMA_VERSION,
-            },
-            outputs={
-                "confirmed": [f"{e.src}->{e.dst}" for e in confirmed],
-                "candidate": [f"{e.src}->{e.dst}" for e in candidate],
-            },
-        )
-        await session.commit()
+            action_id = await record_action(
+                session,
+                actor="entity-resolver",
+                action_type="resolve",
+                inputs={
+                    "box": str(box),
+                    "entities": [str(e.id) for e in entities],
+                    "schema_version": RESOLVE_SCHEMA_VERSION,
+                },
+                outputs={
+                    "confirmed": [f"{e.src}->{e.dst}" for e in confirmed],
+                    "candidate": [f"{e.src}->{e.dst}" for e in candidate],
+                },
+            )
         return ResolveResult(action_id=action_id, confirmed=confirmed, candidate=candidate)
 
     async def canonical_components(self, session: AsyncSession, box: uuid.UUID) -> list[Component]:

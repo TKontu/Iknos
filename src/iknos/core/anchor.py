@@ -414,6 +414,8 @@ class EntityLinker:
         and the edges written by state (§10.1), then commits. Returns the edges and the
         coverage achieved.
         """
+        from iknos.db.age import atomic_write
+
         now = datetime.now(UTC)
         if pack_box_ids is None:
             pack_box_ids = await self._active_pack_box_ids(session)
@@ -423,34 +425,35 @@ class EntityLinker:
         confirmed: list[AnchorEdge] = []
         candidate: list[AnchorEdge] = []
         anchored_entities = 0
-        for entity in entities:
-            decision = decide_anchor(entity, block_anchors(entity, taxonomy))
-            if decision.state is None:
-                continue
-            if decision.anchored:
-                anchored_entities += 1
-            for node in decision.targets:
-                edge = await self._persist_anchor(
-                    session, entity, node, decision.state, decision.score, box, now
-                )
-                (confirmed if decision.anchored else candidate).append(edge)
+        # W7: all ANCHORS_TO edges + the anchor Action as one unit.
+        async with atomic_write(session):
+            for entity in entities:
+                decision = decide_anchor(entity, block_anchors(entity, taxonomy))
+                if decision.state is None:
+                    continue
+                if decision.anchored:
+                    anchored_entities += 1
+                for node in decision.targets:
+                    edge = await self._persist_anchor(
+                        session, entity, node, decision.state, decision.score, box, now
+                    )
+                    (confirmed if decision.anchored else candidate).append(edge)
 
-        action_id = await record_action(
-            session,
-            actor="entity-linker",
-            action_type="anchor",
-            inputs={
-                "box": str(box),
-                "packs": [str(p) for p in pack_box_ids],
-                "entities": [str(e.canonical) for e in entities],
-                "schema_version": ANCHOR_SCHEMA_VERSION,
-            },
-            outputs={
-                "confirmed": [f"{e.src}->{e.dst}" for e in confirmed],
-                "candidate": [f"{e.src}->{e.dst}" for e in candidate],
-            },
-        )
-        await session.commit()
+            action_id = await record_action(
+                session,
+                actor="entity-linker",
+                action_type="anchor",
+                inputs={
+                    "box": str(box),
+                    "packs": [str(p) for p in pack_box_ids],
+                    "entities": [str(e.canonical) for e in entities],
+                    "schema_version": ANCHOR_SCHEMA_VERSION,
+                },
+                outputs={
+                    "confirmed": [f"{e.src}->{e.dst}" for e in confirmed],
+                    "candidate": [f"{e.src}->{e.dst}" for e in candidate],
+                },
+            )
         return AnchorResult(
             action_id=action_id,
             confirmed=confirmed,

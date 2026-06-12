@@ -56,9 +56,12 @@ active-subgraph definition cannot diverge from the propagation/adjudication load
 """
 
 import math
-from collections.abc import Iterable
+import uuid
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+
+from sqlalchemy import Select
 
 from iknos.core.derivation_adapter import (
     load_active_box_ids,
@@ -352,6 +355,45 @@ def embedding_knn_candidates(
     return candidates
 
 
+def knn_pushdown_stmt(
+    *, model: str, query_vector: Sequence[float], evidence_uuids: list[uuid.UUID], k: int
+) -> Select[tuple[uuid.UUID, float]]:
+    """Build the one pgvector ``<=>`` push-down query for a single hypothesis query vector (V9).
+
+    **The single source of truth for the push-down query.** Both the production path
+    (:meth:`CandidateGenerationAdapter._embedding_knn_pushdown`) and the `EXPLAIN` verification
+    build the statement here, so the plan check can never silently drift to a *different* query
+    shape than production runs.
+
+    Plan note (V14, verified by EXPLAIN): the ``proposition_id IN (...)`` clause makes this a
+    **bounded exact** k-NN — the planner fetches the active set through the proposition_id index and
+    sorts it by ``<=>``; it does **not** use the HNSW index (that is the unbounded-k-NN path). So
+    the ordering is exact within the active set. Two clauses are load-bearing:
+
+    * ``ORDER BY embedding <=> :vec`` — the **bare** cosine-distance ordering. A secondary ORDER BY
+      column (e.g. ``proposition_id``) is unnecessary: node-level determinism is the caller's Python
+      re-sort by ``(distance, node_id)`` (a *proposition*-level tie-break here would not match the
+      node-level oracle anyway, and exact float ties are measure-zero).
+    * ``WHERE model = :model`` — the G1.16 vector-space guard (cosine across two embedding models is
+      meaningless). **Never drop it.** The ``proposition_id IN (...)`` clause bounds the sort to the
+      active evidence set.
+    """
+    from sqlalchemy import select
+
+    from iknos.db.orm import PropositionEmbedding
+
+    distance = PropositionEmbedding.embedding.cosine_distance(list(query_vector))
+    return (
+        select(PropositionEmbedding.proposition_id, distance.label("distance"))
+        .where(
+            PropositionEmbedding.model == model,  # G1.16 guard — never drop
+            PropositionEmbedding.proposition_id.in_(evidence_uuids),
+        )
+        .order_by(distance)  # bare `<=>`; the IN-bounded set is sorted exactly (no HNSW — see V14)
+        .limit(k)
+    )
+
+
 def funnel(
     *generators: Iterable[Candidate],
     strategy: FunnelStrategy = DEFAULT_STRATEGY,
@@ -574,26 +616,45 @@ class CandidateGenerationAdapter:
     ) -> list[Candidate]:
         """Stage 2 via the pgvector ``<=>`` push-down (V9) — the DB-backed side of the seam.
 
-        Per hypothesis query vector, the nearest ``k`` **evidence** propositions are ranked by
-        the database (``ORDER BY embedding <=> :vec``, the R4 HNSW index), then mapped to their
-        reasoning nodes via the ``EVIDENCED_BY`` link already read in :meth:`generate`. The result
-        honours the exact-path contract: directed evidence → hypothesis, unscored, tagged
-        :attr:`CandidateSource.EMBEDDING_KNN`, **no similarity floor**, self-pairs skipped, and the
-        same tie-break (nearest first, then node id) so the two implementations are interchangeable.
+        Per hypothesis query vector, the nearest ``k`` **evidence** propositions are ranked by the
+        database (``ORDER BY embedding <=> :vec``; see :func:`knn_pushdown_stmt`), then mapped to
+        their reasoning nodes via the ``EVIDENCED_BY`` link already read in :meth:`generate`. The
+        result honours the exact-path contract: directed evidence → hypothesis, unscored, tagged
+        :attr:`CandidateSource.EMBEDDING_KNN`, **no similarity floor**, self-pairs skipped, and a
+        node-level tie-break (nearest first, then node id) applied in Python below.
 
-        It is an *approximation* of the exact oracle on two axes — the HNSW index (recall < 1) and
-        the per-vector ``LIMIT k`` over propositions rather than distinct nodes — so the push-down
-        candidate set is a **subset** of the exact set at equal ``k`` (the V9 recall-vs-exact
-        measurement), never a superset. The ``WHERE model =`` clause is the G1.16 vector-space
-        guard (cosine across two embedding models is meaningless) and must never be dropped.
+        **It does NOT use the R4 HNSW index, and that is correct (V14 — verified by EXPLAIN).** The
+        push-down restricts to the active-evidence set with ``proposition_id IN (…)``; against that
+        selective predicate the planner fetches the bounded set through the
+        ``ix_proposition_embeddings_proposition_id`` index and sorts it **exactly** by ``<=>`` — it
+        never picks the HNSW index (confirmed across default / ``enable_seqscan=off`` /
+        ``hnsw.iterative_scan`` plans). The HNSW index is the *unbounded* k-NN mechanism (a full
+        ``ORDER BY <=> LIMIT k`` with no filter, e.g. the R4 index test); a query already bounded to
+        a candidate set neither needs nor benefits from it. So **there is no HNSW-recall gap and no
+        post-filter "starvation"** for this query — the bounded sort is exact. The push-down's value
+        is keeping the evidence vectors *in the DB* (the in-memory oracle loads them all into
+        Python), not the ANN index.
+
+        **The only ways it differs from the in-memory oracle (V9 recall-vs-exact):**
+
+        1. **Per-vector ``LIMIT k`` over propositions, not distinct nodes** — fewer than k distinct
+           evidence nodes can survive when several propositions map to one node. Makes the result a
+           **subset** of the exact set at equal ``k`` in the no-tie case.
+        2. **Tie-break at the ``LIMIT k`` boundary.** The oracle breaks distance ties by **evidence
+           node id**; the SQL ``LIMIT`` cut is on **proposition** order (node ids cannot enter the
+           SQL without dragging the EVIDENCED_BY join into it). At a tie straddling the ``k``
+           boundary the push-down can keep a node the oracle would not — a rare superset on *exact*
+           ties (realistic only when two propositions have identical vectors, e.g. identical texts).
+           Ties are also subject to a float4 (``<=>``, single precision) vs float64 (the Python
+           oracle) boundary-ordering difference. Documented, not removed; pinned by a deliberate-tie
+           integration test.
+
+        The ``WHERE model =`` clause is the G1.16 vector-space guard (cosine across two embedding
+        models is meaningless) and must never be dropped.
         """
         if k <= 0 or not hyp_embedded or not evidence_prop_ids:
             return []
         import uuid as _uuid
-
-        from sqlalchemy import select
-
-        from iknos.db.orm import PropositionEmbedding
 
         evidence_uuids = [_uuid.UUID(p) for p in evidence_prop_ids]
         hyp_by_node: dict[NodeId, list[EmbeddedNode]] = {}
@@ -604,16 +665,8 @@ class CandidateGenerationAdapter:
         for h, entries in hyp_by_node.items():
             best_by_ev: dict[NodeId, float] = {}  # evidence node -> its smallest cosine distance
             for en in entries:
-                # `<=>` must match the R4 opclass (vector_cosine_ops) or the HNSW index is unused.
-                distance = PropositionEmbedding.embedding.cosine_distance(list(en.vector))
-                stmt = (
-                    select(PropositionEmbedding.proposition_id, distance.label("distance"))
-                    .where(
-                        PropositionEmbedding.model == en.model,  # G1.16 guard — never drop
-                        PropositionEmbedding.proposition_id.in_(evidence_uuids),
-                    )
-                    .order_by(distance, PropositionEmbedding.proposition_id)
-                    .limit(k)
+                stmt = knn_pushdown_stmt(
+                    model=en.model, query_vector=en.vector, evidence_uuids=evidence_uuids, k=k
                 )
                 result = await session.execute(stmt)  # type: ignore[attr-defined]
                 for prop_id, dist in result.all():
