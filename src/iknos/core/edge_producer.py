@@ -55,9 +55,25 @@ producer surfaces (and persists on the edge) before authorising a flip. This pro
 edges; it does
 not adjudicate hypothesis state (that is the QBAF, G4.4) nor authorise refutation (that is the gate,
 G4.5).
+
+**The §3.1 quarantine gate (V7, invariant).** This is the live ``SUPPORTS``/``REFUTES`` creation
+site, so the §3.1 rule lands here: a **provisional** source (a Fact/Conclusion inheriting the union
+of ``provisional_reasons`` over the ``Proposition``s it is ``EVIDENCED_BY``, R8) may not drive a
+**high-stakes** move — a ``REFUTES`` or a *sole-support* ``SUPPORTS`` (:func:`edge_stakes`). Before
+each edge is planned, :func:`~iknos.core.quarantine.assert_not_quarantined` is consulted; a
+quarantined edge is **dropped from the plan** (never persisted) and recorded as a
+:class:`QuarantineRecord` on the result + the ``Action``'s ``outputs.quarantined`` — a triage
+signal, **never a silent skip and never an abort** (other edges and hypotheses are unaffected). The
+gate is
+at the *write*, not the candidate/judge stage: the judge still sees the evidence (the panel is blind
+to provenance). Enforcement is the producer's; the pure decision is ``core/quarantine`` (R9) and the
+reason vocabulary is R8's ``ProvisionalReason``. The quarantine lifts non-destructively when the
+source is confirmed (its reasons clear and a re-judgment re-plans the edge).
 """
 
 import asyncio
+import json
+import logging
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -74,14 +90,23 @@ from iknos.core.edge_judge import (
     HypothesisJudgment,
     JudgeEvidence,
 )
+from iknos.core.quarantine import QuarantinedPropositionError, Stakes, assert_not_quarantined
 from iknos.core.truth_maintenance import NodeId
 from iknos.types.edges import EdgeSign
 from iknos.types.nodes import Tier
+
+logger = logging.getLogger(__name__)
 
 # The actor + action_type stamped on every judgment Action (§10.1) — the audit handle a reader
 # greps for to find "which edges did the edge judge write, and from what samples".
 PRODUCER_ACTOR = "edge-judge"
 PRODUCER_ACTION_TYPE = "judge"
+
+# A producer-local provisional reason (not a §3.1 ProvisionalReason): an evidence node with no
+# EVIDENCED_BY Proposition has no provenance to gate on, so its high-stakes moves are quarantined
+# conservatively (V7) — surfaced, never silently driven. A deductive conclusion's DERIVED_FROM
+# provenance is a future refinement of this conservative default.
+MISSING_PROVENANCE = "missing_provenance"
 
 
 @dataclass(frozen=True)
@@ -195,12 +220,53 @@ class PlannedAction:
 
 
 @dataclass(frozen=True)
+class QuarantineRecord:
+    """One evidential edge dropped because a provisional source would drive a high-stakes move.
+
+    The §3.1 / V7 triage signal: ``reasons`` are the source atom's
+    :class:`~iknos.types.epistemic.ProvisionalReason` values (or :data:`MISSING_PROVENANCE`),
+    ``stakes`` why the move was high-stakes (a ``REFUTES`` or a sole-support ``SUPPORTS``). Recorded
+    on the producing ``Action`` (``outputs.quarantined``) and surfaced on the result — the edge is
+    **not** persisted (record-and-skip, never a silent drop); it lifts when the source is confirmed.
+    """
+
+    evidence: NodeId
+    hypothesis: NodeId
+    sign: EdgeSign
+    reasons: tuple[str, ...]
+    stakes: Stakes
+
+    def to_audit(self) -> dict[str, Any]:
+        """The Action-output record (§10.1) — the triage queue's input."""
+        return {
+            "evidence": self.evidence,
+            "sign": str(self.sign),
+            "reasons": list(self.reasons),
+            "stakes": str(self.stakes),
+        }
+
+
+def edge_stakes(sign: EdgeSign, *, support_count_in_plan: int) -> Stakes:
+    """The §3.1 stakes of a would-be edge (V7) — pure.
+
+    ``HIGH`` for any ``REFUTES`` (overturns a hypothesis) and for a ``SUPPORTS`` that is the
+    hypothesis's **sole** support in this plan (``support_count_in_plan <= 1`` — a lone supporter
+    carries the hypothesis on its own); ``LOW`` for a ``SUPPORTS`` among others (corroboration). The
+    count is over the judged ``SUPPORTS`` edges for the hypothesis *before* any quarantine drop.
+    """
+    if sign is EdgeSign.REFUTES:
+        return Stakes.HIGH
+    return Stakes.HIGH if support_count_in_plan <= 1 else Stakes.LOW
+
+
+@dataclass(frozen=True)
 class HypothesisPlan:
-    """The complete write plan for one hypothesis: its edges + its provenance Action (DB-free)."""
+    """The write plan for one hypothesis: its edges, provenance Action, and quarantine drops."""
 
     hypothesis: NodeId
     edges: tuple[EdgeWrite, ...]
     action: PlannedAction
+    quarantined: tuple[QuarantineRecord, ...] = ()
 
 
 def evidential_edge_props(
@@ -273,6 +339,7 @@ def plan_hypothesis(
     *,
     node_meta: Mapping[NodeId, NodeMeta],
     credibility: Mapping[NodeId, float | None],
+    provisional_reasons: Mapping[NodeId, list[str]],
     policy: SignificancePolicy,
     now: datetime,
     model: str | None,
@@ -285,17 +352,46 @@ def plan_hypothesis(
 
     For each surviving :class:`~iknos.core.edge_judge.EdgeJudgment`: ``significance`` is computed
     from the **evidence** node's tier + credibility (§9, :func:`edge_significance`), the edge is
-    planned with the calibrated ``strength`` (§8) and the structural ``sign`` (the label), and the
-    panel tally is folded into the Action provenance (§10.1) — including the dropped-``irrelevant``
-    pairs (auditable as *considered and rejected*, not silently missing) and the
-    ``prompt_sha``/``schema_sha``/``schema_version`` (so a re-judgment under a changed pipeline is
-    detectable). The edge inherits the **target hypothesis's** box.
+    planned with the calibrated ``strength`` (§8) and the structural ``sign`` (the label).
+
+    **The §3.1 quarantine gate (V7).** Before an edge is planned, its :class:`Stakes` is derived
+    (:func:`edge_stakes` — ``REFUTES`` or sole-support ``SUPPORTS`` is ``HIGH``) and
+    :func:`~iknos.core.quarantine.assert_not_quarantined` is called with the **evidence** node's
+    ``provisional_reasons``. A quarantined edge is **dropped from the plan** (not persisted) and
+    recorded as a :class:`QuarantineRecord` on the result + the Action's ``outputs.quarantined`` — a
+    triage signal, never a silent skip and never an abort (other edges/hypotheses are unaffected).
+
+    The panel tally is folded into the Action provenance (§10.1) — the dropped-``irrelevant`` pairs
+    (auditable as *considered and rejected*) and the ``prompt_sha`` / ``schema_sha`` / ``version``
+    (so a re-judgment under a changed pipeline is detectable). The edge inherits the **target
+    hypothesis's** box.
     """
     hyp_box = node_meta[judgment.hypothesis].box if judgment.hypothesis in node_meta else None
+    # Sole-support test (§3.1): count the judged SUPPORTS *before* any quarantine drop, so dropping
+    # one provisional supporter does not retroactively promote another to "sole".
+    support_count = sum(1 for j in judgment.judgments if j.sign is EdgeSign.SUPPORTS)
 
     edges: list[EdgeWrite] = []
     edge_provenance: list[dict[str, Any]] = []
+    quarantined: list[QuarantineRecord] = []
     for j in judgment.judgments:
+        reasons = tuple(provisional_reasons.get(j.evidence, []))
+        stakes = edge_stakes(j.sign, support_count_in_plan=support_count)
+        try:
+            assert_not_quarantined(reasons, stakes)
+        except QuarantinedPropositionError:
+            # Record-and-skip (§3.1, V7): the provisional source's high-stakes edge is dropped from
+            # the plan and surfaced for triage, never persisted.
+            quarantined.append(
+                QuarantineRecord(
+                    evidence=j.evidence,
+                    hypothesis=judgment.hypothesis,
+                    sign=j.sign,
+                    reasons=reasons,
+                    stakes=stakes,
+                )
+            )
+            continue
         ev_meta = node_meta.get(j.evidence)
         significance = edge_significance(
             policy,
@@ -334,11 +430,18 @@ def plan_hypothesis(
             "edges": [f"{e.src_id}->{e.dst_id}" for e in edges],
             "judgments": edge_provenance,
             "dropped_irrelevant": list(judgment.irrelevant),
+            # The §3.1 quarantine drops — a triage signal, not an error (V7).
+            "quarantined": [q.to_audit() for q in quarantined],
         },
         model=model,
         sampling=sampling,
     )
-    return HypothesisPlan(hypothesis=judgment.hypothesis, edges=tuple(edges), action=action)
+    return HypothesisPlan(
+        hypothesis=judgment.hypothesis,
+        edges=tuple(edges),
+        action=action,
+        quarantined=tuple(quarantined),
+    )
 
 
 def _edge_audit(j: EdgeJudgment, significance: float) -> dict[str, Any]:
@@ -373,15 +476,17 @@ class EdgeProductionResult:
     """The outcome of :meth:`EdgeProducer.produce` (§8, §13).
 
     ``edges`` are the persisted survivors; ``dropped`` the ``(evidence, hypothesis)`` pairs the
-    panel judged ``irrelevant`` (recall→precision handoff, §5.1); ``unstable`` the persisted edges
-    whose panel split *direction* (``sign_stable=False``) — the §13 findings the §7.2 ensemble gate
-    (G4.5)
-    must clear before a ``refuted`` flip, surfaced not smoothed. ``action_ids`` are the provenance
-    Actions written (one per judged hypothesis).
+    panel judged ``irrelevant`` (recall→precision handoff, §5.1); ``quarantined`` the
+    :class:`QuarantineRecord`s a provisional source would have driven into a high-stakes move (§3.1,
+    V7 — dropped from the plan, never persisted, surfaced for triage); ``unstable`` the persisted
+    edges whose panel split *direction* (``sign_stable=False``) — the §13 findings the §7.2 ensemble
+    gate (G4.5) must clear before a ``refuted`` flip, surfaced not smoothed. ``action_ids`` are the
+    provenance Actions written (one per judged hypothesis).
     """
 
     edges: tuple[ProducedEdge, ...] = ()
     dropped: tuple[tuple[NodeId, NodeId], ...] = ()
+    quarantined: tuple[QuarantineRecord, ...] = ()
     action_ids: tuple[uuid.UUID, ...] = ()
 
     @property
@@ -465,6 +570,50 @@ class EdgeProducer:
                 out[eid] = None
         return out
 
+    async def _load_provisional_reasons(
+        self, session: object, evidence_ids: Iterable[NodeId]
+    ) -> dict[NodeId, list[str]]:
+        """Each evidence node's provisional reasons (§3.1, R8/V7) — the quarantine-gate input.
+
+        A Fact/Conclusion inherits the **union** of ``provisional_reasons`` over the
+        ``Proposition``s it is ``EVIDENCED_BY`` (R8). One query over all current evidenced nodes
+        (investigation scale, as the other producer reads); ``provisional_reasons`` is a JSON-string
+        list, decoded a second time (:func:`_decode_reasons_list`). An evidence node with **no**
+        ``EVIDENCED_BY`` ``Proposition`` has no provenance to gate on, so it is treated as
+        quarantined with :data:`MISSING_PROVENANCE` (conservative — its high-stakes moves are
+        surfaced, never silently driven) and a warning is logged. Total map over ``evidence_ids``.
+        """
+        from iknos.db.age import execute_cypher, parse_agtype_map, unquote_agtype
+
+        ids = set(evidence_ids)
+        acc: dict[NodeId, set[str]] = {}
+        rows = await execute_cypher(
+            session,  # type: ignore[arg-type]
+            "MATCH (n)-[:EVIDENCED_BY]->(p:Proposition) WHERE n.valid_to IS NULL "
+            "RETURN n.id, properties(p)",
+            returns="nid agtype, props agtype",
+        )
+        for nid_raw, props_raw in rows:
+            nid = unquote_agtype(nid_raw)
+            if nid not in ids:
+                continue
+            reasons = parse_agtype_map(props_raw).get("provisional_reasons")
+            acc.setdefault(nid, set()).update(_decode_reasons_list(reasons))
+
+        out: dict[NodeId, list[str]] = {}
+        for eid in ids:
+            if eid in acc:
+                out[eid] = sorted(acc[eid])
+            else:
+                logger.warning(
+                    "evidence node %s has no EVIDENCED_BY Proposition; quarantining its "
+                    "high-stakes moves with reason %r (V7)",
+                    eid,
+                    MISSING_PROVENANCE,
+                )
+                out[eid] = [MISSING_PROVENANCE]
+        return out
+
     async def produce(
         self,
         session: object,
@@ -501,6 +650,7 @@ class EdgeProducer:
 
         evidence_ids = {e.id for _hyp, (_text, evs) in grouped.items() for e in evs}
         credibility = await self._load_credibility(session, evidence_ids)
+        provisional_reasons = await self._load_provisional_reasons(session, evidence_ids)
 
         # Phase 2 — judge every hypothesis's set concurrently under one shared LLM budget.
         sem = asyncio.Semaphore(self.concurrency)
@@ -515,6 +665,7 @@ class EdgeProducer:
         now = datetime.now(UTC)
         produced: list[ProducedEdge] = []
         dropped: list[tuple[NodeId, NodeId]] = []
+        quarantined: list[QuarantineRecord] = []
         action_ids: list[uuid.UUID] = []
         for judgment in judgments:
             dropped.extend((ev, judgment.hypothesis) for ev in judgment.irrelevant)
@@ -524,6 +675,7 @@ class EdgeProducer:
                 judgment,
                 node_meta=node_meta,
                 credibility=credibility,
+                provisional_reasons=provisional_reasons,
                 policy=self.policy,
                 now=now,
                 model=getattr(self.judge.llm, "model", None),
@@ -532,6 +684,7 @@ class EdgeProducer:
                 schema_sha=self.judge.schema_sha(),
                 schema_version=self.judge.SCHEMA_VERSION,
             )
+            quarantined.extend(plan.quarantined)
             for edge in plan.edges:
                 await merge_edge(
                     session,  # type: ignore[arg-type]
@@ -551,20 +704,17 @@ class EdgeProducer:
                     sampling=plan.action.sampling,
                 )
             )
-            for j in judgment.judgments:
-                ev_meta = node_meta.get(j.evidence)
+            # Build the result rows from the *planned* edges — never the raw judgments — so a
+            # quarantine-dropped edge (§3.1, V7) is reported as quarantined, not as persisted.
+            for edge in plan.edges:
                 produced.append(
                     ProducedEdge(
-                        evidence=j.evidence,
-                        hypothesis=judgment.hypothesis,
-                        sign=j.sign,
-                        strength=j.strength,
-                        significance=edge_significance(
-                            self.policy,
-                            ev_meta.tier if ev_meta is not None else None,
-                            credibility.get(j.evidence),
-                        ),
-                        sign_stable=j.sign_stable,
+                        evidence=edge.src_id,
+                        hypothesis=edge.dst_id,
+                        sign=EdgeSign(edge.props["sign"]),
+                        strength=edge.props["strength"],
+                        significance=edge.props["significance"],
+                        sign_stable=edge.props["sign_stable"],
                     )
                 )
 
@@ -572,8 +722,24 @@ class EdgeProducer:
         return EdgeProductionResult(
             edges=tuple(produced),
             dropped=tuple(dropped),
+            quarantined=tuple(quarantined),
             action_ids=tuple(action_ids),
         )
+
+
+def _decode_reasons_list(raw: object) -> list[str]:
+    """Decode a ``provisional_reasons`` property (R8) — a JSON-string list — into ``list[str]``.
+
+    ``parse_agtype_map`` returns a list property as its JSON string (``cypher_map`` json-encoded
+    it), so it is decoded a second time; ``None``/absent (a pre-R8 evidenced node) → empty
+    (non-provisional, *not* missing-provenance — it still has a Proposition). Tolerates an
+    already-decoded list.
+    """
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    if isinstance(raw, str):
+        return [str(x) for x in json.loads(raw)]
+    return []
 
 
 def _opt_str(v: object) -> str | None:

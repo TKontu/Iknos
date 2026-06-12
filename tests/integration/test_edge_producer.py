@@ -95,11 +95,23 @@ async def _involves(session: AsyncSession, *, node: uuid.UUID, entity: uuid.UUID
     )
 
 
-async def _evidence_proposition(session: AsyncSession, *, fact: uuid.UUID) -> None:
-    """Give a Fact a §9.1 credibility chain: a Proposition with an epistemic_class it evidences."""
+async def _evidence_proposition(
+    session: AsyncSession, *, fact: uuid.UUID, provisional_reasons: list[str] | None = None
+) -> None:
+    """Give a Fact a §9.1 credibility chain: a Proposition with an epistemic_class it evidences.
+
+    ``provisional_reasons`` (R8) sets the source proposition's §3.1 quarantine reasons (a
+    JSON-string list, as ``cypher_map`` writes one) — empty/None for a non-provisional source."""
     pid = uuid.uuid4()
     await merge_vertex(
-        session, "Proposition", {"id": str(pid), "text": "claim", "epistemic_class": "observation"}
+        session,
+        "Proposition",
+        {
+            "id": str(pid),
+            "text": "claim",
+            "epistemic_class": "observation",
+            "provisional_reasons": provisional_reasons or [],
+        },
     )
     await merge_edge(session, src_id=fact, dst_id=pid, label="EVIDENCED_BY", props={})
 
@@ -132,8 +144,12 @@ async def test_produce_writes_signed_edges_with_separated_strength_and_significa
     # All three facts share the hypothesis's actor -> the structural funnel proposes them.
     for n in (h, f_support, f_support2, f_refute):
         await _involves(session, node=n, entity=actor)
-    # Only f_support carries a full credibility chain; the others' credibility is undefined.
+    # f_support + f_refute carry a (non-provisional) proposition: a credibility chain, and — the V7
+    # quarantine gate — the provenance a high-stakes REFUTES needs (an un-evidenced node would be
+    # quarantined as missing_provenance). f_support2 is left un-evidenced on purpose: its
+    # credibility is undefined (significance 1.0) and, a LOW-stakes corroborator, is not gated.
     await _evidence_proposition(session, fact=f_support)
+    await _evidence_proposition(session, fact=f_refute)
     await session.commit()
 
     judge = EdgeJudge(
@@ -154,6 +170,7 @@ async def test_produce_writes_signed_edges_with_separated_strength_and_significa
     assert len(supports) == 2 and len(refutes) == 1
     by_src = {unquote_agtype(row[0]): row for row in supports}
     (s_src, s_strength, s_sig, s_sign, s_stable) = by_src[str(f_support)]
+    (_s2_src, _s2_strength, s2_sig, _s2_sign, _s2_stable) = by_src[str(f_support2)]
     (r_src, _r_strength, r_sig, _r_sign, _r_stable) = refutes[0]
     assert unquote_agtype(r_src) == str(f_refute)
     assert unquote_agtype(s_sign) == EdgeSign.SUPPORTS.value  # sign stored alongside the label
@@ -168,11 +185,14 @@ async def test_produce_writes_signed_edges_with_separated_strength_and_significa
     # --- credibility is routed into SIGNIFICANCE (§9) -----------------------------------------
     cred = await effective_credibility_of(session, f_support)
     assert cred is not None
-    # Uniform tier weight (MVP) -> significance == effective_credibility for the chained supporter.
+    # Uniform tier weight (MVP) -> significance == effective_credibility for the chained nodes
+    # (f_support + f_refute share the box, so the refuter's significance is the same credibility).
     assert float(str(s_sig)) == pytest.approx(cred)
+    assert float(str(r_sig)) == pytest.approx(cred)
     assert cred < 1.0  # the 0.8 reliability_prior really did flow through
-    # The refuter has no credibility chain -> significance is identity 1.0 (undefined, not zero).
-    assert float(str(r_sig)) == pytest.approx(1.0)
+    # The un-evidenced supporter has no credibility chain -> significance is identity 1.0
+    # (undefined, not zero); a LOW-stakes corroborator, so V7 does not quarantine it.
+    assert float(str(s2_sig)) == pytest.approx(1.0)
 
     # --- provenance: exactly one Action for the one judged hypothesis -------------------------
     assert len(result.action_ids) == 1
@@ -195,4 +215,55 @@ async def test_produce_writes_signed_edges_with_separated_strength_and_significa
         (str(f_refute), EdgeSign.REFUTES),
     }
     assert result.dropped == ()
+    assert result.quarantined == ()  # every source is non-provisional + evidenced (V7)
     assert result.is_finding is False
+
+
+async def test_produce_quarantines_a_provisional_sourced_refutes(session: AsyncSession) -> None:
+    """V7 / §3.1, end to end on real AGE: a Fact whose source Proposition is provisional drives a
+    REFUTES; the gate drops the edge from the plan (no REFUTES persisted) and records it on the
+    producing Action's outputs.quarantined — a triage signal, never a silent skip."""
+    await bootstrap_session(session)
+    box = case_box("v7-quarantine", "1", "test", 0.8)
+    await _put_box(session, box)
+
+    actor = await _put_actor(session, box.id)
+    h = await _put_node(session, "Hypothesis", box.id, statement=_HYP, confidence=0.5)
+    f_refute = await _put_node(session, "Fact", box.id, statement=_REFUTE, confidence=0.9)
+    for n in (h, f_refute):
+        await _involves(session, node=n, entity=actor)
+    # The refuter's source proposition is provisional -> its REFUTES is a quarantined move.
+    await _evidence_proposition(session, fact=f_refute, provisional_reasons=["low_faithfulness"])
+    await session.commit()
+
+    judge = EdgeJudge(_ScriptedLLM({_REFUTE: JudgedSign.REFUTES}), n_samples=3)
+    result = await EdgeProducer(judge).produce(session)
+
+    # No REFUTES edge persisted.
+    assert await _edges_into(session, h, "REFUTES") == []
+    assert result.edges == ()
+    # The drop is surfaced on the result and recorded on the producing Action.
+    (q,) = result.quarantined
+    assert q.evidence == str(f_refute) and q.sign is EdgeSign.REFUTES
+    assert q.reasons == ("low_faithfulness",)
+    act = await session.execute(
+        text(
+            "SELECT outputs FROM actions WHERE actor = 'edge-judge' "
+            "AND inputs->>'hypothesis' = :hid"
+        ),
+        {"hid": str(h)},
+    )
+    quarantined = act.one().outputs["quarantined"]
+    assert quarantined == [
+        {
+            "evidence": str(f_refute),
+            "sign": "refutes",
+            "reasons": ["low_faithfulness"],
+            "stakes": "high",
+        }
+    ]
+
+    # The QBAF adapter never sees the dropped attack: the hypothesis stays at its base.
+    adj = await QbafAdapter().evaluate(session)
+    verdict = next(v for v in adj.verdicts if v.id == str(h))
+    assert verdict.acceptability == pytest.approx(0.5)
