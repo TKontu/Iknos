@@ -541,41 +541,25 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
 
 ### From the 2026-06-12 completed-scope residual review *(findings record in `archive/review_2026-06-12_completed_scope_residuals.md`)*
 
-- [ ] **G1.25 — tie the verify-stage identity to the extraction generation (G1.22
-      residual, finding 3) + docstring sync (finding 9).** The verify identity is read
-      from the span's **newest verify `Action`** (`core/proposition.py::
-      _span_verify_identity`, ~:1007–1044), but Actions are append-only and survive
-      `_purge_span_propositions` — so the identity can describe a *previous extraction
-      generation*. Reproduction: run 1 verifies cleanly under sig S → run 2 cascades
-      re-extraction with the verifier **off** (new propositions land
-      `UNASSESSED_FAITHFULNESS`, no verify `Action`) → run 3 re-enables the same
-      verifier S: `_span_verify_identity` returns run 1's S, `S == _verify_sig()`, and
-      `backfill_verification` skips the span (`~:1072`) — the run-2 propositions are
-      never verified, stuck `UNASSESSED_FAITHFULNESS` as long as the verifier identity
-      stays S. Second variant (no verifier toggle): a G1.7b replay from a source with
-      `source_verify_sig=None` resets faithfulness to unassessed and records no
-      `reused_verify_sig`, but the span's old clean verify `Action` still wins.
-      Failure direction is conservative (stuck provisional, never falsely trusted),
-      but it silently defeats the G1.22 promise that "backfill later completes their
-      faithfulness." **Fix:** make the identity generation-aware — e.g. a verify
-      `Action` counts only if it is **newer than the span's newest extract/replay
-      `Action`**, or only if its recorded inputs reference the *current* proposition
-      node ids; pick one, record why. **Tests:** the missing case — a verify `Action`
-      that predates a purge (both variants above); the existing
-      `test_reverify_under_same_verifier_is_a_noop` must stay green (a genuinely
-      current identity still short-circuits). **Same PR, docstring sync** (stale
-      claims that the verifier signature is in the extraction key — G1.22 removed
-      it): `proposition.py:148-149` (`StaleExtractionError`), `verify.py:58-60`
-      (`VERIFY_SCHEMA_VERSION` comment), `verify.py:123-124` (`prompt_sha`),
-      `reuse.py:15-19` (actively contradicts the shipped `source_verify_sig`
-      mechanism). And document the **decided G1.24 trade-off** honestly where it
-      bites: `reuse.py:4-5` still advertises cross-document reuse ("boilerplate
-      shared across documents, or a reference corpus overlapping a case file"), but
-      context-span ids are document-namespaced `uuid5`, so any span with a non-empty
-      context window never reuses across documents — only first/single-span documents
-      do. State that at the key-construction site (`proposition.py:~1230`) and in the
-      `reuse.py` module docstring; the trade-off itself stands (deterministic on
-      ingest identity, not textual coincidence — re-litigating it is a §6.1 cost
-      decision, not this task). *(Noted, no task: the verifier **sampling** regime is
+- [x] **G1.25 — tie the verify-stage identity to the extraction generation (G1.22
+      residual, finding 3) + docstring sync (finding 9)** *(shipped)*. Fix: `_span_verify_identity`
+      is now **generation-aware** — a verify `Action`'s recorded `propositions` must intersect the
+      span's *current* proposition node ids (`_span_proposition_ids`); since a cascade re-extract /
+      replay mints fresh ids, a verify `Action` for a purged generation no longer vouches for the
+      new one. Chose node-identity over a timestamp comparison: it encodes the invariant directly
+      and is immune to same-transaction timestamp ties between an extract `Action` and its inline
+      verify `Action`. The `reused_verify_sig` path is left as-is (it lives on the *newest*
+      extract/replay `Action`, which defines the current generation, so it can't be stale). Test:
+      `test_stale_verify_action_does_not_skip_backfill_after_reextract` (run1 verify→run2
+      re-extract-verifier-off→run3 re-enable: the run-2 proposition gets backfilled, not skipped);
+      `test_reverify_under_same_verifier_is_a_noop` stays green (a current identity still
+      short-circuits). Docstring sync (G1.22 removed the verifier from the extraction key):
+      `StaleExtractionError`, `verify.py` `VERIFY_SCHEMA_VERSION`/`prompt_sha`, `reuse.py` module
+      docstring. G1.24 trade-off documented honestly at the key-construction site and in `reuse.py`
+      (span ids are `uuid5(document_id, …)`, so a non-empty context window never reuses
+      cross-document — only empty-context first/single spans do). *(Both fix variants — re-extract
+      and replay-from-unverified-source — reduce to the same node-id staleness; the test covers the
+      re-extract variant.)*
+      *(Noted, no task: the verifier **sampling** regime is
       not part of `_verify_sig` — as specced, pre-existing, muted by the
       temperature-0 default; add it the next time the sig identity is touched.)*

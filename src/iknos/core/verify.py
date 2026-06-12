@@ -56,8 +56,9 @@ VERIFY_SCHEMA = VerifyVerdict.model_json_schema()
 # carries prompt_sha/schema_sha (Verifier.prompt_sha/schema_sha), so a reworded SYSTEM_PROMPT or
 # changed VERIFY_SCHEMA re-derives faithfulness without a bump here; keep bumping it for a
 # deliberate "verifier contract changed" marker (e.g. a user-template reword the prompt_sha does
-# not cover). Folded into the extraction cache key (G1.7) via the verifier signature. Mirrors
-# core/ingest.py::SEGMENT_SCHEMA_VERSION.
+# not cover). Part of the verify-stage identity (``proposition.py::_verify_sig``) — its own
+# idempotency key since G1.22, *not* the extraction cache key (a verifier change drives
+# verify-backfill, never re-extraction). Mirrors core/ingest.py::SEGMENT_SCHEMA_VERSION.
 VERIFY_SCHEMA_VERSION = 1
 
 
@@ -120,8 +121,8 @@ class Verifier:
         ]
 
     def prompt_sha(self) -> str:
-        """SHA-256 of the verifier's instruction prompt (G1.15) — folded into the extractor's
-        cache key via the verifier signature.
+        """SHA-256 of the verifier's instruction prompt (G1.15) — part of the verify-stage identity
+        (``proposition.py::_verify_sig``), its own key since G1.22 (not the extraction cache key).
 
         Hashes ``SYSTEM_PROMPT``, where every grading instruction (and the interpolated enum
         vocabulary) lives. The user message (:meth:`build_messages`) is pure field interpolation of

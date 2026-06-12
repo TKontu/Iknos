@@ -146,9 +146,10 @@ class StaleExtractionError(Exception):
     """A span was re-run under a different extraction pipeline than its prior run (G1.7).
 
     The idempotency key is ``(span_id, content_hash)``, where the hash covers the extractor
-    model, prompt/schema version, sampling regime, verifier signature and context (core/cache.py).
+    model, prompt/schema version, sampling regime, and context (its text + the ordered context
+    span ids) — **not** the verifier, which keys its own stage since G1.22 (core/cache.py).
     An identical re-run is a true no-op; a span whose stored hash differs from the current one
-    means the model/prompt/regime/verifier changed since it was extracted. With
+    means the model/prompt/regime/context changed since it was extracted. With
     ``cascade_reextract=True`` (the G1.7r default) such a span is **re-extracted** — its
     superseded propositions purged first; this error is raised only when cascade is **disabled**
     (the conservative refuse-to-overwrite mode) — mirrors
@@ -1004,18 +1005,50 @@ class Propositionizer:
             "schema_sha": v.schema_sha(),
         }
 
+    async def _span_proposition_ids(self, session: AsyncSession, span_id: uuid.UUID) -> set[str]:
+        """The ids of the propositions **currently** on a span — its current extraction generation.
+
+        A cascade re-extraction (G1.7r) / replay purges the old propositions and writes a fresh set
+        with new ids, so this set *is* the generation marker :meth:`_span_verify_identity` uses to
+        reject a stale verify ``Action`` from a previous generation (G1.25).
+        """
+        from iknos.db.age import cypher_map, execute_cypher, unquote_agtype
+
+        rows = await execute_cypher(
+            session,
+            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span_id)})}) "
+            "RETURN p.id",
+            returns="pid agtype",
+        )
+        return {unquote_agtype(r[0]) for r in rows}
+
     async def _span_verify_identity(
         self, session: AsyncSession, span_id: uuid.UUID
     ) -> dict[str, Any] | None:
-        """The verify-stage identity a span's current propositions were verified under, or ``None``.
+        """The verify-stage identity a span's **current** propositions were verified under, or None.
 
         Source of truth, newest-first: a ``verify`` ``Action`` for the span records the
         ``verify_sig`` it ran under (only when the whole span verified cleanly; a degraded run omits
         it so the span re-verifies); a G1.7b **replay** instead records ``reused_verify_sig`` on its
         extract ``Action`` (it copied an already-verified faithfulness without re-running). ``None``
-        means never verified under any identity — the verify-backfill trigger. Compared to
-        :meth:`_verify_sig` to decide whether (re-)verification is owed (G1.22).
+        means the current generation was never verified under any identity — the verify-backfill
+        trigger. Compared to :meth:`_verify_sig` to decide if re-verification is owed (G1.22).
+
+        **Generation-aware (G1.25).** ``Action``s are append-only and survive a cascade purge
+        (:meth:`_purge_span_propositions`), so a verify ``Action`` can describe a *previous*
+        extraction generation. It counts only if it verified the propositions that **currently**
+        exist — its
+        recorded ``propositions`` must intersect :meth:`_span_proposition_ids`. Because a
+        re-extraction mints fresh ids, this is all-or-nothing per generation: a verify ``Action``
+        whose ids are all gone verified a purged generation and must not vouch for the new one (the
+        bug was a re-extract-with-verifier-off span staying ``UNASSESSED_FAITHFULNESS`` forever
+        because run 1's clean verify ``Action`` kept matching). Node identity, not a timestamp
+        comparison, because it encodes the invariant directly and is immune to same-transaction
+        timestamp ties between an extract ``Action`` and its inline verify ``Action``. The
+        ``reused_verify_sig`` path needs no such guard: it lives on the **newest** extract/replay
+        ``Action``, which *defines* the current generation, so it can never be stale.
         """
+        current_ids = await self._span_proposition_ids(session, span_id)
         # Select the whole ``inputs`` jsonb column (decodes to a Python dict) rather than an
         # ``inputs->'verify_sig'`` sub-expression, whose driver typing is unspecified — the same
         # discipline as ``reuse.find_reusable_extraction``.
@@ -1027,7 +1060,12 @@ class Propositionizer:
             {"sid": str(span_id)},
         )
         verify_inputs = verify_row.scalar_one_or_none()
-        if verify_inputs is not None and verify_inputs.get("verify_sig") is not None:
+        if (
+            verify_inputs is not None
+            and verify_inputs.get("verify_sig") is not None
+            # G1.25: only if this verify Action covers a *current* proposition (not a purged one).
+            and current_ids.intersection(verify_inputs.get("propositions", []))
+        ):
             verified: dict[str, Any] = verify_inputs["verify_sig"]
             return verified
         extract_row = await session.execute(
@@ -1226,7 +1264,11 @@ class Propositionizer:
             target_text=span_text(raw_text, spans[index]),
             context_text=context_text,
             # G1.24: which spans (ordered) front the window, so a re-segmentation that changes the
-            # K-span context set re-keys even when the rendered text looks similar.
+            # K-span context set re-keys even when the rendered text looks similar. Trade-off
+            # (decided): span ids are uuid5(document_id, …) (ingest.span_id_for), so a non-empty
+            # context window makes the hash document-specific — a span with context never reuses
+            # (G1.7b) across documents, only first/single-span (empty-context) spans do. The price
+            # of keying on ingest identity, not textual coincidence; see core/reuse.py.
             context_span_ids=[str(s.id) for s in context_spans],
             model=self.llm.model,
             schema_version=EXTRACT_SCHEMA_VERSION,
