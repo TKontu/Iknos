@@ -15,9 +15,14 @@ revision on the composed loop, so it does not start until:
 - the safety lockdown (R8 → R9 → V7 → V8, `todo_phase_4_*.md`) is merged;
 - **W1** (composed-loop orchestrator) and **W2** (synthetic §8 end-to-end fixture)
   are green — Phase 5 must not be the first caller of a loop that has never run;
-- **C3 has run** with the Phase-5 query shapes (the W9 amendment in
-  `todo_trials.md`: edge-property filters and supersession-rate writes have no
-  index path today);
+- **C3 has run** (2026-06-12, `todo_trials.md` Trial C3 Result;
+  `docs/trials/c3_age_density_benchmark.md`) — **STAY single-engine** confirmed; the
+  Phase-5 query shapes behave exactly as the W9 amendment predicted: edge-property
+  filters and supersession-rate writes have **no index path** (the bulk supersession
+  update measured ~1.3 s median vs sub-2 ms for indexed lookups). **Phase-5 must add an
+  edge-property GIN on `SAME_AS.properties` (or a btree on extracted `state`) before
+  bitemporal supersession runs at reference-base scale** — fold into the supersession
+  work below;
 - **W7** (dual-write transaction discipline, `todo.md` *Maintenance backlog*) has
   landed — supersession multiplies multi-statement writes and inherits the
   orphaned-`Action` hazard.
