@@ -30,7 +30,7 @@ to ``json.dumps`` and persist as ``'Routing.FACT'``.)
 """
 
 import json
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Collection, Iterable
 from enum import StrEnum
 from typing import Any
 
@@ -274,7 +274,35 @@ def faithfulness_from_verdict(
     return score
 
 
-def combine_faithfulness(verify: float, agreement: float, parse_quality: float = 1.0) -> float:
+def calibrate_agreement(agreement: float) -> float:
+    """Calibrate raw multi-sample agreement before it folds into faithfulness (§3.1, G1.20).
+
+    Raw cross-sample agreement is a *coarse* estimator — at N=3 it takes only the values
+    ``{0, ⅓, ⅔, 1}``, and a small-N proportion over-states confidence at the extremes — so §3.1
+    calls for a mild concave / Wilson-style map that pulls agreement toward the conservative side
+    before it multiplies into faithfulness. This ships as the **identity** until Trial A3 fits the
+    per-model curve: the seam lands now so that ``PROP_AGREEMENT_THRESHOLD`` is calibrated (Trial
+    A5) against the *final* code path rather than one that later changes shape — and while the curve
+    is identity, behavior is byte-identical to pre-G1.20.
+
+    Contract for a fitted curve: a map ``[0, 1] → [0, 1]`` that is **conservative**
+    (``f(a) <= a`` — calibration may only *lower* confidence, never inflate it) and monotonic
+    non-decreasing. The **raw** agreement stays the persisted value (``Proposition.agreement``);
+    calibration happens only here, at combine time, so refitting the curve never requires rewriting
+    stored data.
+    """
+    if not 0.0 <= agreement <= 1.0:
+        raise ValueError(f"agreement must be in [0, 1], got {agreement!r}")
+    return agreement
+
+
+def combine_faithfulness(
+    verify: float,
+    agreement: float,
+    parse_quality: float = 1.0,
+    *,
+    agreement_curve: Callable[[float], float] = calibrate_agreement,
+) -> float:
     """Combine the **three** independent faithfulness signals into the final score ∈ [0, 1]
     (§3.1: "confidence comes from consistency *and* verification"; §1: "parse quality =
     faithfulness input").
@@ -299,10 +327,14 @@ def combine_faithfulness(verify: float, agreement: float, parse_quality: float =
     the verify component for the common clean-text path. All inputs are defined on [0, 1]; an
     out-of-range value is a caller bug, surfaced rather than silently clamped.
 
-    **Calibration seam:** the raw product is the pre-calibration default. Trial A3 fits a
-    per-model consistency-vs-correctness map (and the parse-quality factor's per-quality penalty
-    is its own calibration target, :func:`~iknos.core.parse.parse_quality_factor`) that swaps in
-    here without a contract change.
+    **Calibration seam (G1.20):** the multi-sample ``agreement`` is mapped through
+    ``agreement_curve`` (default :func:`calibrate_agreement`, identity) *before* it multiplies in,
+    so Trial A3 can swap a per-model concave / Wilson curve here without touching this contract or
+    the persisted raw agreement — and ``PROP_AGREEMENT_THRESHOLD`` (Trial A5) is fit against this
+    final path. A fitted curve is conservative (``f(a) <= a``), so a non-identity curve can only
+    move faithfulness *down*. The parse-quality factor's per-quality penalty is its own calibration
+    target (:func:`~iknos.core.parse.parse_quality_factor`). The raw product remains the
+    pre-calibration default while the curve is identity.
     """
     if not 0.0 <= verify <= 1.0:
         raise ValueError(f"verify must be in [0, 1], got {verify!r}")
@@ -310,4 +342,9 @@ def combine_faithfulness(verify: float, agreement: float, parse_quality: float =
         raise ValueError(f"agreement must be in [0, 1], got {agreement!r}")
     if not 0.0 <= parse_quality <= 1.0:
         raise ValueError(f"parse_quality must be in [0, 1], got {parse_quality!r}")
-    return verify * agreement * parse_quality
+    calibrated = agreement_curve(agreement)
+    if not 0.0 <= calibrated <= 1.0:
+        raise ValueError(
+            f"agreement_curve must map into [0, 1], got {calibrated!r} for agreement {agreement!r}"
+        )
+    return verify * calibrated * parse_quality

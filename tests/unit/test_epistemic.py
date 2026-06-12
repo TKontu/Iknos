@@ -17,6 +17,7 @@ from iknos.types.epistemic import (
     Polarity,
     ProvisionalReason,
     Routing,
+    calibrate_agreement,
     combine_faithfulness,
     decode_provisional_reasons,
     faithfulness_from_verdict,
@@ -227,6 +228,47 @@ def test_combine_bad_parse_quality_cannot_be_rescued() -> None:
     # verifier passing it — parse quality is an independent defect (cf. agreement instability).
     score = combine_faithfulness(1.0, 1.0, 0.4)
     assert provisional_reasons_for(score) == {_LOW}
+
+
+# --- agreement calibration seam (G1.20): identity now, per-model curve at Trial A3 ---
+
+
+def test_calibrate_agreement_is_identity() -> None:
+    # Ships identity until Trial A3 fits the per-model curve — every raw value maps to itself,
+    # so combine_faithfulness is byte-identical to pre-G1.20.
+    for a in (0.0, 1 / 3, 2 / 3, 1.0):
+        assert calibrate_agreement(a) == pytest.approx(a)
+
+
+@pytest.mark.parametrize("bad", [-0.01, 1.01, 2.0])
+def test_calibrate_agreement_rejects_out_of_range(bad: float) -> None:
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        calibrate_agreement(bad)
+
+
+def test_combine_default_curve_is_byte_identical_to_raw_product() -> None:
+    # The default agreement_curve (identity) leaves combine exactly at the raw product — the
+    # seam adds no behavior change until a curve is fitted.
+    for verify, agreement, pq in [(1.0, 1 / 3, 1.0), (0.7, 2 / 3, 0.6), (1.0, 1.0, 1.0)]:
+        assert combine_faithfulness(verify, agreement, pq) == pytest.approx(verify * agreement * pq)
+
+
+def test_combine_non_identity_curve_moves_faithfulness_conservatively() -> None:
+    # A fitted (conservative) curve can only pull faithfulness *down* vs. the raw product. A
+    # square map is concave-down on [0, 1] (x² ≤ x), a stand-in for the Wilson-style shrink.
+    conservative = combine_faithfulness(1.0, 0.5, agreement_curve=lambda a: a * a)
+    assert conservative == pytest.approx(0.25)  # 1.0 × 0.5² × 1.0
+    assert conservative < combine_faithfulness(1.0, 0.5)  # strictly below the identity path
+    # The curve is applied at combine time only — it does not mutate the agreement it was handed.
+    raw = 0.5
+    combine_faithfulness(1.0, raw, agreement_curve=lambda a: a * a)
+    assert raw == 0.5
+
+
+def test_combine_rejects_a_curve_that_escapes_unit_interval() -> None:
+    # A misfit curve that returns out-of-range is a bug surfaced loud, never silently clamped.
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        combine_faithfulness(1.0, 0.5, agreement_curve=lambda a: a + 1.0)
 
 
 # --- enum value strings are exactly the spec strings (guards silent drift) ---
