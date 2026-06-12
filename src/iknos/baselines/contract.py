@@ -121,16 +121,33 @@ def load_questions(path: Path) -> list[BaselineQuestion]:
 # --- TOML emission (a tiny, dependency-free writer; we only emit strings/floats/lists) ---
 
 
+# TOML basic-string escapes. The short forms are the ones TOML names; every *other* control
+# character (U+0000–U+001F and U+007F) must still be escaped as ``\uXXXX`` or `tomllib` rejects
+# the file — an LLM answer containing e.g. a form feed (U+000C) or a NUL would otherwise break
+# V3's parse of the whole answers file.
+_TOML_SHORT_ESCAPES = {
+    "\\": "\\\\",
+    '"': '\\"',
+    "\b": "\\b",
+    "\t": "\\t",
+    "\n": "\\n",
+    "\f": "\\f",
+    "\r": "\\r",
+}
+
+
 def _toml_str(value: str) -> str:
-    """A TOML basic-string literal: escape backslash, quote, and control chars."""
-    escaped = (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\t", "\\t")
-        .replace("\r", "\\r")
-    )
-    return f'"{escaped}"'
+    """A TOML basic-string literal: escape backslash, quote, and **all** control characters."""
+    out: list[str] = []
+    for ch in value:
+        short = _TOML_SHORT_ESCAPES.get(ch)
+        if short is not None:
+            out.append(short)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
 
 
 def _toml_str_list(values: Iterable[str]) -> str:

@@ -2,7 +2,8 @@
 
 Drives the loop with a scripted LLM (a queue of step responses) and a fake retriever, so the
 control flow — multi-hop search, cumulative numbered pool, the answer stop, the malformed-call
-retry, and the forced final answer at the budget — is verified with no model and no DB.
+loud-unanswered (V12: no useless byte-identical retry), the call budget counted in LLM calls,
+and the forced final answer at the budget — is verified with no model and no DB.
 """
 
 from __future__ import annotations
@@ -40,8 +41,10 @@ class _ScriptedLLM:
     def __init__(self, responses: list[dict]) -> None:
         self._responses = list(responses)
         self.schemas: list[dict] = []
+        self.calls = 0
 
     async def guided_complete(self, messages, json_schema, sampling=None):  # type: ignore[no-untyped-def]
+        self.calls += 1
         self.schemas.append(json_schema)
         return self._responses.pop(0)
 
@@ -121,29 +124,32 @@ async def test_answer_on_first_step_does_not_search() -> None:
 
 
 @pytest.mark.asyncio
-async def test_malformed_call_retries_once_then_unanswered() -> None:
+async def test_malformed_call_is_unanswered_immediately_no_retry() -> None:
+    # V12: a malformed call is recorded unanswered loudly on the spot — no byte-identical retry
+    # (under the pinned greedy regime a retry would deterministically reproduce the same garbage
+    # and only burn budget). Exactly ONE LLM call is made (the malformed one).
     retriever = _MapRetriever({})
-    # Two malformed responses for the first step -> initial + one retry both fail -> unanswered.
-    llm = _ScriptedLLM([{"action": "search", "query": ""}, {"action": "search", "query": "  "}])
+    llm = _ScriptedLLM([{"action": "search", "query": ""}])  # one malformed response, no more
     result = await AgenticRagBaseline(retriever=retriever, llm=llm).answer(QUESTION)
     assert result.answer is None
     assert result.unanswered is not None
     assert "malformed" in result.unanswered.reason
+    assert llm.calls == 1  # no retry consumed a second call
 
 
 @pytest.mark.asyncio
-async def test_retry_recovers_from_one_malformed_call() -> None:
-    retriever = _MapRetriever({"good": [_chunk("c1", "found it")]})
-    llm = _ScriptedLLM(
-        [
-            {"action": "search", "query": ""},  # malformed
-            {"action": "search", "query": "good"},  # retry succeeds
-            {"action": "answer", "answer_text": "ok", "cited_chunks": [1], "confidence": 0.6},
-        ]
+async def test_budget_is_counted_in_llm_calls_not_iterations() -> None:
+    # V12 finding (c): the hard ceiling is max_search_steps decision calls + 1 forced answer.
+    retriever = _MapRetriever({"q": [_chunk("c1", "partial")]})
+    steps = [{"action": "search", "query": "q"} for _ in range(2)]
+    final = {"answer_text": "forced", "cited_chunks": [1], "confidence": 0.4}
+    llm = _ScriptedLLM([*steps, final])
+    result = await AgenticRagBaseline(retriever=retriever, llm=llm, max_search_steps=2).answer(
+        QUESTION
     )
-    result = await AgenticRagBaseline(retriever=retriever, llm=llm).answer(QUESTION)
     assert result.answer is not None
-    assert result.answer.cited_chunk_ids == ("c1",)
+    # 2 decision calls + 1 forced answer = 3 total, never more (no hidden per-step retries).
+    assert llm.calls == 3
 
 
 @pytest.mark.asyncio

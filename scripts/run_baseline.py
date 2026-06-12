@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import tomllib
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -69,6 +71,10 @@ async def _run_baseline(args: argparse.Namespace) -> AnswerFile:
     engine = create_async_engine(settings.database_url)
     session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     llm = LLMClient(model=args.llm_model)
+    # The sampling regime is pinned (greedy by default) and recorded in meta so a score is
+    # reproducible and attributable (V12): without this the baseline's confidences drifted run to
+    # run and the answers file did not say under what regime they were produced.
+    sampling: dict[str, Any] = {"temperature": args.temperature}
     answers: list[BaselineAnswer] = []
     unanswered: list[UnansweredQuestion] = []
     traces: list[QuestionTrace] = []
@@ -82,6 +88,7 @@ async def _run_baseline(args: argparse.Namespace) -> AnswerFile:
             top_k=args.top_k,
             chunk_tokens=args.chunk_tokens,
             overlap_tokens=args.overlap_tokens,
+            sampling=sampling,
         )
         for doc_id, text in documents:
             n = await rig.ingest_document(doc_id, text)
@@ -92,15 +99,23 @@ async def _run_baseline(args: argparse.Namespace) -> AnswerFile:
                 answers.append(await rig.answer(q))
                 logger.info("answered %s", q.id)
         else:  # "agentic" — the multi-hop loop over the same retriever
-            agentic = AgenticRagBaseline(retriever=rig, llm=llm, max_search_steps=args.max_steps)
+            agentic = AgenticRagBaseline(
+                retriever=rig, llm=llm, max_search_steps=args.max_steps, sampling=sampling
+            )
             for q in questions:
                 result = await agentic.answer(q)
                 traces.append(result.trace)
                 if result.answer is not None:
                     answers.append(result.answer)
+                    logger.info("answered %s (%d queries)", q.id, len(result.trace.queries))
                 if result.unanswered is not None:
                     unanswered.append(result.unanswered)
-                logger.info("answered %s (%d queries)", q.id, len(result.trace.queries))
+                    logger.warning(
+                        "UNANSWERED %s (%d queries): %s",
+                        q.id,
+                        len(result.trace.queries),
+                        result.unanswered.reason,
+                    )
     finally:
         substrate.close()
         await engine.dispose()
@@ -113,6 +128,7 @@ async def _run_baseline(args: argparse.Namespace) -> AnswerFile:
         "top_k": str(args.top_k),
         "chunk_tokens": str(args.chunk_tokens),
         "overlap_tokens": str(args.overlap_tokens),
+        "sampling": json.dumps(sampling, sort_keys=True),
     }
     if args.baseline == "agentic":
         meta["max_steps"] = str(args.max_steps)
@@ -132,6 +148,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=8, help="Chunks retrieved per question.")
     parser.add_argument("--chunk-tokens", type=int, default=512)
     parser.add_argument("--overlap-tokens", type=int, default=64)
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="LLM sampling temperature (default 0.0 = greedy, pinned for reproducibility).",
+    )
     parser.add_argument(
         "--max-steps", type=int, default=6, help="Agentic: max search steps before a forced answer."
     )

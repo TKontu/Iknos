@@ -90,3 +90,12 @@ def test_answer_file_escapes_special_characters(tmp_path: Path) -> None:
     path = tmp_path / "a.toml"
     AnswerFile(meta={}, answers=[answer]).write(path)
     assert load_answers(path).answers[0].answer_text == answer.answer_text
+
+
+def test_answer_file_escapes_all_control_characters(tmp_path: Path) -> None:
+    # V12 nit: a form feed / NUL / vertical tab in an LLM answer must not break V3's tomllib parse.
+    answer = BaselineAnswer("q", "form\x0cfeed nul\x00 vtab\x0b del\x7f bell\x07", (), 0.5)
+    path = tmp_path / "a.toml"
+    AnswerFile(meta={}, answers=[answer]).write(path)
+    # Round-trips through tomllib (would raise on a raw control char) with the text preserved.
+    assert load_answers(path).answers[0].answer_text == answer.answer_text

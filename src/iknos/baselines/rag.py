@@ -23,7 +23,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,12 @@ from iknos.baselines.contract import BaselineAnswer, BaselineQuestion
 from iknos.db.orm import BaselineChunk
 
 DEFAULT_TOP_K = 8
+
+# Pin greedy decoding by default (V12). Every other LLM consumer in the project pins
+# ``{"temperature": 0.0}`` (e.g. ``core/extract.py``); leaving the baselines at the server's
+# default made E1 answers and confidences vary run to run — an unfair, unreproducible instrument.
+# The regime is a constructor/CLI knob and is recorded in the answers-file ``meta``.
+DEFAULT_SAMPLING: dict[str, Any] = {"temperature": 0.0}
 
 # A fixed namespace so a corpus document id (e.g. "d01") maps to a stable baseline document
 # UUID — re-ingesting the same document is idempotent and citations are reproducible across runs.
@@ -184,7 +190,14 @@ class RagBaseline:
         self._top_k = top_k
         self._chunk_tokens = chunk_tokens
         self._overlap_tokens = overlap_tokens
-        self._sampling = sampling
+        # Pin greedy by default (V12) so the rung is reproducible; an explicit dict overrides.
+        self._sampling = DEFAULT_SAMPLING if sampling is None else sampling
+        # The corpus this instance ingested — retrieval is scoped to it (V12). Two rigs over two
+        # corpora in one DB must not retrieve each other's chunks (only filtering on `model` let
+        # any previously-ingested corpus contaminate retrieval and get cited). Tracked in memory
+        # rather than via a `corpus` column + migration: the E1 flow ingests then retrieves on one
+        # instance, so the ingested-document set *is* the run's corpus and needs no schema change.
+        self._ingested_doc_uuids: set[uuid.UUID] = set()
 
     def chunk(self, document_id: str, text: str) -> list[Chunk]:
         """Chunk a document with this rig's fixed-size policy (exposed for the runner/tests)."""
@@ -200,13 +213,26 @@ class RagBaseline:
         """Chunk, embed, and upsert one document's chunks. Returns the number of chunks.
 
         Idempotent on ``(document_id, chunk_index, model)`` — re-ingesting overwrites rather than
-        duplicating — so a re-run after a corpus edit is safe.
+        duplicating — so a re-run after a corpus edit is safe **including an edit that shrinks the
+        document**: the upsert refreshes chunks ``0..n-1`` and a follow-up delete removes any tail
+        chunks (index ``>= n``) a previous, longer version left behind, which retrieval would
+        otherwise still surface and cite. The document is also registered for retrieval scoping.
         """
         chunks = self.chunk(document_id, text)
+        doc_uuid = baseline_document_uuid(document_id)
+        self._ingested_doc_uuids.add(doc_uuid)
         if not chunks:
+            # An emptied document: drop any chunks a prior, non-empty version left behind.
+            async with self._session_factory() as session:
+                await session.execute(
+                    delete(BaselineChunk).where(
+                        BaselineChunk.document_id == doc_uuid,
+                        BaselineChunk.model == self._model_name,
+                    )
+                )
+                await session.commit()
             return 0
         vectors = self._embedder.embed_passages([c.text for c in chunks])
-        doc_uuid = baseline_document_uuid(document_id)
         rows = [
             {
                 "document_id": doc_uuid,
@@ -231,11 +257,27 @@ class RagBaseline:
         )
         async with self._session_factory() as session:
             await session.execute(stmt)
+            # Remove tail chunks from a previously longer version of this document (same model) so a
+            # shrinking re-ingest cannot leave orphaned, still-retrievable evidence behind.
+            await session.execute(
+                delete(BaselineChunk).where(
+                    BaselineChunk.document_id == doc_uuid,
+                    BaselineChunk.model == self._model_name,
+                    BaselineChunk.chunk_index >= len(rows),
+                )
+            )
             await session.commit()
         return len(rows)
 
     async def retrieve(self, question: str) -> list[RetrievedChunk]:
-        """Top-k chunks by cosine distance to the question embedding (pgvector ``<=>``, HNSW)."""
+        """Top-k chunks by cosine distance to the question embedding (pgvector ``<=>``, HNSW).
+
+        Scoped to the documents this rig ingested (``model`` is only the G1.16 vector-space guard,
+        not a corpus boundary), so a second corpus ingested into the same ``baseline_chunks`` table
+        cannot contaminate this run's retrieval. With nothing ingested, retrieval is empty.
+        """
+        if not self._ingested_doc_uuids:
+            return []
         query_vec = self._embedder.embed_passages([question])[0]
         distance = BaselineChunk.embedding.cosine_distance(query_vec).label("distance")
         stmt = (
@@ -248,7 +290,10 @@ class RagBaseline:
                 BaselineChunk.text,
                 distance,
             )
-            .where(BaselineChunk.model == self._model_name)
+            .where(
+                BaselineChunk.model == self._model_name,
+                BaselineChunk.document_id.in_(self._ingested_doc_uuids),
+            )
             .order_by(distance)
             .limit(self._top_k)
         )
