@@ -139,6 +139,52 @@ async def test_ingest_document_records_parse_action_and_null_layout(session: Asy
         assert await resolve_span_text(session, doc_id, s.start, s.end) == raw[s.start : s.end]
 
 
+async def test_ingest_records_stage_metrics_on_actions(session: AsyncSession) -> None:
+    """R12: the parse + segment Actions carry their metrics payloads on the persisted row.
+
+    Nothing else asserts the §6.1 observability metrics actually land where they are read. A span
+    that pools to ``None`` (no token vector) exercises ``n_skipped_whitespace``, not only
+    ``n_spans``.
+    """
+    await bootstrap_session(session)
+    raw = "Real claim sentence.   "  # the trailing-whitespace span pools to None → skipped
+    doc_id = uuid.uuid4()
+    char_spans = [(0, 20), (20, len(raw))]
+
+    result = await ingest_document(
+        session,
+        doc_id,
+        raw,
+        _mock_substrate([_VEC, None]),  # second span has no token vector → skipped
+        _mock_segmenter(char_spans),
+    )
+    await session.commit()
+    assert len(result.spans) == 1 and result.skipped == 1
+
+    # Parse Action: the entry point timed the parse, so duration_ms is present.
+    parse_dur = await session.execute(
+        text(
+            "SELECT metrics->>'duration_ms' FROM actions "
+            "WHERE actor='parser' AND inputs->>'document_id'=:d"
+        ),
+        {"d": str(doc_id)},
+    )
+    assert int(parse_dur.scalar_one()) >= 0
+
+    # Segment Action: the full payload (counts + duration) lands on the row.
+    seg = await session.execute(
+        text(
+            "SELECT metrics->>'n_spans', metrics->>'n_skipped_whitespace', metrics->>'duration_ms' "
+            "FROM actions WHERE actor='segmenter' AND inputs->>'document_id'=:d"
+        ),
+        {"d": str(doc_id)},
+    )
+    n_spans, n_skipped, dur = seg.one()
+    assert int(n_spans) == 1
+    assert int(n_skipped) == 1
+    assert int(dur) >= 0
+
+
 async def test_ingest_document_is_idempotent(session: AsyncSession) -> None:
     await bootstrap_session(session)
     raw = "Alpha statement here. Beta statement here."
