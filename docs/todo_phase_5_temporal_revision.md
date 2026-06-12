@@ -19,7 +19,9 @@ revision on the composed loop, so it does not start until:
   `docs/trials/c3_age_density_benchmark.md`) — **STAY single-engine** confirmed; the
   Phase-5 query shapes behave exactly as the W9 amendment predicted: edge-property
   filters and supersession-rate writes have **no index path** (the bulk supersession
-  update measured ~1.3 s median vs sub-2 ms for indexed lookups). **Phase-5 must add an
+  update is unindexed — ~10²–10³× the sub-2 ms indexed lookups; the originally quoted
+  ~1.3 s median was a contaminated measurement, since corrected in the harness and
+  **pending re-measurement** — the STAY decision is unaffected). **Phase-5 must add an
   edge-property GIN on `SAME_AS.properties` (or a btree on extracted `state`) before
   bitemporal supersession runs at reference-base scale** — fold into the supersession
   work below;
