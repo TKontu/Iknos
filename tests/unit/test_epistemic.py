@@ -24,6 +24,7 @@ from iknos.types.epistemic import (
     legacy_provisional,
     merge_provisional_reasons,
     provisional_reasons_for,
+    reassess_faithfulness_reasons,
     route_for,
 )
 
@@ -94,6 +95,34 @@ def test_merge_provisional_reasons_unions_dedupes_and_sorts() -> None:
 
 def test_merge_provisional_reasons_empty_is_empty() -> None:
     assert merge_provisional_reasons([], []) == []
+
+
+# --- reassessing the faithfulness leg on verify-backfill (G1.22): replace, don't accumulate ---
+
+
+def test_reassess_replaces_unassessed_with_assessed_result() -> None:
+    # The verify-backfill case: a degraded atom carried UNASSESSED; once verified faithful, the
+    # faithfulness leg is *cleared*, not OR-folded into "both" (UNASSESSED must not survive).
+    assert reassess_faithfulness_reasons(["unassessed_faithfulness"], 0.9) == []
+    # Verified low → UNASSESSED replaced by LOW_FAITHFULNESS.
+    assert reassess_faithfulness_reasons(["unassessed_faithfulness"], 0.2) == ["low_faithfulness"]
+
+
+def test_reassess_preserves_non_faithfulness_reasons() -> None:
+    # A G1.14 twin's POLARITY_UNSTABLE is an independent axis — it survives re-assessment, while
+    # the faithfulness leg flips from UNASSESSED to the verified result.
+    assert reassess_faithfulness_reasons(["polarity_unstable", "unassessed_faithfulness"], 0.9) == [
+        "polarity_unstable"
+    ]
+    assert reassess_faithfulness_reasons(["polarity_unstable", "low_faithfulness"], 0.2) == [
+        "low_faithfulness",
+        "polarity_unstable",
+    ]
+
+
+def test_reassess_null_faithfulness_is_unassessed_again() -> None:
+    # Idempotent on the degraded direction: re-assessing with a still-null score keeps UNASSESSED.
+    assert reassess_faithfulness_reasons([], None) == ["unassessed_faithfulness"]
 
 
 @pytest.mark.parametrize(

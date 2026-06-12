@@ -476,9 +476,20 @@ async def test_single_sample_leaves_agreement_null() -> None:
 def test_multi_sample_rejects_greedy_sampling() -> None:
     llm, substrate = MagicMock(), MagicMock()
     llm.model = "m"
-    # Default sampling is greedy (temperature 0.0) — N identical samples carry no signal.
+    llm.guided_complete = AsyncMock()
+    # Default sampling is greedy (temperature 0.0) — N identical samples carry no signal (G1.23).
     with pytest.raises(ValueError, match="temperature>0"):
         Propositionizer(llm, substrate, n_samples=3)
+    # The guard trips at construction, before any inference.
+    assert llm.guided_complete.await_count == 0
+
+
+def test_single_sample_greedy_is_allowed() -> None:
+    # n=1 (the single-pass default) has no agreement signal to fake, so temperature 0 is fine.
+    llm, substrate = MagicMock(), MagicMock()
+    llm.model = "m"
+    p = Propositionizer(llm, substrate, n_samples=1)  # does not raise
+    assert p.n_samples == 1
 
 
 def test_rejects_nonpositive_samples() -> None:

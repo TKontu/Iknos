@@ -487,54 +487,54 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
       `test_multi_sample_without_verifier_sets_agreement_only`,
       `test_verifier_absent_leaves_faithfulness_null`. (V7 edge enforcement now holds these atoms
       back from high-stakes moves; G1.22 backfill later completes their faithfulness.)
-- [ ] **G1.22 — verification as its own cached stage (the fix D2 needs to work).**
-      §3.1 promises "when the verifier is later enabled, faithfulness completes from
-      persisted agreement *without re-sampling*" — but the verifier signature is
-      currently folded into the **extraction** content hash (G1.15), so toggling or
-      upgrading the verifier trips `StaleExtractionError` → a full re-extraction, not a
-      cheap completion. Fix: **remove the verifier signature from the extraction key**
-      (the extractor's output does not depend on the verifier) and key verification as
-      its own idempotent stage — per proposition, `(proposition_id, verify_sig)` over
-      the existing verify `Action`s — with a **verify-backfill** entrypoint that runs
-      the verifier over already-extracted propositions, computes
-      `combine_faithfulness(verify, stored agreement)`, updates
-      `faithfulness`/`provisional`(+reasons) in place, and records a verify `Action`
-      per proposition. Consequences to handle: one-time loud re-key on deploy (the
-      extraction hash changes — same class as G1.15's first deploy, correct and loud);
-      G1.7b replay copies faithfulness only when the *verify* stage identity matches,
-      else replays the extraction and queues the spans for verify-backfill.
-      **Interaction with shipped G1.7r (#68):** cascade re-extraction currently
-      fires on *any* pipeline-identity change including the verifier sig — after
-      this split, a verifier-only change must trigger **verify-backfill, not
-      cascade re-extraction** (no propositions are purged for a verifier change);
-      update G1.7r's trigger condition accordingly. Tests:
-      verifier off→on completes faithfulness with **zero** extractor LLM calls and
-      **zero** purged propositions; verifier upgrade re-verifies without
-      re-extracting; extraction cache hit-rate unaffected by verifier config.
+- [x] **G1.22 — verification as its own cached stage (the fix D2 needs to work)** *(shipped,
+      with G1.24 in one re-key)*. The verifier signature is **removed from the extraction key**
+      (`core/cache.py::extraction_content_hash` no longer takes `verifier`; the extractor's output
+      does not depend on it) and verification is keyed as its own per-span idempotent stage:
+      `Propositionizer._verify_sig()` is the `{model, schema_version, prompt_sha, schema_sha}`
+      identity, recorded on the verify `Action` (only when the whole span verified cleanly, so a
+      degraded run re-verifies), and `_span_verify_identity()` reads it back (falling through to a
+      replay's `reused_verify_sig`). A new **`backfill_verification()` entrypoint** (run at the tail
+      of `propositionize_document`, and callable standalone) re-verifies any span whose identity is
+      stale: it loads the existing propositions, runs the verifier, recomputes
+      `combine_faithfulness(verify, stored agreement)`, and rewrites `faithfulness`/`provisional`
+      (+reasons, via `reassess_faithfulness_reasons` — UNASSESSED → the assessed result) **in place**
+      (same node ids, zero extractor calls, zero purges). Consequences handled: one-time loud re-key
+      on deploy (same class as G1.15, correct and loud); **G1.7b replay copies faithfulness only when
+      the source's verify identity matches** the reusing verifier (else faithfulness is reset to
+      unassessed and the span is backfilled — `_build_replay_results` + `ReusableExtraction.
+      source_verify_sig`). **G1.7r interaction:** since the verifier left the extraction key, a
+      verifier-only change no longer changes the extraction hash, so it can no longer trigger cascade
+      re-extraction — it drives backfill; the cascade trigger is unchanged for genuine extractor
+      changes. Tests repinned/added: `test_toggling_verifier_backfills_without_reextraction` (was
+      `…cascade_reextracts`: now zero extractor calls + zero purges + a verify Action),
+      `test_reverify_under_same_verifier_is_a_noop`, `test_verifier_is_not_in_the_key`,
+      `test_context_span_ids_change_hash`, `reassess_faithfulness_reasons` unit coverage.
+      (G1.24 below landed in the **same** PR/re-key.)
 
 ### From the 2026-06-11 architecture assessment *(W-tasks; findings record in `archive/review_2026-06-11_planned_architecture_assessment.md`)*
 
-- [ ] **G1.23 (W5) — enforce nonzero sampling temperature when `n_samples > 1`.**
-      §3.1 is explicit: "Multi-sample also requires nonzero sampling temperature,
-      or N identical samples make agreement trivially perfect; **the configuration
-      must enforce this, not document it**." The shipped defaults are
-      `temperature: 0.0` (`core/proposition.py`, `core/extract.py`,
-      `core/verify.py`) with no guard — a multi-sample run today returns
-      agreement = 1.0 vacuously, silently inflating faithfulness. Add constructor
-      validation on the multi-sample extraction/verify paths: `n_samples > 1`
-      with `temperature == 0` raises at construction. **Exemption (by design):**
-      the G4.3 edge judge derives its sample diversity from the per-sample
-      permutation at temperature 0 — document the exemption where the guard
-      lives, so nobody "fixes" the judge. Tests: construction raises; `n=1, T=0`
-      passes; the guard trips with zero LLM calls.
-- [ ] **G1.24 (W6) — context span identity in the extraction cache key.** The key
-      folds the rendered `context_text` but not *which spans* produced it
-      (`core/cache.py`; context assembly in `core/proposition.py`): a
-      re-segmentation that changes the K-span context window can serve a stale
-      extraction — or thrash — on textually-similar context. Add the ordered
-      context `span_id`s to the extraction content hash so cache identity is
-      deterministic on ingest identity. One-time loud re-key on deploy (same
-      class as G1.15/G1.22 — correct and loud); **coordinate with G1.22 so the
-      key changes once, not twice**. Tests: same target span + changed context
-      span set ⇒ different key ⇒ re-extraction; unchanged ingest ⇒ byte-identical
-      key.
+- [x] **G1.23 (W5) — enforce nonzero sampling temperature when `n_samples > 1`** *(shipped)*.
+      §3.1: "Multi-sample also requires nonzero sampling temperature, or N identical samples make
+      agreement trivially perfect; **the configuration must enforce this, not document it**." The
+      rule is now a single source of truth — `consistency.require_sampling_diversity(n_samples,
+      sampling)` raises at construction when `n_samples > 1` and `temperature <= 0` (and `top_p`
+      cannot rescue it — nucleus sampling is moot once decoding is greedy at temperature 0, so the
+      pre-existing `top_p` escape hatch in the `Propositionizer` guard is closed). `Propositionizer`
+      calls it; a future multi-sample verify path reuses it via the `label` arg rather than
+      re-deriving the check (`core/extract.py`/`core/verify.py` are single-call, so there is no
+      multi-sample path to guard there yet). **Exemption (by design):** the G4.3 edge judge runs
+      `n_samples > 1` at temperature 0 on purpose — its diversity comes from a per-sample input
+      *permutation*, not temperature — so it deliberately does **not** call this guard; documented
+      in `require_sampling_diversity`'s docstring so nobody "fixes" the judge. Tests: construction
+      raises (greedy + `top_p` too) with **zero** LLM calls; `n=1, T=0` passes; `n>1, T>0` passes;
+      the `label` surfaces for the verify path.
+- [x] **G1.24 (W6) — context span identity in the extraction cache key** *(shipped with G1.22,
+      one re-key)*. `extraction_content_hash` now takes the **ordered** `context_span_ids` (the
+      spans `build_context` fronts the window with), so a re-segmentation that changes the K-span
+      context set re-keys even when the rendered `context_text` looks similar — cache identity is
+      deterministic on ingest identity, not textual coincidence. Landed in the *same* PR as G1.22
+      so the key changes **once**, not twice. Tests: `test_context_span_ids_change_hash`,
+      `test_context_span_id_order_changes_hash` (order matters — the window is a sequence);
+      `test_identical_text_different_span_both_materialize` still holds (single-span docs share the
+      empty context set).
