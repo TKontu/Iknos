@@ -55,8 +55,9 @@ One of the documents is a later correction that changes the picture. For each ex
 how believable it is **before** that correction and **after** it, using a simple four-step scale:
 `false`, `implausible`, `plausible`, `true`.
 
-- *Worked example A.* Early documents suggest the machine was overloaded, so "overload" is
-  `plausible` before. A later survey shows the load was normal, so after, "overload" is `false`.
+- *Worked example A.* Early documents suggest a pump seal had failed, so "seal failure" is
+  `plausible` before. A later inspection shows the seal was intact, so after, "seal failure" is
+  `false`.
 - *Worked example B.* An explanation that the evidence supports from the start and never
   contradicts stays `plausible` or `true` both before and after — record both columns even when
   they are the same.

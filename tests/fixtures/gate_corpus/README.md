@@ -70,7 +70,8 @@ verbatim anchor quote(s). The relational ones cross-reference each other (`pair`
 - **Dissimilar refuter #1** (`dissimilar-refuter-overload`, refutes **H4**): a routine duty
   reading (max 96% of nameplate torque, no excursions) that excludes overload **without using
   the words load / overload / rating** — the §5.1 case a similarity-only candidate funnel
-  would miss.
+  would miss. The surrounding survey text (the §3 heading, §6) is kept free of those words too,
+  so the dissimilarity holds at **chunk** granularity, not only for the anchor sentence (V13).
 - **Dissimilar refuter #2** (`dissimilar-refuter-counterfeit`, refutes **H3**): the metallurgy
   establishes the steel is correct and in-spec, excluding a counterfeit/defective part
   **without any counterfeit/genuine/non-OEM vocabulary**.

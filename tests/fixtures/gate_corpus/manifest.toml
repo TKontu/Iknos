@@ -280,7 +280,7 @@ document = "d07"
 refutes = "H3"
 quotes = [
   "The inner-ring material is a high-carbon chromium bearing steel, correctly through-hardened and tempered to a hardness and microstructure consistent with the drawing specification for this class of bearing.",
-  "No material or heat-treatment non-conformance was found.",
+  "Neither the steel nor its heat treatment departs from the drawing in any respect.",
 ]
 note = """Dissimilar refuter #2: refutes H3 (counterfeit/non-conforming part) using none of \
 its vocabulary ('counterfeit', 'genuine', 'fake', 'non-OEM') — it establishes the material \
