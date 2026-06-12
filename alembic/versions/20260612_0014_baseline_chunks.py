@@ -25,9 +25,13 @@ efficiently. A k-NN query must order by `<=>` to use it; the retrieval query doe
 index is created via `op.execute` because alembic has no native HNSW DDL. Both index and table
 are mirrored in iknos.db.orm (`BaselineChunk`) so the autogenerate-drift gate stays clean.
 
-Relational-only: `search_path = public` is pinned at connect (alembic/env.py) and there is no
-AGE DDL here, so the table and indexes land in `public` (CI_MIGRATIONS.md §2). The revision id
-is kept short (`alembic_version.version_num` is varchar(32)).
+Search-path discipline (CI_MIGRATIONS.md §2): although this migration has **no AGE DDL**, a
+prior AGE migration (0004/0007/0011) sets `search_path = ag_catalog, "$user", public` for the
+session and never resets it (only 0001 does). This is the first relational DDL after them, so an
+unqualified `CREATE TABLE` would land in `ag_catalog`/the graph schema, not `public` — leaving
+the table (and its HNSW index) invisible to the `public`-search_path app and to the downgrade
+drops. So `upgrade()` and `downgrade()` both pin `SET search_path = public` before any relational
+statement. The revision id is kept short (`alembic_version.version_num` is varchar(32)).
 """
 
 import pgvector.sqlalchemy
@@ -45,6 +49,9 @@ _HNSW_INDEX = "ix_baseline_chunks_embedding_hnsw"
 
 
 def upgrade() -> None:
+    # Pin public: a prior AGE migration left search_path = ag_catalog,"$user",public for the
+    # session, so an unqualified CREATE TABLE would land in the wrong schema (CI_MIGRATIONS.md §2).
+    op.execute("SET search_path = public")
     op.create_table(
         "baseline_chunks",
         sa.Column(
@@ -81,6 +88,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("SET search_path = public")  # drops must resolve in public (CI_MIGRATIONS.md §2)
     op.execute(f"DROP INDEX {_HNSW_INDEX}")
     op.drop_index("uq_baseline_chunks_doc_index_model", table_name="baseline_chunks")
     op.drop_index("ix_baseline_chunks_document_id", table_name="baseline_chunks")
