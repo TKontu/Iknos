@@ -242,15 +242,18 @@ async def test_epistemic_fields_and_routing_persist(session: AsyncSession) -> No
     assert str(judgement[2]).strip('"') == "judgement"
     assert str(judgement[3]).strip('"') == "probable"
     assert str(judgement[4]).strip('"') == "named-source"
-    # Not self-reported — null until the verify/multi-sample increments compute them.
+    # Faithfulness is not self-reported — null until a verifier computes it. This run has no
+    # verifier, so G1.21 makes that null grounding provisional (UNASSESSED_FAITHFULNESS → legacy
+    # boolean true); faithfulness itself stays null (never fabricated).
     assert judgement[5] is None
-    assert judgement[6] is None
+    assert str(judgement[6]).strip('"').lower() == "true"
 
     # An observation → routes to FACT.
     observation = by_text["The rolling surface shows particle indentations."]
     assert str(observation[1]).strip('"') == "observation"
     assert str(observation[2]).strip('"') == "fact"
-    assert observation[5] is None and observation[6] is None
+    assert observation[5] is None
+    assert str(observation[6]).strip('"').lower() == "true"
 
 
 async def _seed_one_span_doc(session: AsyncSession, raw: str) -> tuple[uuid.UUID, Span]:
