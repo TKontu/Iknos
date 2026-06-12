@@ -2,23 +2,34 @@
 
 G1.7 made extraction idempotent *per span*: a span re-run under the same pipeline no-ops, a changed
 pipeline fails loud. But two *different* spans carrying identical text — the same passage after a
-re-segmentation, boilerplate shared across documents, or a reference corpus overlapping a case file
-— each still paid the full LLM extraction independently. That per-span keying is deliberate
-soundness, not an oversight: the G1.7 key is ``(span_id, content_hash)``, **not** content alone,
-because a pure-content skip would *drop* the second span's propositions instead of giving it its own
+re-segmentation, or shared boilerplate — each still paid the full LLM extraction independently. That
+per-span keying is deliberate soundness, not an oversight: the G1.7 key is ``(span_id,
+content_hash)``, **not** content alone, because a pure-content skip would *drop* the second span's
+propositions instead of giving it its own
 (see ``test_extraction_cache.py::test_identical_text_different_span_both_materialize``).
+
+**G1.24 trade-off (decided, not a bug).** The ``content_hash`` includes the *ordered context-span
+ids*, and a span's id is ``uuid5(document_id, …)`` (``core/ingest.py``) — document-namespaced. So a
+span with a **non-empty context window never reuses across documents**: identical text in two
+documents yields different context-span ids, hence different hashes. Only a span with an *empty*
+context (a first / single-span document) reuses cross-document. That is the deliberate price of
+keying cache identity on ingest identity rather than textual coincidence (a re-segmentation that
+changed which spans front the window must re-key); revisiting it is a §6.1 cost decision. Reuse
+*within* a document (re-segmentation, an overlapping reference corpus ingested into the same
+document) is unaffected.
 
 G1.7b closes that cost without breaking the soundness. When a never-extracted span's
 ``content_hash`` matches a *previously committed* extraction anywhere, we **replay** that
 extraction's propositions into the new span — new ``Proposition`` nodes, new ``EVIDENCED_BY`` edges,
 fresh locally-computed embeddings — skipping only the (expensive) LLM call. The ``content_hash``
-already encodes the target text, the context window, and the full pipeline identity (model,
-rendered prompt/schema, sampling regime incl. ``n_samples``, and verifier signature —
-``core/cache.py``), so a match means the extractor *would* have produced the same propositions under
-the same regime; replaying serves exactly that. Reused ``faithfulness``/``provisional_reasons`` are
-copied from the cached nodes (the verifier signature is in the ``content_hash``, so re-verifying
-would reproduce them), and the replay records a ``reused_from`` pointer so the audit chain to the
-original verify ``Action`` is one hop away.
+already encodes the target text, the context window (text + ordered span ids), and the extractor
+identity (model, rendered prompt/schema, sampling regime incl. ``n_samples`` — ``core/cache.py``;
+the verifier is **not** in it since G1.22), so a match means the extractor *would* have produced the
+same propositions under the same regime; replaying serves exactly that. Reused
+``faithfulness``/``provisional_reasons`` are copied from the cached nodes **only when the source's
+verify-stage identity matches the reusing run's verifier** (``source_verify_sig``, G1.22); otherwise
+the copied score is stale, so faithfulness is reset to unassessed and the span is queued for
+verify-backfill. The replay records a ``reused_from`` pointer so the audit chain stays one hop away.
 
 This module owns the **read** half: finding a reusable extraction and reconstructing its
 propositions from the graph. It is deliberately free of the embedding substrate and the write path —

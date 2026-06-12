@@ -253,6 +253,51 @@ async def test_reverify_under_same_verifier_is_a_noop(session: AsyncSession) -> 
     assert verify_actions.scalar_one() == 1  # still just the original
 
 
+async def test_stale_verify_action_does_not_skip_backfill_after_reextract(
+    session: AsyncSession,
+) -> None:
+    """G1.25: a verify Action is append-only and survives a cascade purge, so it must not vouch for
+    a *later* extraction generation. Run 1 verifies cleanly (sig S); run 2 cascade re-extracts with
+    the verifier OFF (a new proposition, UNASSESSED, no verify Action; the old one purged); run 3
+    re-enables the same verifier S. Run 1's verify Action still has sig S, but it verified the
+    *purged* proposition — so backfill must verify the current one, not skip it as already-verified
+    (pre-G1.25 it stayed UNASSESSED forever)."""
+    await bootstrap_session(session)
+    raw = "The bearing failed under load."
+    doc_id, span = await _seed_one_span_doc(session, raw)
+
+    # Run 1: extract + verify under extractor v1 / verifier S.
+    await _attach_verifier(_propositionizer(model="extractor-v1")).propositionize_document(
+        session, doc_id, [span], raw
+    )
+    [gen1_id] = list(await _prop_ids(session, span))
+
+    # Run 2: a different extractor (cascade re-extract) with the verifier OFF — the new proposition
+    # lands UNASSESSED, the old one is purged, and no new verify Action is recorded.
+    await _propositionizer(model="extractor-v2").propositionize_document(
+        session, doc_id, [span], raw
+    )
+    [gen2_id] = list(await _prop_ids(session, span))
+    assert gen2_id != gen1_id  # genuinely a new generation
+
+    # Run 3: same extractor (v2 → no re-extract) with the same verifier S back on.
+    run3 = _attach_verifier(_propositionizer(model="extractor-v2"))
+    await run3.propositionize_document(session, doc_id, [span], raw)
+
+    # The extractor was not re-run (v2 unchanged) ...
+    assert run3.llm.guided_complete.await_count == 0
+    # ... but the verifier backfilled the *current* (run-2) proposition: pre-G1.25 the stale run-1
+    # verify Action short-circuited it, leaving it UNASSESSED.
+    assert run3.verifier is not None
+    assert run3.verifier.llm.guided_complete.await_count == 1
+    rows = await execute_cypher(
+        session,
+        f"MATCH (p:Proposition {cypher_map({'id': gen2_id})}) RETURN p.faithfulness",
+        returns="faith agtype",
+    )
+    assert float(str(rows[0][0]).strip('"')) == pytest.approx(1.0)  # now verified, not null
+
+
 async def test_cascade_refuses_when_propositions_have_dependents(session: AsyncSession) -> None:
     """A stale span whose propositions already feed a downstream node is **refused**
     (``CascadeDependentsError``) — purging would orphan the consumer, so the full downstream cascade
