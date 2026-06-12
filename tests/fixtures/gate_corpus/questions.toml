@@ -1,0 +1,65 @@
+# Gate-corpus questions for the E1 baseline ladder (Trial V4–V6) and the V2 gold answers.
+#
+# These are the questions every rung answers — plain RAG (V4), agentic RAG (V5), the
+# expert+search protocol (V6), and the iknos system — under the shared BaselineAnswer
+# contract, scored by the V3 harness. Each targets a differentiator axis (architecture.md §8)
+# where RAG is expected to be weak; "factoid" is the easy-tie control.
+#
+# This file is INPUT, not the answer key: it carries NO gold answers (those are Trial V2,
+# gate_corpus/labels/) and the question text deliberately reveals nothing. It is therefore safe
+# to hand to a V6 expert or an E1 operator (unlike gate_corpus/README.md and manifest.toml).
+#
+# axis vocabulary (validated against iknos.baselines.contract.AXES):
+#   root_cause | retraction | refuter | traceability | entity_resolution | governance | factoid
+
+schema_version = 1
+
+[[questions]]
+id = "q01"
+text = "What was the root cause of the WTG-14 high-speed-shaft bearing failure?"
+axis = "root_cause"
+
+[[questions]]
+id = "q02"
+text = "Had the failed high-speed-shaft bearing been replaced in the months before the failure?"
+axis = "retraction"
+
+[[questions]]
+id = "q03"
+text = "Before the correction notice was issued, which cause did the evidence most strongly support, and did that change afterwards?"
+axis = "retraction"
+
+[[questions]]
+id = "q04"
+text = "Was the gearbox subjected to overload or abnormal torque before the failure?"
+axis = "refuter"
+
+[[questions]]
+id = "q05"
+text = "Was the failed bearing a counterfeit or otherwise non-conforming part?"
+axis = "refuter"
+
+[[questions]]
+id = "q06"
+text = "Which gear-oil grade was actually in service on the turbine during 2023, and was it the grade the OEM specifies?"
+axis = "traceability"
+
+[[questions]]
+id = "q07"
+text = "Is the component the operators call 'the HSS bearing' the same one the work orders call 'bearing 3', and is it the same as 'bearing 4'?"
+axis = "entity_resolution"
+
+[[questions]]
+id = "q08"
+text = "Whose analysis attributed the failure to an installation or mounting error, and is there any reason to weigh that analysis with caution?"
+axis = "governance"
+
+[[questions]]
+id = "q09"
+text = "Did the site team acknowledge any lapse in maintenance before the failure?"
+axis = "governance"
+
+[[questions]]
+id = "q10"
+text = "On what date did turbine WTG-14 trip and the high-speed-shaft bearing fail?"
+axis = "factoid"
