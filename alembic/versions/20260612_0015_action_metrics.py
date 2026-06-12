@@ -9,9 +9,9 @@ Touches AGE graph: no (relational only)
 The §6.1 cost discipline and Trials A/C need per-Action operational numbers — LLM token counts,
 wall-clock durations, span counts — to measure where compute goes. This adds the `metrics` JSONB
 column to `actions`, the observability floor the operators populate (`record_action(metrics=...)`):
-extract/verify Actions carry `{duration_ms, prompt_tokens, completion_tokens, n_samples, cache_hit}`,
-parse/segment Actions carry `{duration_ms, n_spans, n_skipped_whitespace}`. Keys are omitted, never
-zeroed, when a source is absent.
+extract/verify Actions carry `{duration_ms, prompt_tokens, completion_tokens, n_samples,
+cache_hit}`, parse/segment Actions carry `{duration_ms, n_spans, n_skipped_whitespace}`. Keys are
+omitted, never zeroed, when a source is absent.
 
 `NOT NULL DEFAULT '{}'::jsonb` — like `inputs`/`outputs`, so every row (existing and new) has an
 object to read and a consumer never hits a null. A constant default makes the `ADD COLUMN` a
