@@ -32,6 +32,7 @@ from iknos.core.consistency import (
     DEFAULT_AGREEMENT_THRESHOLD,
     Candidate,
     consolidate_samples,
+    require_sampling_diversity,
 )
 from iknos.core.embeddings import EmbeddingModelMismatchError, EmbeddingSubstrate
 from iknos.core.llm import LLMClient
@@ -347,19 +348,12 @@ class Propositionizer:
         self.verifier = verifier
         # Multi-sample extraction (G1.3): sample the extractor n_samples times and score each
         # proposition by cross-sample agreement. n_samples=1 is a strict no-op (no clustering,
-        # agreement null) — byte-identical to single-pass. n_samples>1 with a greedy regime is a
-        # misconfiguration (the N samples would be identical → no signal), so fail loud.
-        if n_samples < 1:
-            raise ValueError(f"n_samples must be >= 1, got {n_samples!r}")
-        if (
-            n_samples > 1
-            and self.sampling.get("temperature", 0) == 0
-            and "top_p" not in self.sampling
-        ):
-            raise ValueError(
-                f"multi-sample extraction (n_samples={n_samples}) needs a temperature>0 sampling "
-                f"regime; got greedy sampling {self.sampling!r}"
-            )
+        # agreement null) — byte-identical to single-pass. n_samples>1 with a greedy (temperature 0)
+        # regime is a misconfiguration — the N samples would be identical, so agreement is vacuously
+        # 1.0 — and the guard fails loud at construction (G1.23, single source of truth in
+        # consistency.require_sampling_diversity; the G4.3 edge judge's temp-0 path is exempt by
+        # design, documented there).
+        require_sampling_diversity(n_samples, self.sampling)
         self.n_samples = n_samples
         self.agreement_threshold = agreement_threshold
 
