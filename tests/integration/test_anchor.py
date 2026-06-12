@@ -34,7 +34,7 @@ class _DispatchLLM:
     def __init__(self, table: dict[str, list[dict]]):
         self._table = table
 
-    async def guided_complete(self, messages, schema, sampling):
+    async def guided_complete(self, messages, schema, sampling, *, usage_out=None):
         statement = messages[1]["content"]
         for needle, entities in self._table.items():
             if needle in statement:
