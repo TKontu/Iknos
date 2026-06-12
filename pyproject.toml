@@ -17,6 +17,7 @@ dependencies = [
   "torch>=2.5.1",
   "openai>=1.60.0",
   "tenacity>=9.0",
+  "clingo>=5.8.0",
 ]
 
 [dependency-groups]

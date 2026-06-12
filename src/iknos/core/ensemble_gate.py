@@ -24,7 +24,9 @@ check before it may assert a ``refutes`` edge." Each is a :class:`GateChannel`:
   claim and the hypothesis are *actually* inconsistent (mutual exclusion / polarity opposition),
   guarding against the LLM asserting a contradiction the logic does not bear out. This is **not**
   the QBAF (the QBAF is the gradual adjudication *being gated*, §8(b)) — it is the separate symbolic
-  check of §8(d) / Tooling. Its producer is a later G4.5 slice; here it ABSTAINs by default.
+  check of §8(d) / Tooling. **Its producer landed (W3): ``core/symbolic_gate.py`` runs a real clingo
+  consistency check over the affected sub-region;** :func:`symbolic_channel` here remains the
+  ABSTAIN seam a caller uses when it has *not* built that sub-region (the safe default).
 - **TEMPORAL** — *where time matters*, a check that the timeline supports the contradiction (e.g.
   the refuting fact's validity window actually overlaps / overturns). Conditionally applicable: when
   time is irrelevant it ABSTAINs and is ignored; when it matters and forbids, it DISSENTs (veto).
@@ -60,8 +62,9 @@ region the caller presents (§13), exactly as the QBAF surfaces non-convergence.
 wants to act on the LLM channel alone before the other producers exist swaps in
 :data:`LLM_ONLY_GATE` at the seam, eyes-open.
 
-**What this slice is *not* (documented seams, the rest of G4.5).** The channel *producers* — wiring
-clingo for ``SYMBOLIC``, the bitemporal check for ``TEMPORAL`` — and the *consumer* — the
+**What this slice is *not* (documented seams, the rest of G4.5).** The ``SYMBOLIC`` producer landed
+(W3, ``core/symbolic_gate.py``); the remaining channel *producer* — the bitemporal check for
+``TEMPORAL`` — and the *consumer* — the
 ``persist_verdicts`` filter that drops un-authorised ``refuted`` verdicts, and the
 ``find-contradiction`` / ``corroborate`` operators that feed candidates into the
 ``REFUTES → retract → A → B → QBAF`` body wired into ``core/composed_loop.py::stabilize`` (G3.9) —
@@ -358,20 +361,20 @@ def llm_channel(
     )
 
 
-#: Default ``detail`` for the not-yet-wired ``SYMBOLIC`` / ``TEMPORAL`` abstentions (G4.5 slices).
-_SYMBOLIC_UNWIRED = "symbolic consistency check not yet wired (G4.5)"
+#: Default ``detail`` for an unbuilt ``SYMBOLIC`` / not-yet-wired ``TEMPORAL`` abstention.
+_SYMBOLIC_UNWIRED = "symbolic sub-region not built — use core/symbolic_gate.symbolic_channel_for"
 _TEMPORAL_UNWIRED = "temporal check not applicable / not yet wired (G4.5)"
 
 
 def symbolic_channel(detail: str = _SYMBOLIC_UNWIRED) -> ChannelSignal:
-    """The **SYMBOLIC** channel — ABSTAINs until its clingo/ASP producer lands (§8 Tooling).
+    """The **SYMBOLIC** channel's ABSTAIN seam — the default when no sub-region was built (§8).
 
-    A present-but-abstaining seam (not an absent channel), so :data:`DEFAULT_GATE` — which
-    *requires* this channel — withholds every automated flip until the producer is wired: the
-    safe-by-default behaviour §7.2 + principle 6 mandate (the structural refutation is surfaced,
-    never auto-persisted, while the symbolic check cannot speak). The producer (a later G4.5 slice)
-    replaces this with an :func:`affirming` / :func:`dissenting` signal from the logical-consistency
-    result.
+    The real producer landed in W3: :func:`iknos.core.symbolic_gate.symbolic_channel_for` runs a
+    clingo consistency check over the affected sub-region and returns an :func:`affirming` /
+    :func:`dissenting` / :func:`abstaining` signal. This function remains the **safe default** a
+    caller passes when it has *not* assembled that sub-region: a present-but-abstaining seam, so
+    :data:`DEFAULT_GATE` — which *requires* this channel — withholds (the structural refutation is
+    surfaced, never auto-persisted, while the symbolic check has nothing to say). §7.2, principle 6.
     """
     return abstaining(GateChannel.SYMBOLIC, detail)
 
