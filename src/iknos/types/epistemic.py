@@ -140,6 +140,11 @@ class ProvisionalReason(StrEnum):
 
     - ``LOW_FAITHFULNESS`` — faithfulness below the gate threshold (Phase 1, G1.5); derived
       by :func:`provisional_reasons_for`.
+    - ``UNASSESSED_FAITHFULNESS`` — no faithfulness was computed at all (the verifier-off /
+      verifier-unavailable degraded mode, Phase 1, G1.21); also derived by
+      :func:`provisional_reasons_for` (from a ``None`` faithfulness). §3.1 D2: unassessed
+      grounding is provisional, *never coerced toward trusted* — so a degraded-mode atom is
+      quarantined until a verifier later completes its faithfulness (G1.22 backfill).
     - ``POLARITY_UNSTABLE`` — multi-sample extraction wavered on the claim's sign, so both
       polarity twins are quarantined (Phase 1, G1.14); set by the propositionizer
       independently of faithfulness, so it survives the verifier-off / degraded mode.
@@ -150,6 +155,7 @@ class ProvisionalReason(StrEnum):
     """
 
     LOW_FAITHFULNESS = "low_faithfulness"
+    UNASSESSED_FAITHFULNESS = "unassessed_faithfulness"
     POLARITY_UNSTABLE = "polarity_unstable"
     UNRESOLVED_REFERENCE = "unresolved_reference"
     UNINFERRED_BUDGET = "uninferred_budget"
@@ -160,19 +166,23 @@ def provisional_reasons_for(
 ) -> set[ProvisionalReason]:
     """The **faithfulness-derived** provisional reasons for a proposition (§3.1, §10).
 
-    ``{LOW_FAITHFULNESS}`` when faithfulness is below the threshold, else the empty set.
-    ``None`` → empty: the documented verifier-off mode computes no faithfulness, so there is
-    nothing to gate on *from this axis* (other producers may still add their own reasons —
-    see :class:`ProvisionalReason`). Boundary is half-open (``< threshold`` → provisional),
-    mirroring :func:`intentional.band`. Raises for an out-of-range faithfulness — defined
-    only on ``[0, 1]``, so an out-of-range value is a caller bug, surfaced not clamped.
+    ``{LOW_FAITHFULNESS}`` when faithfulness is below the threshold, ``{UNASSESSED_FAITHFULNESS}``
+    when faithfulness is ``None``, else the empty set. ``None`` is the verifier-off /
+    verifier-unavailable degraded mode: no faithfulness was computed, and §3.1 D2 (G1.21) decides
+    that unassessed grounding is **provisional, never coerced toward trusted** — so this axis
+    contributes a reason rather than abstaining (other producers may still OR-fold their own —
+    see :class:`ProvisionalReason`). This *changes* the pre-G1.21 verifier-off behavior (``None``
+    → empty); the degraded-mode tests were repinned deliberately. Boundary is half-open
+    (``< threshold`` → provisional), mirroring :func:`intentional.band`. Raises for an
+    out-of-range faithfulness — defined only on ``[0, 1]``, so an out-of-range value is a caller
+    bug, surfaced not clamped.
 
     Replaces the former ``is_provisional`` boolean gate (R8): one flag carried three meanings;
     the reason set lets triage (§11.1) act on *why* and the quarantine gate (R9) on whether
     any reason is present.
     """
     if faithfulness is None:
-        return set()
+        return {ProvisionalReason.UNASSESSED_FAITHFULNESS}
     if not 0.0 <= faithfulness <= 1.0:
         raise ValueError(f"faithfulness must be in [0, 1], got {faithfulness!r}")
     return {ProvisionalReason.LOW_FAITHFULNESS} if faithfulness < threshold else set()

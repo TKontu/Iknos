@@ -463,14 +463,27 @@ rebased at persistence, `LAYOUT_SCHEMA_VERSION` 2); fixture corpus seed
       be calibrated against the final code path. Tests: identity curve ⇒ behavior
       byte-identical to today; a non-identity fixture curve moves faithfulness in the
       conservative direction only.
-- [ ] **G1.21 — degraded-mode `null` ⇒ provisional (D2 behavior change).** Shipped
-      behavior leaves `provisional` **null** when the verifier is off; §3.1 now decides
+- [x] **G1.21 — degraded-mode `null` ⇒ provisional (D2 behavior change)** *(shipped)*.
+      Pre-G1.21 behavior left `provisional` **null** when the verifier is off; §3.1 now decides
       `faithfulness = null` (unassessed) ⇒ **provisional = true** with reason
-      *unassessed faithfulness* — never coerce null toward trusted. Implement together
-      with R8 (`todo_phase_4_*.md` *Open task specs*), whose enum gains
-      `UNASSESSED_FAITHFULNESS` and whose `provisional_reasons_for(None)` returns it
-      (the R8 spec is amended accordingly). Update the G1.3/G1.17 degraded-mode tests —
-      this deliberately changes their pinned behavior; say so in the PR.
+      *unassessed faithfulness* — never coerce null toward trusted. `types/epistemic.py`:
+      `ProvisionalReason` gains `UNASSESSED_FAITHFULNESS` and `provisional_reasons_for(None)`
+      returns `{UNASSESSED_FAITHFULNESS}` (the R8 spec amended accordingly). `core/proposition.py`:
+      a single `_with_faithfulness_reason` helper OR-folds the faithfulness-axis reason onto a
+      finalized result (idempotent; never clears an extract-time reason — a G1.14 twin keeps
+      `POLARITY_UNSTABLE` and carries `UNASSESSED_FAITHFULNESS` too), applied at all three
+      result-finalization sites: the verify-success path, the per-span verifier-unavailable
+      degraded path (G1.17 R2), the verifier-off-entirely path, and the G1.7b replay builder — so
+      node == in-memory result == extract/verify `Action` rows everywhere. `core/reuse.py`:
+      legacy pre-R8 reconstruction stays frozen (a `provisional=true` + null-faithfulness node was
+      always a polarity twin, so it reconstructs `POLARITY_UNSTABLE`, *not* the new
+      `UNASSESSED_FAITHFULNESS`; the replay write path re-folds the live reason regardless).
+      Degraded-mode tests repinned **deliberately** (G1.3/G1.17): `test_provisional_reasons_*`,
+      `test_verify_all_degrades_on_verifier_failure`,
+      `test_verify_all_failure_preserves_twin_provisional`,
+      `test_multi_sample_without_verifier_sets_agreement_only`,
+      `test_verifier_absent_leaves_faithfulness_null`. (V7 edge enforcement now holds these atoms
+      back from high-stakes moves; G1.22 backfill later completes their faithfulness.)
 - [ ] **G1.22 — verification as its own cached stage (the fix D2 needs to work).**
       §3.1 promises "when the verifier is later enabled, faithfulness completes from
       persisted agreement *without re-sampling*" — but the verifier signature is

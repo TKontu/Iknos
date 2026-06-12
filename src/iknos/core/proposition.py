@@ -195,6 +195,27 @@ class PropositionResult:
     agreement: float | None = None
 
 
+def _with_faithfulness_reason(r: PropositionResult) -> PropositionResult:
+    """OR-fold the faithfulness-axis provisional reason onto a *finalized* result (R8/G1.21).
+
+    The single enforcement point for "faithfulness → provisional" once the verify decision is
+    settled: :func:`~iknos.types.epistemic.provisional_reasons_for` maps a real score below the
+    gate to ``LOW_FAITHFULNESS`` and a **null** score (verifier off, or unavailable for this
+    proposition — the degraded mode) to ``UNASSESSED_FAITHFULNESS`` (§3.1 D2 / G1.21: unassessed
+    grounding is provisional, never coerced toward trusted). OR-folded onto the result's existing
+    reasons (a G1.14 twin keeps ``POLARITY_UNSTABLE``), never clearing them. Idempotent — the
+    merge dedupes — so it is safe to re-apply on an already-scored verify-success result. Returns
+    the same object unchanged when the fold is a no-op, so the frozen result is only rebuilt when
+    a reason is actually added.
+    """
+    folded = merge_provisional_reasons(
+        r.provisional_reasons, provisional_reasons_for(r.faithfulness)
+    )
+    if folded == r.provisional_reasons:
+        return r
+    return replace(r, provisional_reasons=folded)
+
+
 @dataclass(frozen=True)
 class FailedSpan:
     """A span whose extraction (or persistence) raised, isolated so the run continues (G1.17 R1).
@@ -461,9 +482,12 @@ class Propositionizer:
 
         **Verifier failure degrades, never crashes (G1.17 R2).** If one verify call raises
         (endpoint down past retries, unparseable response, an enum that won't cast), that
-        proposition keeps ``faithfulness``/``provisional`` *null* — the documented degraded G1.1
-        mode — and its verdict slot is ``None`` so :meth:`_persist` logs the failure on the verify
-        ``Action`` instead of letting an exception abort the whole document's batch.
+        proposition keeps ``faithfulness`` *null* and its verdict slot is ``None`` so
+        :meth:`_persist` logs the failure on the verify ``Action`` instead of letting an exception
+        abort the whole document's batch. Its faithfulness being unassessed, the degraded
+        proposition is folded to ``UNASSESSED_FAITHFULNESS`` (G1.21 — §3.1 D2: unassessed
+        grounding is provisional, never coerced toward trusted), OR-folded onto any extract-time
+        reason (a G1.14 twin keeps ``POLARITY_UNSTABLE`` too).
         """
         verifier = self.verifier
         assert verifier is not None  # only called when a verifier is configured
@@ -475,16 +499,17 @@ class Propositionizer:
                 async with sem:
                     verdict = await verifier.verify_proposition(source, r)
             except Exception as exc:
-                # Degraded mode (R2): no verdict → faithfulness/provisional stay as inferred
-                # (null, or provisional=True for a G1.14 twin). The proposition is still
-                # persisted; the failure is recorded on the verify Action by _persist.
+                # Degraded mode (R2): no verdict → faithfulness stays null. The proposition is
+                # still persisted (the failure is recorded on the verify Action by _persist), but
+                # its null faithfulness folds to UNASSESSED_FAITHFULNESS (G1.21) on top of any
+                # extract-time reason — a G1.14 twin keeps POLARITY_UNSTABLE too.
                 logger.warning(
                     "verifier unavailable for proposition %s (span %s): %s",
                     r.id,
                     r.span_id,
                     exc,
                 )
-                return r, None
+                return _with_faithfulness_reason(r), None
             verify_component = faithfulness_from_verdict(
                 verdict.entailment, verdict.polarity_preserved, verdict.modality_preserved
             )
@@ -493,14 +518,11 @@ class Propositionizer:
             # parse), so the common clean-text path is unchanged from G1.4/G1.5.
             agreement = r.agreement if r.agreement is not None else 1.0
             faith = combine_faithfulness(verify_component, agreement, parse_quality)
-            # OR-fold (R8 "never cleared"): union the faithfulness-derived reason onto any
-            # already present — a polarity-unstable twin (G1.14) stays provisional even if the
-            # verifier finds it faithful, the instability being an independent quarantine reason.
-            reasons = merge_provisional_reasons(
-                r.provisional_reasons, provisional_reasons_for(faith)
-            )
-            # PropositionResult is frozen — rebuild with the scored fields, never mutate.
-            scored = replace(r, faithfulness=faith, provisional_reasons=reasons)
+            # PropositionResult is frozen — rebuild with the score, then OR-fold the faithfulness
+            # reason (R8 "never cleared"): _with_faithfulness_reason unions LOW_FAITHFULNESS below
+            # the gate onto any extract-time reason, so a polarity-unstable twin (G1.14) stays
+            # provisional even when the verifier finds it faithful.
+            scored = _with_faithfulness_reason(replace(r, faithfulness=faith))
             return scored, verdict
 
         async def verify_group(
@@ -708,7 +730,10 @@ class Propositionizer:
         source proposition because ``content_hash`` does *not* pin the embedding model (only the LLM
         extractor) — re-embedding keeps the ANN space single-model by construction (G1.16) and the
         local forward pass is negligible next to the LLM call this replay skips. Empty cache → no
-        results (a cached empty extraction).
+        results (a cached empty extraction). The faithfulness-axis reason is re-folded
+        (:func:`_with_faithfulness_reason`) so a replay of a never-verified source (null
+        faithfulness) carries ``UNASSESSED_FAITHFULNESS`` (G1.21) exactly as a fresh degraded
+        ingest would — a quarantine is never silently dropped on replay.
         """
         if not reusable.propositions:
             return []
@@ -717,21 +742,23 @@ class Propositionizer:
             self.substrate.embed_passages, [c.text for c in reusable.propositions]
         )
         return [
-            PropositionResult(
-                id=uuid.uuid4(),
-                text=c.text,
-                span_id=span.id,
-                document_id=span.document_id,
-                embedding=v,
-                polarity=c.polarity,
-                modality=c.modality,
-                attribution=c.attribution,
-                scope=c.scope,
-                epistemic_class=c.epistemic_class,
-                routing=c.routing,
-                faithfulness=c.faithfulness,
-                provisional_reasons=c.provisional_reasons,
-                agreement=c.agreement,
+            _with_faithfulness_reason(
+                PropositionResult(
+                    id=uuid.uuid4(),
+                    text=c.text,
+                    span_id=span.id,
+                    document_id=span.document_id,
+                    embedding=v,
+                    polarity=c.polarity,
+                    modality=c.modality,
+                    attribution=c.attribution,
+                    scope=c.scope,
+                    epistemic_class=c.epistemic_class,
+                    routing=c.routing,
+                    faithfulness=c.faithfulness,
+                    provisional_reasons=c.provisional_reasons,
+                    agreement=c.agreement,
+                )
             )
             for c, v in zip(reusable.propositions, vectors, strict=True)
         ]
@@ -1082,11 +1109,16 @@ class Propositionizer:
                 replayed.append((i, results, reusable))
 
         # Phase 2b: independent verification (G1.4) — another DB-free LLM call, so it runs
-        # in the concurrent phase under the same budget. Absent verifier → verdicts stay
-        # None and faithfulness/provisional remain null (the documented degraded mode).
+        # in the concurrent phase under the same budget. Absent verifier → verdicts stay None and
+        # faithfulness stays null; that null grounding folds to UNASSESSED_FAITHFULNESS (G1.21 —
+        # §3.1 D2: unassessed is provisional, never coerced toward trusted), so a verifier-off
+        # ingest quarantines its atoms until G1.22 backfill completes their faithfulness.
         verified: list[tuple[int, list[PropositionResult], list[_VerifyOut | None] | None]]
         if self.verifier is None:
-            verified = [(i, results, None) for i, results in inferred]
+            verified = [
+                (i, [_with_faithfulness_reason(r) for r in results], None)
+                for i, results in inferred
+            ]
         else:
             verified = [
                 (i, results, verdicts)

@@ -342,8 +342,10 @@ async def test_verify_all_folds_in_parse_quality() -> None:
 @pytest.mark.asyncio
 async def test_verify_all_degrades_on_verifier_failure() -> None:
     # G1.17 R2: a verifier that raises (endpoint down past retries, unparseable response) must not
-    # crash the batch. The proposition keeps faithfulness null + no provisional reason (the
-    # documented degraded G1.1 mode) and its verdict slot is None so _persist logs the failure.
+    # crash the batch. The proposition keeps faithfulness null and its verdict slot is None so
+    # _persist logs the failure. G1.21 (§3.1 D2): a null faithfulness is *unassessed*, so the atom
+    # is quarantined with UNASSESSED_FAITHFULNESS — never coerced toward trusted. (Was `== []`
+    # pre-G1.21; repinned deliberately.)
     doc = uuid.uuid4()
     raw = "The rolling surface shows particle indentations."
     spans = [_span(doc, 0, len(raw))]
@@ -355,7 +357,7 @@ async def test_verify_all_degrades_on_verifier_failure() -> None:
 
     (i, results, verdicts) = verified[0]
     assert results[0].faithfulness is None
-    assert results[0].provisional_reasons == []
+    assert results[0].provisional_reasons == ["unassessed_faithfulness"]
     assert verdicts == [None]
 
 
@@ -363,6 +365,8 @@ async def test_verify_all_degrades_on_verifier_failure() -> None:
 async def test_verify_all_failure_preserves_twin_provisional() -> None:
     # A polarity-unstable twin (G1.14) already carries POLARITY_UNSTABLE before verify. If the
     # verifier then fails (R2), the quarantine must survive — the degraded path must not clear it.
+    # G1.21 OR-folds the unassessed-faithfulness reason on top (union, never overwrite): a twin
+    # whose faithfulness also went unassessed carries *both* reasons.
     doc = uuid.uuid4()
     raw = "The bearing failed."
     spans = [_span(doc, 0, len(raw))]
@@ -375,7 +379,7 @@ async def test_verify_all_failure_preserves_twin_provisional() -> None:
     verified = await p._verify_all(asyncio.Semaphore(2), spans, raw, [(0, [twin])])
 
     results = verified[0][1]
-    assert results[0].provisional_reasons == ["polarity_unstable"]
+    assert results[0].provisional_reasons == ["polarity_unstable", "unassessed_faithfulness"]
     assert results[0].faithfulness is None
 
 

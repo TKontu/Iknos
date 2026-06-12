@@ -57,9 +57,11 @@ def test_provisional_reasons_custom_threshold() -> None:
     assert provisional_reasons_for(0.8, threshold=0.8) == set()
 
 
-def test_provisional_reasons_none_is_empty() -> None:
-    # The documented verifier-off mode: no faithfulness computed → nothing to gate on here.
-    assert provisional_reasons_for(None) == set()
+def test_provisional_reasons_none_is_unassessed() -> None:
+    # G1.21 (§3.1 D2 behavior change): the verifier-off mode computes no faithfulness, and
+    # unassessed grounding is provisional — never coerced toward trusted. (Was `== set()` pre-G1.21;
+    # repinned deliberately.)
+    assert provisional_reasons_for(None) == {ProvisionalReason.UNASSESSED_FAITHFULNESS}
 
 
 @pytest.mark.parametrize("bad", [-0.01, 1.01, 2.0])
@@ -74,6 +76,7 @@ def test_provisional_reasons_rejects_out_of_range(bad: float) -> None:
 def test_provisional_reason_values_match_spec() -> None:
     assert [r.value for r in ProvisionalReason] == [
         "low_faithfulness",
+        "unassessed_faithfulness",
         "polarity_unstable",
         "unresolved_reference",
         "uninferred_budget",
