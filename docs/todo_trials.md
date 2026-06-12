@@ -55,7 +55,7 @@ hard negation/modality cases (regression anchors for G1.13/G1.14).
 - [ ] Keep the corpus + harness as the permanent regression suite.
 - **Gates:** all of A1–A7; feeds B2.
 
-#### A0 work breakdown — V1/V2/V3 *(merged from `archive/gap_review_2026-06-11.md`; one task per PR, branch `gate/v<N>-<slug>`)*
+#### A0 work breakdown — V1/V2/V3 + V13 *(merged from `archive/gap_review_2026-06-11.md`; V13 from `archive/review_2026-06-12_completed_scope_residuals.md`; one task per PR, branch `gate/v<N>-<slug>`)*
 
 **V1 — gate corpus: planted documents + manifest.** New
 `tests/fixtures/gate_corpus/` with a `manifest.toml` following the existing
@@ -116,6 +116,31 @@ content-hash-seeded permutation schedule (reuse the `_permutation` pattern in
 `core/edge_judge.py`) so no metric depends on presentation order. `report.py`:
 metrics dict → markdown table. **No trial runners** (each trial wires its own
 inputs when V1/V2 data exists); no plotting dependencies.
+
+**V13 — gate-corpus touch-ups *before* the V2 labeling freeze** *(2026-06-12
+residual review, finding 8 — `archive/review_2026-06-12_completed_scope_residuals.md`;
+**must land before V2 labeling starts** — once an annotator has read the documents
+the corpus is frozen and these become recorded limitations instead)*. One PR:
+(a) **d07 dissimilar-refuter purity**: the second planted anchor quote ("No material
+or heat-treatment non-conformance was found.", `manifest.toml:283` /
+`d07_metallurgy_report.txt:23`) lexically matches H3's phrasing ("material or
+manufacturing non-conformance", d09/manifest) — rephrase the sentence so it refutes
+without H3's vocabulary (the first anchor, the 100Cr6 conclusions sentence, already
+satisfies dissimilarity; match its register), and update the manifest quote.
+(b) **d05 chunk-level honesty**: the README claims d05 excludes overload "without
+using the words load / overload / rating", which holds for the anchor sentence but
+not at chunk granularity (section header "3. Duty and loading" directly above the
+anchor; "load history" in §6; "torque … transient" in the anchor's own paragraph —
+near-verbatim H4/d09 mode-3 phrasing). Either rework the surrounding text so a
+heading-inclusive chunk stays vocabulary-clean, or scope the README/manifest claim
+to anchor-level — decide which preserves the §5.1 measurement better and say so in
+the README inventory. (c) **d02 word floor**: 297 words vs the spec's 300 — pad
+minimally without touching any anchor sentence. (d) **labels/INSTRUCTIONS.md
+priming**: the §2 worked example ("overload … a later survey shows the load was
+normal → false") is the only one reusing a *real corpus hypothesis* — swap it for a
+fictional-domain example (pump/tank/guard, like the others). **Every anchor must
+still resolve exactly once** — the gate-corpus smoke tests are the acceptance
+criterion; if an anchor quote changes, change manifest and document together.
 
 ### Trial A1 — Candidate-generation recall (esp. refuter recall)  ⚠ may force redesign
 
@@ -368,7 +393,7 @@ A-series proves mechanisms, not efficacy; this instrument tests both efficacy an
       baseline code. Execute the V4–V6 work breakdown below — one output contract
       so the V3 harness scores the whole ladder identically.)*
 
-#### E1 work breakdown — V4/V5/V6 *(merged from `archive/gap_review_2026-06-11.md`)*
+#### E1 work breakdown — V4/V5/V6 + V12 *(merged from `archive/gap_review_2026-06-11.md`; V12 from `archive/review_2026-06-12_completed_scope_residuals.md`)*
 
 **V4 — baseline 1: tuned plain-RAG rig.** A *fair strong* baseline, not a
 strawman: same LLM endpoint and embedding model as the system, but what a
@@ -407,6 +432,42 @@ toolset (corpus as plain files + editor/ripgrep search, no iknos); time box
 confidence, time. Plus `docs/trials/e1_expert_answers_template.toml` matching
 the V4/V5 contract. Contamination rule: the expert has not read
 `gate_corpus/README.md` or the labels.
+
+**V12 — baseline-rig hardening (V4/V5 residuals)** *(2026-06-12 residual review,
+findings 1/2/5/6/11 — `archive/review_2026-06-12_completed_scope_residuals.md`;
+land before any E1 measurement run — findings 1 and 2 bias the instrument itself)*.
+One PR: (a) **retrieval scoping + stale chunks**: `rag.py::ingest_document` upserts
+on `(document_id, chunk_index, model)` but never deletes rows beyond the new chunk
+count — re-ingesting a shortened document leaves stale tail chunks, contradicting
+its own "re-run after a corpus edit is safe" docstring (`rag.py:203`); and
+`retrieve()` filters only on `model` (`rag.py:251`), so chunks from any previously
+ingested corpus contaminate retrieval and get cited. Delete stale tails on
+re-ingest, and scope retrieval to the run's corpus (a corpus/run identifier on
+`baseline_chunks` — needs a migration; set `down_revision` from `alembic heads` at
+PR time — or an explicit document-id set threaded from the runner; pick the one
+that keeps the rig honest for the two-corpus case and record why). (b) **pinned
+sampling**: baselines store `sampling=None` (`rag.py:187`, `agentic.py:157`) where
+every other consumer pins greedy (`{"temperature": 0.0}` — `core/extract.py:288`
+et al.); pin the same default, expose it as a constructor/CLI knob, and **record
+the sampling regime in the answers-file `meta`** (`run_baseline.py:108-116`) so a
+score is reproducible and attributable as `contract.py` claims. (c) **budget in
+calls, not steps**: `_step_call` retries don't consume the step budget
+(`agentic.py:160-181`) — worst case 13 LLM calls vs the spec's "≤ 6 LLM calls +
+1 answer"; count decision *calls* against the budget so the bound holds. (Note:
+under the now-pinned greedy regime a byte-identical retry deterministically
+reproduces the malformed output — vary the retry, e.g. a corrective system note,
+or drop straight to loud-unanswered; decide and document.) (d) **import-boundary
+relative-import bypass**: both AST guards keep only `node.level == 0` imports
+(`tests/unit/test_baselines_import_boundary.py:36`,
+`tests/unit/test_trials_import_boundary.py:30`), so `from ..core import …` escapes
+the boundary undetected — resolve relative imports against the package path and
+run them through the same allow/deny lists. (e) nits, if cheap in passing:
+`contract.py:124-133` `_toml_str` escapes only `\` `"` `\n` `\t` `\r` — escape the
+remaining control characters (U+0000–U+001F, U+007F) so an LLM answer containing a
+form feed cannot break V3's `tomllib` parse; `run_baseline.py:103` logs
+"answered %s" for unanswered questions. **Do not** change the BaselineAnswer
+contract fields, the chunking parameters, or k — V3 comparability and the
+already-written V6 template depend on them.
 - [ ] **Measure on the differentiator axes** (where RAG is weak — an easy factoid tie is
       fine): contradiction / refuter handling; correct **retraction** when an overturning
       fact is added; completeness/correctness of **traceability** to source; **calibration**
