@@ -93,8 +93,13 @@ After the lockdown: **W1 (the composed-loop orchestrator) shipped** —
 `core/revision_loop.py` drives `stabilize` over the retracted-node set
 (load-once / pure-loop / persist-once), so an *authorised* refutation now retracts
 and re-adjudicates to a fixpoint, and a non-converged region is surfaced as a §13
-finding. **W2** (the synthetic §8 end-to-end fixture) lands next, before Phase 5 and
-before the G4.6 run is meaningful; **W3** records the interim refutation-gate
+finding. **W2 (the synthetic §8 end-to-end fixture) shipped** —
+`tests/integration/test_revision_loop_e2e.py` runs the §8 experiment on real AGE with
+**zero LLM calls** (gate decisions injected through the real `authorise`): an overturning
+fact retracts a supporting fact, the unfounded cycle drops while the grounded one stays
+byte-stable, `hb` flips **only** through the gate (held → `pending_refutation`; authorised
+→ refuted), and a crafted mutual-`REFUTES` region is surfaced as a §13 finding that
+commits nothing — a permanent regression suite. **W3** records the interim refutation-gate
 decision eyes-open instead of by default. Specs in *Open task specs* below; findings
 record in `archive/review_2026-06-11_planned_architecture_assessment.md`.
 
@@ -289,7 +294,7 @@ the G4.6 run), with **W3** decided alongside the G4.5 channel-producer work, and
 **R4 → V9** (gate ANN infrastructure — with the gate trials).
 Migrations: set `down_revision` to the actual head (`alembic heads`) — numbering in
 older specs is stale. **Safety lockdown complete: R8/R9/V7/V8 all shipped. W1
-shipped; next: W2.**
+shipped; W1/W2 shipped, next: W3.**
 
 ### R8 — `provisional` boolean → `provisional_reasons` set — ✅ **shipped**
 
@@ -548,7 +553,27 @@ gate-gated retraction, convergence, oscillation, divergence) + integration
 (authorised refutation retracts the supporting fact → c dropped → fixpoint; the
 unauthorised case held with `pending_refutation`).
 
-### W2 — synthetic end-to-end fixture: the §8 experiment in test form *(needs W1; 2026-06-11 assessment, P1)*
+### W2 — synthetic end-to-end fixture: the §8 experiment in test form *(needs W1; 2026-06-11 assessment, P1)* — ✅ **shipped**
+
+*Shipped as `feat/w2-revision-loop-e2e`, to spec. Two tests in
+`tests/integration/test_revision_loop_e2e.py`, green on real AGE with **zero LLM calls**
+(gate decisions injected through the real `authorise`, never mocked). The fixture is two
+**structurally disjoint** regions in one box: Region A (a grounded cycle `p↔q` grounded by
+a never-retracted fact `gf` + a hypothesis `ha`) and Region B (an unfounded-after-retraction
+cycle `x↔y` grounded only by `bf` + a hypothesis `hb` weakly supported by `x` and strongly
+refuted by an overturning fact `r`). One test runs two passes on the same seed — **pass 1
+no decision** (the structural refutation is held: `pending_refutation`, nothing retracted —
+and it settles Region A's annotations as the byte-stability baseline), **pass 2 authorised**
+(the §12 policy retracts `bf`): asserts (a) Region A is **byte-for-byte unchanged** (full
+property maps equal — retraction stayed local), (b) the unfounded cycle `x,y` drops to
+confidence 0 while the grounded cycle survives, (c) `hb` flips to `refuted` **only** through
+the authorised gate, (e) the returned `Action` ids reconstruct the retracted-set trajectory
+(§10.2). A second test (d) crafts a mutual-`REFUTES` region under an oscillating revision
+policy and asserts the loop **surfaces** the §13 finding (`unstable_region`) and commits
+**nothing** (`persisted is None`, the graph byte-stable), the terminal `Action` carrying the
+unstable region. Kept as a permanent regression suite — red if any A→B→QBAF→gate→persist
+seam is rewired. (Disjoint-region byte-stability is the locality oracle; `mypy` is scoped to
+`src/iknos` so the test's untyped agtype helpers are consistent with the W1 integration test.)*
 
 The architecture's own must-pass (§8 *Proposed small-scale experiment*) exists in
 no form — every correctness guarantee currently rests on per-layer unit tests.
