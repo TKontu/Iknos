@@ -11,6 +11,7 @@ from iknos.baselines.contract import (
     AnswerFile,
     BaselineAnswer,
     BaselineQuestion,
+    QuestionTrace,
     UnansweredQuestion,
     load_answers,
     load_questions,
@@ -69,6 +70,18 @@ def test_answer_file_roundtrips_through_toml(tmp_path: Path) -> None:
     assert reloaded.meta == original.meta
     assert list(reloaded.answers) == list(original.answers)
     assert list(reloaded.unanswered) == list(original.unanswered)
+
+
+def test_answer_file_roundtrips_traces(tmp_path: Path) -> None:
+    # The agentic rung's per-question trace (queries + seen chunks) must survive serialization.
+    original = AnswerFile(
+        meta={"baseline": "agentic"},
+        answers=[BaselineAnswer("q01", "ans", ("c1",), 0.7)],
+        traces=[QuestionTrace("q01", ("first query", "second query"), ("c1", "c2", "c3"))],
+    )
+    path = tmp_path / "agentic.toml"
+    original.write(path)
+    assert list(load_answers(path).traces) == list(original.traces)
 
 
 def test_answer_file_escapes_special_characters(tmp_path: Path) -> None:
