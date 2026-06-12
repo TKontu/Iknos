@@ -77,7 +77,8 @@ R8 → R9 → V7 (quarantine enforcement in the edge producer) → V8 (the
 wired to the slice-1 `authorise` and holding un-authorised flips as a
 `pending_refutation` finding) — because the REFUTES creation site exists with
 §3.1 quarantine unenforced, and `persist_verdicts` still writes whatever state
-it is given. And before G4.6 can run at all: the **gate assets** V1 (planted
+it is given. **Status: R8, R9 and V8 shipped; only V7 (the edge-producer
+quarantine enforcement) remains in the lockdown chain.** And before G4.6 can run at all: the **gate assets** V1 (planted
 corpus), V2 (gold labels — longest lead, start the annotator recruitment now),
 V3 (metrics harness), plus the E1 baselines V4–V6 — specs in `todo_trials.md`.
 The lockdown specs are in *Open task specs* below.
@@ -389,7 +390,7 @@ edge + Action carries `quarantined`. Do not: filter at the candidate/judge stage
 (the judge should still see the evidence — quarantine gates the *write*); touch
 `qbaf_adapter.py` (V8).
 
-### V8 — `persist_verdicts` ensemble filter *(the G4.5 consumer-filter slice) — shipped*
+### V8 — `persist_verdicts` ensemble filter *(the G4.5 consumer-filter slice)* — ✅ **shipped**
 
 G4.5 slice 1 shipped the gate's pure core (`core/ensemble_gate.py::authorise`,
 unanimity-of-required + dissent veto, `DEFAULT_GATE` safe-by-default while the
