@@ -7,9 +7,50 @@ import iknos.core.embeddings as emb
 from iknos.core.embeddings import (
     DocumentContext,
     EmbeddingSubstrate,
+    _derive_special_affixes,
     _plan_windows,
     mean_pool_normalize,
 )
+
+# --- special-token affix derivation (transformers>=5 fast-tokenizer compat) ---
+
+
+def _fake_tokenizer(prefix: list[int], suffix: list[int], content: list[int]):
+    """A tokenizer stub whose ``__call__`` wraps content ids with ``prefix``/``suffix`` when
+    ``add_special_tokens`` (the only behaviour ``_derive_special_affixes`` probes)."""
+
+    def call(_text: str, add_special_tokens: bool = True, **_kw: object) -> dict[str, list[int]]:
+        ids = list(content)
+        if add_special_tokens:
+            ids = prefix + ids + suffix
+        return {"input_ids": ids}
+
+    return call
+
+
+def test_derive_special_affixes_bos_eos_wrapping() -> None:
+    # XLM-RoBERTa / bge-m3 shape: a single bos prefix and eos suffix around the content.
+    tok = _fake_tokenizer(prefix=[0], suffix=[2], content=[101])
+    assert _derive_special_affixes(tok) == ([0], [2])
+
+
+def test_derive_special_affixes_multi_token_affixes() -> None:
+    # A tokenizer that adds more than one special token per side is recovered intact.
+    tok = _fake_tokenizer(prefix=[101, 5], suffix=[102], content=[42, 43])
+    assert _derive_special_affixes(tok) == ([101, 5], [102])
+
+
+def test_derive_special_affixes_no_special_tokens() -> None:
+    # A tokenizer that adds nothing yields empty affixes (the no-wrapping fallback).
+    tok = _fake_tokenizer(prefix=[], suffix=[], content=[7])
+    assert _derive_special_affixes(tok) == ([], [])
+
+
+def test_derive_special_affixes_empty_probe_is_safe() -> None:
+    # A pathological tokenizer that encodes the probe to nothing must not raise.
+    tok = _fake_tokenizer(prefix=[0], suffix=[2], content=[])
+    assert _derive_special_affixes(tok) == ([], [])
+
 
 # --- windowing plan (G1.13 slice 2) ---
 

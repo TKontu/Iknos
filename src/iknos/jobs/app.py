@@ -116,6 +116,7 @@ async def _ingest_one(
     from iknos.core.ingest import ingest_document_bytes
     from iknos.core.mineru import make_parser
     from iknos.core.segmentation import SegmentationBackbone, default_level_policy
+    from iknos.db.age import atomic_write
     from iknos.db.session import register_age_bootstrap
 
     engine = register_age_bootstrap(create_async_engine(settings.database_url))
@@ -125,7 +126,10 @@ async def _ingest_one(
     parser = make_parser()
     segmenter = SegmentationBackbone(levels=default_level_policy())
     try:
-        async with session_factory() as session:
+        # core.ingest is caller-owned-transaction (it does not commit); the worker is that
+        # caller, so the spans + their Actions commit together via atomic_write — without this
+        # the session closes and rolls back, the job still reports success, and nothing lands.
+        async with session_factory() as session, atomic_write(session):
             await ingest_document_bytes(
                 session,
                 document_id,
@@ -206,6 +210,7 @@ async def _propositionize_one(*, document_id: uuid.UUID) -> None:
     from iknos.core.llm import LLMClient
     from iknos.core.proposition import Propositionizer
     from iknos.core.verify import Verifier
+    from iknos.db.age import atomic_write
     from iknos.db.session import register_age_bootstrap
 
     engine = register_age_bootstrap(create_async_engine(settings.database_url))
@@ -230,7 +235,9 @@ async def _propositionize_one(*, document_id: uuid.UUID) -> None:
         reuse_extractions=settings.extract_reuse_enabled,
     )
     try:
-        async with session_factory() as session:
+        # Caller-owned transaction, like ingest: the extracted propositions + their Actions commit
+        # together via atomic_write (an early no-op return commits nothing — harmless).
+        async with session_factory() as session, atomic_write(session):
             spans = await load_document_spans(session, document_id)
             if not spans:
                 return  # document never ingested at the extraction level — a clean no-op

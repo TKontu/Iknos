@@ -217,6 +217,31 @@ class DocumentContext:
         return pooled.tolist()
 
 
+def _derive_special_affixes(tokenizer: Any) -> tuple[list[int], list[int]]:
+    """The special-token ids the tokenizer wraps a single sequence with, as ``(prefix, suffix)``.
+
+    ``embed_document`` tokenizes the whole document once without special tokens, tiles it, then
+    must re-frame each window's content ids with the model's special tokens. Older transformers
+    exposed ``build_inputs_with_special_tokens`` / ``get_special_tokens_mask`` on the (slow)
+    tokenizer for exactly this; **transformers>=5 removed both from the fast tokenizers** AGE/bge-m3
+    loads (``AutoTokenizer`` returns a fast ``XLMRobertaTokenizer`` whose ``__getattr__`` now raises
+    on those names, and ``get_special_tokens_mask`` raises ``NotImplementedError`` for non-formatted
+    input). So we recover the wrapping from a probe — encode one content token with and without
+    special tokens and diff — using only ``__call__``, which is stable across transformers versions.
+    For bge-m3 (XLM-RoBERTa) this yields ``([bos], [eos]) == ([0], [2])``; a tokenizer that adds no
+    special tokens yields ``([], [])``.
+    """
+    probe = list(tokenizer("a", add_special_tokens=False)["input_ids"])
+    if not probe:  # pathological tokenizer (empty content encoding) — assume no wrapping
+        return [], []
+    wrapped = list(tokenizer("a", add_special_tokens=True)["input_ids"])
+    n = len(probe)
+    for i in range(len(wrapped) - n + 1):
+        if wrapped[i : i + n] == probe:  # locate the contiguous content run inside the wrapped ids
+            return wrapped[:i], wrapped[i + n :]
+    return [], []  # content not found verbatim (tokenizer rewrote it) — fall back to no wrapping
+
+
 class EmbeddingSubstrate:
     """Wraps the long-context embedding model (late chunking — embed once, derive all levels).
 
@@ -234,6 +259,9 @@ class EmbeddingSubstrate:
         # the Action audit row (core/ingest.py), so consumers don't re-specify it.
         self.model_name = model_name_or_path
         self.tokenizer: Any = AutoTokenizer.from_pretrained(model_name_or_path)
+        # The model's special-token wrapping, derived once (see _derive_special_affixes): the
+        # transformers>=5 fast tokenizer no longer exposes build_inputs_with_special_tokens.
+        self._special_prefix, self._special_suffix = _derive_special_affixes(self.tokenizer)
         self.model: Any = AutoModel.from_pretrained(model_name_or_path).to(self.device)
         self.model.eval()
 
@@ -275,7 +303,7 @@ class EmbeddingSubstrate:
         content_offsets = [(int(s), int(e)) for s, e in enc["offset_mapping"][0].tolist()]
         num_content = int(content_ids.shape[0])
 
-        num_special = self.tokenizer.num_special_tokens_to_add(pair=False)
+        num_special = len(self._special_prefix) + len(self._special_suffix)
         window_size = MAX_MODEL_TOKENS - num_special
         policy = {
             "overlap": WINDOW_OVERLAP_TOKENS,
@@ -287,11 +315,11 @@ class EmbeddingSubstrate:
         windows: list[tuple[torch.Tensor, list[tuple[int, int]]]] = []
         for tok_start, tok_end in plans:
             win_ids = content_ids[tok_start:tok_end].tolist()
-            model_ids = self.tokenizer.build_inputs_with_special_tokens(win_ids)
-            special_mask = self.tokenizer.get_special_tokens_mask(
-                win_ids, already_has_special_tokens=False
-            )
-            content_pos = [i for i, m in enumerate(special_mask) if m == 0]
+            # Re-frame the window with the model's special tokens; content sits contiguously
+            # between the derived prefix/suffix, so its positions are an exact slice (no need for
+            # the removed get_special_tokens_mask).
+            model_ids = self._special_prefix + win_ids + self._special_suffix
+            content_pos = slice(len(self._special_prefix), len(self._special_prefix) + len(win_ids))
 
             input_ids = torch.tensor([model_ids], device=self.device)
             attention_mask = torch.ones_like(input_ids)
