@@ -429,7 +429,7 @@ async def test_produce_judges_writes_edges_and_records_actions(monkeypatch) -> N
         actions.append(kw)
         return uuid.uuid4()
 
-    monkeypatch.setattr("iknos.db.age.merge_edge", fake_merge_edge)
+    monkeypatch.setattr("iknos.db.cypher.merge_edge", fake_merge_edge)
     monkeypatch.setattr("iknos.provenance.action_log.record_action", fake_record_action)
 
     pool = CandidatePool(
@@ -495,7 +495,7 @@ async def test_produce_drops_irrelevant_and_writes_nothing_for_empty_pool(monkey
         actions.append(kw)
         return uuid.uuid4()
 
-    monkeypatch.setattr("iknos.db.age.merge_edge", fake_merge_edge)
+    monkeypatch.setattr("iknos.db.cypher.merge_edge", fake_merge_edge)
     monkeypatch.setattr("iknos.provenance.action_log.record_action", fake_record_action)
 
     pool = CandidatePool(
@@ -533,7 +533,7 @@ async def test_produce_quarantines_provisional_refutes_end_to_end(monkeypatch) -
         actions.append(kw)
         return uuid.uuid4()
 
-    monkeypatch.setattr("iknos.db.age.merge_edge", fake_merge_edge)
+    monkeypatch.setattr("iknos.db.cypher.merge_edge", fake_merge_edge)
     monkeypatch.setattr("iknos.provenance.action_log.record_action", fake_record_action)
 
     pool = CandidatePool(
