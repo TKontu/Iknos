@@ -272,17 +272,23 @@ cite a gap file by name resolve there):
       call, and recording it would muddy the `cache_hit ⇒ ~zero extractor cost`
       signal; a distinct `embed_duration_ms` is the right fix iff replays ever
       dominate, a scale concern.)*
-- [~] **V11 — unit tests for untested infrastructure modules** *(in progress —
-      domain-loader result-builder tests #64, `_build_cypher_sql` seam + assembly
-      tests #65, `GRAPH_NAME` identifier validation + tests #66 shipped)*. Check
-      existing coverage first (`test_age_cypher_map.py` covers `cypher_map` — don't
-      duplicate). Remaining: `test_action_log.py` (record construction: required
-      fields, JSON-serializable payloads — extract a pure `build_action` seam if
-      the module is all-DB, behavior-identical); `test_audit.py` (pure parts of
-      reach-back assembly); `test_boxes_registry.py` (serde round-trip);
-      `test_config.py` (defaults without env; env overrides; no DB on import).
-      Pure where the module is pure; integration tests keep owning round-trips;
-      don't chase coverage into ORM/type modules.
+- [x] **V11 — unit tests for untested infrastructure modules** *(complete)*. Shipped
+      in stages: domain-loader result-builder tests #64, `_build_cypher_sql` seam +
+      assembly tests #65, `GRAPH_NAME` identifier validation + tests #66. The four
+      originally-remaining targets are all covered (verified 2026-06-12, no DB needed):
+      `test_action_log.py` pins the pure `build_action` seam — field mapping, the
+      inputs/outputs/`metrics` → `{}` defaulting, optional-stay-`None`, and
+      JSON-serializable payloads (#103, with R12 `metrics`); `test_audit.py` pins the
+      pure `provenance_gaps` reach-back invariants (#42); `test_config.py` pins
+      defaults-without-env, env overrides, no-DB-on-import, and the graph-name
+      identifier guard (#66). The `test_boxes_registry.py` line named a *serde
+      round-trip*, which is already covered DB-free by `test_boxes.py` (`boxes/serde.py`,
+      both directions incl. the agtype JSON-string read shape); `boxes/registry.py`
+      itself is all-DB with no pure seam to extract, so its round-trips are owned by
+      integration `test_box_registry.py` — a `tests/unit/test_boxes_registry.py` would
+      only duplicate `test_boxes.py`. `test_cypher_map.py` covers `cypher_map` — not
+      duplicated. Pure where the module is pure; integration tests keep owning
+      round-trips; coverage not chased into ORM/type modules.
 - [x] **W7 — dual-write transaction discipline** *(2026-06-11 architecture assessment, P7 —
       Phase-5 entry criterion)* *(shipped)*. `db/age.py::atomic_write(session)` is the wrapper —
       an `@asynccontextmanager` that commits the bracketed writes together on clean exit and
@@ -310,24 +316,31 @@ cite a gap file by name resolve there):
       call site with a user-influenced value breaks it silently. (1) **Open:** a thin
       query-builder over `db/age.py` (validated label/edge enums, mandatory
       value escaping through the `cypher_map` machinery); migrate the writers;
-      a CI grep gate against raw f-string Cypher outside it — the broadest-touch
-      slice, its own PR (the gate must land *with* the migration, else it red-flags
-      the unmigrated sites). (2) **Shipped** — `tests/unit/test_serde_roundtrips.py`:
-      Hypothesis property tests for every manual serde pair (`Sensitivity.flatten` /
-      `from_props`, the `SourceInterest` pair via box serde, box serde,
-      `same_as_to_props`), each round-tripping through `_age_stored` (the faithful
-      AGE read shape — `cypher_map` JSON-encodes list values into string properties,
-      which `from_props` must decode), so a write/read format drift cannot ship
-      without a test going red.
-- [ ] **W11 — small hardening batch** *(assessment, minor findings — one PR)*:
-      embedding-model identity checked at substrate construction, not first
-      write (fail before the expensive re-embed, `core/embeddings.py`);
-      verifier-down degraded mode surfaced as a triage-visible reason, not only
-      a log line; the segment `Action` records the per-reason span-skip split
-      (whitespace vs zero-vector); `DEFAULT_AGREEMENT_THRESHOLD` becomes a
-      config knob; `types/nodes.py` gains the `Mention` placeholder (or an
-      explicit docstring pointer) so the §3.1 binding seam is visible in the
-      schema module, not only in `core/reference.py` prose.
+      a CI grep gate against raw f-string Cypher outside it. (2) Round-trip
+      property tests for every manual serde pair (`Sensitivity.flatten` /
+      `from_props`, `SourceInterest`, box serde, `same_as_to_props`) so a
+      write/read format drift cannot ship without a test going red.
+- [x] **W11 — small hardening batch** *(assessment, minor findings — one PR)*:
+      embedding-model identity checked **before the embedding pass**, not only at
+      the per-document write — `core/ingest.py::assert_embedding_model_compatible`
+      is the early, *global* G1.16 guard (run at the top of `_ingest_parsed`), and
+      it also closes the new-document hole the per-document `persist_spans` guard
+      cannot see (a fresh doc embedded under a swapped model would silently mix the
+      shared ANN space); the segment `Action` now records the **per-reason span-skip
+      split** (`n_skipped_whitespace` / `n_skipped_zero_vector` + `outputs.skipped_by_reason`,
+      `SpanPersistResult.skipped_whitespace`/`skipped_zero_vector`), `_skip_reason`
+      classifying whitespace (pooled to `None`) vs the zero-vector sentinel;
+      `DEFAULT_AGREEMENT_THRESHOLD` (consistency.py) is now the **single source** for
+      `config.prop_agreement_threshold` (the `PROP_AGREEMENT_THRESHOLD` knob already
+      existed — the duplicated literal is removed); `types/nodes.py` gains the explicit
+      `Mention` **docstring pointer** (the canonical schema + `mention_to_props` write
+      contract live in `core/reference.py`; a Pydantic placeholder would only risk
+      drift). **Verifier-down degraded mode: already covered, not duplicated** — a
+      configured verifier that *fails at runtime* (G1.17 R2) leaves faithfulness null
+      → `UNASSESSED_FAITHFULNESS` (G1.21), a triage-visible `ProvisionalReason` on the
+      node *and* a `verifier_unavailable` row on the verify `Action`; so it is surfaced
+      to triage, not only logged. Tests: unit (`_skip_reason`, config single-source +
+      env override) + integration (per-reason skip audit, early model-swap guard).
 
 ## Conventions for executing agents *(applies to every task in every phase file)*
 

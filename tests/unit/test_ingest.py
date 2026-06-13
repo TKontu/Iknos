@@ -10,7 +10,10 @@ offset-preserving sentence splitter.
 import uuid
 
 from iknos.core.ingest import (
+    SKIP_WHITESPACE,
+    SKIP_ZERO_VECTOR,
     _has_no_embedding,
+    _skip_reason,
     span_content_hash,
     span_id_for,
     split_sentences,
@@ -133,3 +136,13 @@ def test_has_no_embedding_flags_none_and_zero_vector() -> None:
 def test_has_no_embedding_passes_real_vector() -> None:
     assert _has_no_embedding([0.0, 0.1, 0.0]) is False
     assert _has_no_embedding([1.0]) is False
+
+
+def test_skip_reason_splits_whitespace_from_zero_vector() -> None:
+    # W11: the two collapsed skip cases are now distinguished so the segment Action audits them
+    # per reason — None (pooled to no token) is whitespace, an all-zero vector is zero_vector.
+    assert _skip_reason(None) == SKIP_WHITESPACE
+    assert _skip_reason([0.0, 0.0, 0.0]) == SKIP_ZERO_VECTOR
+    assert _skip_reason([]) == SKIP_ZERO_VECTOR  # vacuously all-zero
+    assert _skip_reason([0.0, 0.1, 0.0]) is None  # a real vector is kept
+    assert _skip_reason([1.0]) is None
