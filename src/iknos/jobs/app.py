@@ -210,7 +210,6 @@ async def _propositionize_one(*, document_id: uuid.UUID) -> None:
     from iknos.core.llm import LLMClient
     from iknos.core.proposition import Propositionizer
     from iknos.core.verify import Verifier
-    from iknos.db.age import atomic_write
     from iknos.db.session import register_age_bootstrap
 
     engine = register_age_bootstrap(create_async_engine(settings.database_url))
@@ -235,9 +234,11 @@ async def _propositionize_one(*, document_id: uuid.UUID) -> None:
         reuse_extractions=settings.extract_reuse_enabled,
     )
     try:
-        # Caller-owned transaction, like ingest: the extracted propositions + their Actions commit
-        # together via atomic_write (an early no-op return commits nothing — harmless).
-        async with session_factory() as session, atomic_write(session):
+        # No atomic_write wrap here (unlike _ingest_one): propositionize_document commits
+        # per-span by design (the G1.17 R1 isolation guarantee — one span failing must not roll
+        # back the rest, and a re-run resumes via idempotency). It owns its transaction boundary,
+        # so the worker must not bracket it in a single commit.
+        async with session_factory() as session:
             spans = await load_document_spans(session, document_id)
             if not spans:
                 return  # document never ingested at the extraction level — a clean no-op
