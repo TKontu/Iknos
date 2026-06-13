@@ -116,6 +116,7 @@ async def _ingest_one(
     from iknos.core.ingest import ingest_document_bytes
     from iknos.core.mineru import make_parser
     from iknos.core.segmentation import SegmentationBackbone, default_level_policy
+    from iknos.db.age import atomic_write
     from iknos.db.session import register_age_bootstrap
 
     engine = register_age_bootstrap(create_async_engine(settings.database_url))
@@ -125,7 +126,10 @@ async def _ingest_one(
     parser = make_parser()
     segmenter = SegmentationBackbone(levels=default_level_policy())
     try:
-        async with session_factory() as session:
+        # core.ingest is caller-owned-transaction (it does not commit); the worker is that
+        # caller, so the spans + their Actions commit together via atomic_write — without this
+        # the session closes and rolls back, the job still reports success, and nothing lands.
+        async with session_factory() as session, atomic_write(session):
             await ingest_document_bytes(
                 session,
                 document_id,
@@ -230,6 +234,10 @@ async def _propositionize_one(*, document_id: uuid.UUID) -> None:
         reuse_extractions=settings.extract_reuse_enabled,
     )
     try:
+        # No atomic_write wrap here (unlike _ingest_one): propositionize_document commits
+        # per-span by design (the G1.17 R1 isolation guarantee — one span failing must not roll
+        # back the rest, and a re-run resumes via idempotency). It owns its transaction boundary,
+        # so the worker must not bracket it in a single commit.
         async with session_factory() as session:
             spans = await load_document_spans(session, document_id)
             if not spans:
