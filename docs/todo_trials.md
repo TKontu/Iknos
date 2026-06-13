@@ -365,15 +365,16 @@ call path. Each read shape gets two plans — the planner's default and one with
 `enable_seqscan=off` — so *index existence* is separated from *index use* precisely.
 
 - **Index use confirmed (existence ≠ use).** At 30 000 vertices the planner **chooses**
-  the migration-0007 vertex GIN for box-scoped retrieval (1.6 ms), MERGE-by-id
-  (0.6 ms), and the bitemporal as-of (0.9 ms); the partonomy closure rides the **Actor GIN**
+  the migration-0007 vertex GIN for box-scoped retrieval (0.8 ms), MERGE-by-id
+  (0.9 ms), and the bitemporal as-of (0.9 ms); the partonomy closure rides the **Actor GIN**
   (its anchor lookup). The agtype `properties @>` containment the 0007 docstring predicts is
   exactly what the plans use. No "index exists but unusable" case among the core reads — the
-  §13 engine-swap trigger did **not** fire. *(Correction 2026-06-12: `partOf` endpoint-btree
-  use was previously asserted but is **not demonstrated** — the shape-3 EXPLAIN shows only the
-  Actor GIN; AGE's VLE may materialize edges internally. Anchor GIN verified; endpoint-btree
-  use unshown.)*
-- **Costliest indexed read:** the `*1..5` `partOf` closure at ~60 ms median — AGE
+  §13 engine-swap trigger did **not** fire. *(`partOf` endpoint-btree use is **not demonstrated**
+  — the shape-3 EXPLAIN shows only the Actor GIN; AGE's VLE may materialize edges internally.
+  Anchor GIN verified; endpoint-btree use unshown. **Re-confirmed on the 2026-06-13 re-run** with
+  the tightened `_scan_line`: shape 3 emits only `ix_actor_props` in both the default and
+  `enable_seqscan=off` plans — no `partOf`-table or endpoint-btree scan node appears.)*
+- **Costliest indexed read:** the `*1..5` `partOf` closure at ~52 ms median — AGE
   variable-length-traversal overhead, not a missing index. Acceptable at investigation
   scale; watch if the roll-up becomes a hot path. (The synthetic partonomy is a near-linear
   chain, fan-out ≈1, so this is a depth-bounded linear walk, not a branching roll-up.)
@@ -381,11 +382,12 @@ call path. Each read shape gets two plans — the planner's default and one with
   **no accelerating index** (the endpoint btree is a seq-scan substitute, not a `state`
   filter — edge-property GIN is deferred per the 0007 docstring). Concrete cost: the bulk
   bitemporal **supersession update** runs ~10²–10³× the indexed lookups (it rewrites every
-  matching edge with a seq scan over `SAME_AS`). *(Correction 2026-06-12: the originally
-  quoted ~1.3 s median / ~2.1 s p95 was **contaminated** — the harness piled dead tuples by
-  re-running the UPDATE on the same edges across all reps in one transaction; the harness now
-  isolates each write rep and the figure is **pending re-measurement**. The STAY decision is
-  unaffected — the defect inflated an already-deferred cost.)* Bounded today by the small
+  matching edge with a seq scan over `SAME_AS`). *(Re-measured 2026-06-13: **272 ms median /
+  300 ms p95** at 30 000 vertices. The originally quoted ~1.3 s median / ~2.1 s p95 was
+  **contaminated** — the old harness piled dead tuples by re-running the UPDATE on the same edges
+  across all reps in one transaction, inflating it ~5×; the fixed harness isolates each write rep
+  (per-rep rollback to the committed baseline). The STAY decision is unaffected — the defect had
+  inflated an already-deferred cost.)* Bounded today by the small
   SAME_AS edge count, and real re-scoring touches few edges at a time. **Phase-5 action
   item:** add an edge-property GIN on `SAME_AS.properties` (or a btree on extracted `state`)
   before bitemporal supersession runs at reference-base scale.
