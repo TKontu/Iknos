@@ -52,10 +52,6 @@ from iknos.types.nodes import Box, Tier
 # so the §6.1 reference regime is its own auditable lifecycle in the actions log.
 REFERENCE_ACTOR = "reference-ingest"
 
-# The document↔box membership edge. A reference document is a MEMBER_OF its corpus box;
-# the edge carries the read-only seal (tier + digest + sealed flag).
-_MEMBER_OF = "MEMBER_OF"
-
 # The read-only tiers (§9 order: schema → reference → case → working). Only these may be
 # sealed: case/working are the per-investigation, mutable regimes that §6.1 keeps *out*
 # of amortization. schema is included for symmetry (a schema-tier domain pack is equally
@@ -119,13 +115,18 @@ async def get_reference_seal(session: AsyncSession, document_id: uuid.UUID) -> R
     one-box-per-corpus-document invariant the ingest path enforces), so the first match
     is authoritative.
     """
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
-    rows = await execute_cypher(
-        session,
-        f"MATCH (d:Document {{id: '{document_id}'}})-[r:{_MEMBER_OF}]->(b:Box) "
-        "RETURN b.id, r.tier, r.input_sha256, r.valid_from",
-        returns="box_id agtype, tier agtype, input_sha256 agtype, valid_from agtype",
+    rows = await (
+        CypherQuery()
+        .match(
+            node("d", NodeLabel.DOCUMENT, {"id": str(document_id)})
+            + rel(EdgeType.MEMBER_OF, var="r")
+            + node("b", NodeLabel.BOX)
+        )
+        .return_("b.id, r.tier, r.input_sha256, r.valid_from")
+        .run(session, returns="box_id agtype, tier agtype, input_sha256 agtype, valid_from agtype")
     )
     if not rows:
         return None
@@ -155,7 +156,7 @@ async def seal_reference_document(
     either reuses or raises before reaching here), so the seal's bitemporal anchor is
     never moved. Refuses a non-reference tier via :func:`validate_sealable_tier`.
     """
-    from iknos.db.age import merge_edge
+    from iknos.db.cypher import EdgeType, merge_edge
 
     validate_sealable_tier(box.tier)
     when = (valid_from or datetime.now(UTC)).isoformat()
@@ -163,7 +164,7 @@ async def seal_reference_document(
         session,
         src_id=document_id,
         dst_id=box.id,
-        label=_MEMBER_OF,
+        label=EdgeType.MEMBER_OF,
         props={
             "tier": str(box.tier),
             "sealed": True,

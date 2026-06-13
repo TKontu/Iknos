@@ -37,7 +37,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.boxes.registry import deprecate_box
 from iknos.boxes.serde import box_to_props
-from iknos.db.age import execute_cypher, merge_edge, merge_vertex, unquote_agtype
+from iknos.db.age import unquote_agtype
+from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, lit, merge_edge, merge_vertex, node
 from iknos.domain.pack import DomainPack
 from iknos.provenance.action_log import record_action
 
@@ -83,10 +84,11 @@ async def _loaded_box_state(session: AsyncSession, box_id: uuid.UUID) -> _BoxSta
     re-load (no-op) from a changed-content re-load (immutability error) without
     rewriting anything.
     """
-    rows = await execute_cypher(
-        session,
-        f"MATCH (b:Box {{id: '{box_id}'}}) RETURN b.content_hash",
-        returns="content_hash agtype",
+    rows = (
+        await CypherQuery()
+        .match(node("b", NodeLabel.BOX, {"id": str(box_id)}))
+        .return_("b.content_hash")
+        .run(session, returns="content_hash agtype")
     )
     if not rows:
         return None
@@ -150,9 +152,11 @@ async def load_pack(
             return _loaded_result(pack, entity_ids, already_loaded=True)
         if state.content_hash is None:
             # Legacy Box (pre-G0.R1): adopt the hash without touching valid_from.
-            await execute_cypher(
-                session,
-                f"MATCH (b:Box {{id: '{pack.box_id}'}}) SET b.content_hash = '{content_hash}'",
+            await (
+                CypherQuery()
+                .match(node("b", NodeLabel.BOX, {"id": str(pack.box_id)}))
+                .set("b.content_hash = " + lit(content_hash))
+                .run(session)
             )
             return _loaded_result(pack, entity_ids, already_loaded=True)
         raise PackImmutabilityError(
@@ -181,7 +185,7 @@ async def load_pack(
     }
     if pack.description is not None:
         extra["description"] = pack.description
-    await merge_vertex(session, "Box", box_to_props(box, extra=extra))
+    await merge_vertex(session, NodeLabel.BOX, box_to_props(box, extra=extra))
     # Box creation is an auditable lifecycle event (§10.1), uniform with the registry's
     # create-box Action — emitted only on a real first load (this branch).
     await record_action(
@@ -196,7 +200,7 @@ async def load_pack(
     for e in pack.entities:
         await merge_vertex(
             session,
-            "Object",
+            NodeLabel.OBJECT,
             {
                 "id": str(entity_ids[e.key]),
                 "box": str(box.id),
@@ -211,7 +215,7 @@ async def load_pack(
             session,
             src_id=entity_ids[rel.part],
             dst_id=entity_ids[rel.whole],
-            label="directPartOf",
+            label=EdgeType.DIRECT_PART_OF,
             props={
                 "box": str(box.id),
                 "meronymy_type": str(rel.meronymy),
@@ -227,7 +231,7 @@ async def load_pack(
             session,
             src_id=entity_ids[edge.part],
             dst_id=entity_ids[edge.whole],
-            label="partOf",
+            label=EdgeType.PART_OF,
             props={
                 "box": str(box.id),
                 "meronymy_type": str(edge.meronymy),
@@ -242,10 +246,11 @@ async def load_pack(
 
 async def list_active_packs(session: AsyncSession) -> list[dict[str, str]]:
     """Active domain-pack Boxes — the current (pre-Phase-6) activation lookup."""
-    rows = await execute_cypher(
-        session,
-        f"MATCH (b:Box {{kind: '{PACK_KIND}', status: 'active'}}) RETURN b.id, b.name, b.version",
-        returns="id agtype, name agtype, version agtype",
+    rows = (
+        await CypherQuery()
+        .match(node("b", NodeLabel.BOX, {"kind": PACK_KIND, "status": "active"}))
+        .return_("b.id, b.name, b.version")
+        .run(session, returns="id agtype, name agtype, version agtype")
     )
     return [
         {

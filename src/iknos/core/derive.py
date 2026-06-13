@@ -72,6 +72,7 @@ from iknos.boxes.serde import resolve_tier
 from iknos.core.confidence import DEFAULT_SEMIRING, Semiring, valuate
 from iknos.core.derivation_adapter import ActiveSubgraph, DerivationGraphAdapter
 from iknos.core.truth_maintenance import Derivation, DerivationGraph, IncrementalOracle
+from iknos.db.cypher import NodeLabel
 from iknos.provenance.action_log import record_action
 from iknos.types.annotations import Annotations
 from iknos.types.nodes import Box, Conclusion, Tier
@@ -94,9 +95,9 @@ class DerivationKind(StrEnum):
 
 
 #: Derivation kind → AGE conclusion label. Both labels exist in the initial migration (0001).
-_AGE_LABEL: dict[DerivationKind, str] = {
-    DerivationKind.DEDUCTIVE: "DeductiveConclusion",
-    DerivationKind.INDUCTIVE: "InductiveConclusion",
+_AGE_LABEL: dict[DerivationKind, NodeLabel] = {
+    DerivationKind.DEDUCTIVE: NodeLabel.DEDUCTIVE_CONCLUSION,
+    DerivationKind.INDUCTIVE: NodeLabel.INDUCTIVE_CONCLUSION,
 }
 
 
@@ -252,14 +253,20 @@ class Deriver:
         conclusion premise (no ``EVIDENCED_BY``) contributes none here; its own provenance is
         the recursive ``DERIVED_FROM`` chain.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
         spans: dict[str, list[str]] = {}
         for pid in premise_ids:
-            rows = await execute_cypher(
-                session,
-                f"MATCH (f {{id: '{pid}'}})-[:EVIDENCED_BY]->(s:Span) RETURN s.id",
-                returns="sid agtype",
+            rows = await (
+                CypherQuery()
+                .match(
+                    node("f", props={"id": str(pid)})
+                    + rel(EdgeType.EVIDENCED_BY)
+                    + node("s", NodeLabel.SPAN)
+                )
+                .return_("s.id")
+                .run(session, returns="sid agtype")
             )
             if rows:
                 spans[str(pid)] = [unquote_agtype(sid) for (sid,) in rows]
@@ -281,7 +288,8 @@ class Deriver:
         annotations, the ``DERIVED_FROM`` edges (one group id, the step strength), and the
         provenance-bearing ``Action`` — committing atomically.
         """
-        from iknos.db.age import atomic_write, merge_edge, merge_vertex
+        from iknos.db.age import atomic_write
+        from iknos.db.cypher import EdgeType, merge_edge, merge_vertex
 
         subgraph = await self.adapter.load_active(session)
 
@@ -316,7 +324,7 @@ class Deriver:
             )
             for pid in proposal.premise_ids:
                 await merge_edge(
-                    session, src_id=cid, dst_id=pid, label="DERIVED_FROM", props=edge_props
+                    session, src_id=cid, dst_id=pid, label=EdgeType.DERIVED_FROM, props=edge_props
                 )
 
             spans = await self._premise_spans(session, proposal.premise_ids)

@@ -119,17 +119,18 @@ async def effective_credibility_of(session: AsyncSession, fact_id: uuid.UUID) ->
     (not duplicated at the call site) so the derived-not-stored contract has one implementation.
     """
 
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, Raw, node, rel
 
     fid = str(fact_id)
 
-    rows = await execute_cypher(
-        session,
-        f"MATCH (f:Fact {{id: '{fid}'}}) "
-        "OPTIONAL MATCH (b:Box {id: f.box}) "
-        "OPTIONAL MATCH (f)-[:EVIDENCED_BY]->(p:Proposition) "
-        "RETURN b.reliability_prior, p.epistemic_class, f.interest_alignment",
-        returns="rel agtype, eclass agtype, align agtype",
+    rows = await (
+        CypherQuery()
+        .match(node("f", NodeLabel.FACT, {"id": fid}))
+        .optional_match(node("b", NodeLabel.BOX, {"id": Raw("f.box")}))
+        .optional_match(node("f") + rel(EdgeType.EVIDENCED_BY) + node("p", NodeLabel.PROPOSITION))
+        .return_("b.reliability_prior, p.epistemic_class, f.interest_alignment")
+        .run(session, returns="rel agtype, eclass agtype, align agtype")
     )
     if not rows:
         return None

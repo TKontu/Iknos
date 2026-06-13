@@ -14,6 +14,7 @@ from iknos.db.cypher import (
     CypherQuery,
     EdgeType,
     NodeLabel,
+    Raw,
     lit,
     lit_list,
     node,
@@ -156,6 +157,17 @@ def test_in_list_read() -> None:
         .return_("p.id, properties(p)")
     )
     assert q.render() == "MATCH (p:Proposition) WHERE p.id IN ['a', 'b'] RETURN p.id, properties(p)"
+
+
+def test_raw_property_join_is_inlined_verbatim() -> None:
+    # A graph property-to-property join: the value is another variable's property, not data, so it
+    # must inline verbatim (not be escaped as a string literal).
+    assert node("b", NodeLabel.BOX, {"id": Raw("f.box")}) == "(b:Box {id: f.box})"
+    # Non-raw values in the same map are still escaped.
+    assert (
+        node("b", NodeLabel.BOX, {"id": Raw("f.box"), "name": "x"})
+        == "(b:Box {id: f.box, name: 'x'})"
+    )
 
 
 def test_enum_vocabularies_complete() -> None:

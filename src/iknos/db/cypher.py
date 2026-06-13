@@ -107,6 +107,35 @@ def lit_list(values: Any) -> str:
     return "[" + ", ".join(lit(v) for v in values) + "]"
 
 
+class Raw:
+    """A pre-validated Cypher expression to inline into a pattern map **verbatim** (not escaped).
+
+    For graph-internal property-to-property joins like ``(b:Box {id: f.box})`` — where the map value
+    is another bound variable's property, a Cypher *expression*, not a data value, so escaping it as
+    a string literal would be wrong. Carries no untrusted input by contract: only ever wrap a
+    fixed expression written in the source, never anything caller-supplied.
+    """
+
+    __slots__ = ("expr",)
+
+    def __init__(self, expr: str) -> None:
+        self.expr = expr
+
+
+def _prop_map(props: dict[str, Any]) -> str:
+    """Render a pattern property map, escaping values via ``cypher_map`` unless a :class:`Raw`.
+
+    The common case (no :class:`Raw`) routes through ``cypher_map`` untouched — the one escaping
+    seam. Only when a value is a :class:`Raw` expression is the map built here, with non-raw values
+    still escaped through :func:`lit` (which mirrors ``cypher_map`` exactly), so the escaping
+    discipline is never bypassed for actual data.
+    """
+    if not any(isinstance(v, Raw) for v in props.values()):
+        return cypher_map(props)
+    parts = [f"{k}: {v.expr if isinstance(v, Raw) else lit(v)}" for k, v in props.items()]
+    return "{" + ", ".join(parts) + "}"
+
+
 def node(
     var: str = "",
     label: NodeLabel | None = None,
@@ -117,10 +146,10 @@ def node(
     All three parts are optional: ``node("p")`` → ``(p)``; ``node("", props={"id": x})`` → an
     anonymous node with a filter; ``node("s", NodeLabel.SPAN, {"id": sid})`` → the full form. The
     ``props`` map is escaped through ``cypher_map`` (the same machinery the old f-strings used), so
-    ids/values cannot inject.
+    ids/values cannot inject; wrap a value in :class:`Raw` for a graph-property join key.
     """
     lbl = f":{label.value}" if label is not None else ""
-    body = f" {cypher_map(props)}" if props else ""
+    body = f" {_prop_map(props)}" if props else ""
     return f"({var}{lbl}{body})"
 
 
@@ -139,7 +168,7 @@ def rel(
     through ``cypher_map``.
     """
     typ = f":{etype.value}" if etype is not None else ""
-    body = f" {cypher_map(props)}" if props else ""
+    body = f" {_prop_map(props)}" if props else ""
     inner = f"[{var}{typ}{body}]"
     return f"-{inner}->" if directed else f"-{inner}-"
 

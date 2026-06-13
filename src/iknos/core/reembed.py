@@ -35,7 +35,8 @@ from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iknos.core.embeddings import DocumentContext
-from iknos.db.age import execute_cypher, unquote_agtype
+from iknos.db.age import unquote_agtype
+from iknos.db.cypher import CypherQuery, NodeLabel, lit_list, node
 from iknos.db.orm import DocumentEmbedding, PropositionEmbedding
 
 logger = logging.getLogger(__name__)
@@ -200,10 +201,11 @@ async def _proposition_texts(session: AsyncSession, ids: list[uuid.UUID]) -> dic
     """
     if not ids:
         return {}
-    id_list = ", ".join(f"'{i}'" for i in ids)
-    rows = await execute_cypher(
-        session,
-        f"MATCH (p:Proposition) WHERE p.id IN [{id_list}] RETURN p.id, p.text",
-        returns="id agtype, txt agtype",
+    rows = await (
+        CypherQuery()
+        .match(node("p", NodeLabel.PROPOSITION))
+        .where("p.id IN " + lit_list([str(i) for i in ids]))
+        .return_("p.id, p.text")
+        .run(session, returns="id agtype, txt agtype")
     )
     return {uuid.UUID(unquote_agtype(rid)): unquote_agtype(rtxt) for rid, rtxt in rows}
