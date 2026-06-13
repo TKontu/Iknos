@@ -271,15 +271,56 @@ slice before building the corresponding interface.
 
 ### Trial B2 — Cyclic-region detection & presentation
 
-- [ ] Build deliberately cyclic argument fixtures (mutual support, circular refutation).
-- [ ] Run the gradual semantics with an iteration cap; implement oscillation detection
-      (e.g., strength variance over the last n iterations > ε).
-- [ ] **Measure:** does it flag cycles vs falsely converge; and a small comprehension
-      check — do experts read the "unresolved region" presentation correctly?
-- [ ] **Decision:** set the iteration bound + oscillation criterion empirically; choose
-      the presentation experts interpret correctly (principle 8: surface, don't force
-      convergence).
+- [x] Build deliberately cyclic argument fixtures (mutual support, circular refutation).
+      *(7 fixtures in `scripts/b2_cyclic_oscillation.py::FIXTURES`: support 2-cycle, damped /
+      critical / near-critical circular refutation, period-4 mixed-sign loop, and a composite
+      that unions a converging support cycle with an oscillating refutation cycle.)*
+- [x] Run the gradual semantics with an iteration cap; implement oscillation detection
+      (strength variance over the last n iterations > ε). *(Criterion in
+      `iknos.trials.oscillation` — pure, unit-tested, LLM-free; run over the **unmodified**
+      `core/qbaf.solve` across a cap sweep and both semantics. `core/qbaf.py` untouched.)*
+- [x] **Measure — machine half:** does it flag cycles vs falsely converge. *(Done — neither
+      detector falsely-converges a sustained cycle; the cross-semantics result is that
+      full-strength circular refutation oscillates under DF-QuAD but converges under Quadratic
+      Energy. See `docs/trials/b2_cyclic_oscillation.md`.)*
+- [ ] **Measure — comprehension check (OPEN, human work):** do experts read the "unresolved
+      region" presentation correctly? *Not measurable here — a human study; stays open.*
+- [x] **Decision — bounds (proposed):** iteration bound + oscillation criterion set
+      empirically — **K\* = 64 sweeps**, **window n = 16**, **ε = 1e-6** (variance), read with
+      the variance criterion rather than the engine's per-step `converged` flag. See report §1.
+- [ ] **Decision — presentation (OPEN, human work):** choose the unresolved-region
+      presentation experts interpret correctly (principle 8: surface, don't force convergence).
+      *Depends on the comprehension check above; stays open.*
 - **Gates:** Phase 4 — QBAF oscillation handling; Phase 6 — cyclic-region presentation.
+
+**Result (2026-06-13) — machine half complete; bounds proposed.** Harness:
+`scripts/b2_cyclic_oscillation.py` (reproduce: `uv run python -m scripts.b2_cyclic_oscillation`);
+full report `docs/trials/b2_cyclic_oscillation.md`. The criterion (`iknos.trials.oscillation`)
+runs over the read-only engine; the per-sweep trajectory it needs is reconstructed *through* the
+public `solve` (`solve(max_iterations=k)` = the true post-`k` state), so `core/qbaf.py` is not
+modified and no knob was missing.
+
+- **Flags cycles, never falsely-converges.** At `K* = 64`, DF-QuAD flags every sustained cycle
+  (`circular_refutation_critical`, `mixed_feedback_period4`, and the oscillating half of the
+  composite) as `unstable` / oscillating, and settles every benign cycle. The engine's per-step
+  `converged` flag never reports a sustained cycle as converged.
+- **DF-QuAD surfaces full-strength contradiction loops; Quadratic Energy smooths them.**
+  `circular_refutation_critical` (mutual refutation at base 1.0) is a period-2 limit cycle under
+  DF-QuAD (its combine has slope exactly 1 there) but **converges** under Quadratic Energy (the
+  φ-squash is strictly contractive). DF-QuAD — the recorded Phase-4 default — is therefore the
+  conservative, principle-8 choice for the *cyclic* case too: it does not force a verdict on a
+  full-strength contradiction loop.
+- **The variance window releases slow convergers far sooner than the strict per-step test.** The
+  near-critical converger (base 0.99) is held `unstable` by the engine until ≈2061 sweeps
+  (per-step change < 1e-9), but the variance criterion recognises it as practically settled by
+  sweep 625 — and at `K* = 64` it is correctly still-flagged because it is genuinely still
+  moving (amplitude ≈0.26). The window also localises: on the composite the unresolved set is
+  exactly `{xa, xb}`, leaving `{sa, sb}` settled (§13 "present the subgraph").
+- **Core-lane handoff (not built here — `core/*` is out of this lane's scope).** When Phase-4
+  hardens oscillation handling, promote `iknos.trials.oscillation` into `core/` so `solve` can
+  optionally return a variance-based unresolved set alongside the per-step `unstable` set (they
+  answer *moving-this-sweep* vs *moving-across-a-window*). No engine change is requested now.
+- **Open (human):** the expert comprehension check and the resulting presentation choice.
 
 ---
 
