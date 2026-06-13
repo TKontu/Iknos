@@ -128,15 +128,17 @@ async def fact_provenance(session: AsyncSession, fact_id: uuid.UUID) -> FactProv
     producing ``extract`` Action, newest-first (backed by the partial functional index from
     migration 0009). Read-only.
     """
-    from iknos.db.age import execute_cypher, parse_agtype_map, unquote_agtype
+    from iknos.db.age import parse_agtype_map, unquote_agtype
+    from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
     # (1) Existence + evidencing Proposition. OPTIONAL MATCH so a Fact with no Proposition
     # still returns one row (with a null pid); zero rows means the Fact does not exist.
-    prop_rows = await execute_cypher(
-        session,
-        f"MATCH (f:Fact {{id: '{fact_id}'}}) "
-        f"OPTIONAL MATCH (f)-[:EVIDENCED_BY]->(p:Proposition) RETURN p.id",
-        returns="pid agtype",
+    prop_rows = await (
+        CypherQuery()
+        .match(node("f", NodeLabel.FACT, {"id": str(fact_id)}))
+        .optional_match(node("f") + rel(EdgeType.EVIDENCED_BY) + node("p", NodeLabel.PROPOSITION))
+        .return_("p.id")
+        .run(session, returns="pid agtype")
     )
     if not prop_rows:
         return None
@@ -150,10 +152,15 @@ async def fact_provenance(session: AsyncSession, fact_id: uuid.UUID) -> FactProv
 
     # (2) Evidencing Spans → source text. Read the whole property map so the contract stays
     # in one place (parse_agtype_map), not field-by-field RETURNs that could drift.
-    span_rows = await execute_cypher(
-        session,
-        f"MATCH (f:Fact {{id: '{fact_id}'}})-[:EVIDENCED_BY]->(s:Span) RETURN properties(s)",
-        returns="props agtype",
+    span_rows = await (
+        CypherQuery()
+        .match(
+            node("f", NodeLabel.FACT, {"id": str(fact_id)})
+            + rel(EdgeType.EVIDENCED_BY)
+            + node("s", NodeLabel.SPAN)
+        )
+        .return_("properties(s)")
+        .run(session, returns="props agtype")
     )
     spans: list[SpanRef] = []
     for (props_raw,) in span_rows:
@@ -210,12 +217,14 @@ async def audit_box_facts(session: AsyncSession, box_id: uuid.UUID) -> list[Audi
     :func:`fact_provenance` per Fact — fine for an audit/exit-criterion sweep (not a hot
     path); a set-based bulk variant is a later optimization if box sizes demand it.
     """
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, NodeLabel, node
 
-    fact_rows = await execute_cypher(
-        session,
-        f"MATCH (f:Fact {{box: '{box_id}'}}) RETURN f.id",
-        returns="fid agtype",
+    fact_rows = await (
+        CypherQuery()
+        .match(node("f", NodeLabel.FACT, {"box": str(box_id)}))
+        .return_("f.id")
+        .run(session, returns="fid agtype")
     )
     violations: list[AuditViolation] = []
     for (fid_raw,) in fact_rows:

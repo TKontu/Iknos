@@ -56,6 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from iknos.boxes.serde import resolve_tier
 from iknos.core.llm import LLMClient
 from iknos.core.prompts import vocab
+from iknos.db.cypher import NodeLabel
 from iknos.provenance.action_log import record_action
 from iknos.provenance.metrics import elapsed_ms, llm_metrics
 from iknos.types.annotations import Annotations
@@ -98,9 +99,9 @@ class Role(StrEnum):
 
 # NodeKind -> AGE vertex label. The two entity labels exist in the initial migration
 # (0001); this is the single mapping from the model enum to the graph label.
-_AGE_LABEL: dict[NodeKind, str] = {
-    NodeKind.ACTOR: "Actor",
-    NodeKind.OBJECT: "Object",
+_AGE_LABEL: dict[NodeKind, NodeLabel] = {
+    NodeKind.ACTOR: NodeLabel.ACTOR,
+    NodeKind.OBJECT: NodeLabel.OBJECT,
 }
 
 
@@ -356,14 +357,16 @@ class Extractor:
         string property). A span missing/un-annotated reads back as the lattice origin
         (public), so the seed is never below the floor.
         """
-        from iknos.db.age import execute_cypher, parse_agtype_map
+        from iknos.db.age import parse_agtype_map
+        from iknos.db.cypher import CypherQuery, NodeLabel, node
 
         out: list[Sensitivity] = []
         for sid in span_ids:
-            rows = await execute_cypher(
-                session,
-                f"MATCH (s:Span {{id: '{sid}'}}) RETURN properties(s)",
-                returns="props agtype",
+            rows = await (
+                CypherQuery()
+                .match(node("s", NodeLabel.SPAN, {"id": str(sid)}))
+                .return_("properties(s)")
+                .run(session, returns="props agtype")
             )
             if rows:
                 out.append(Sensitivity.from_props(parse_agtype_map(rows[0][0])))
@@ -385,7 +388,8 @@ class Extractor:
         proposition layer's ``_persist``. ``metrics`` is the R12 cost payload built in
         :meth:`_infer` (duration/usage/n_samples/cache_hit), recorded on the extract Action.
         """
-        from iknos.db.age import atomic_write, merge_edge, merge_vertex
+        from iknos.db.age import atomic_write
+        from iknos.db.cypher import EdgeType, NodeLabel, merge_edge, merge_vertex
 
         prop = item.proposition
         now = datetime.now(UTC)
@@ -403,7 +407,7 @@ class Extractor:
         # W7: Fact vertex + entity vertices + INVOLVES/EVIDENCED_BY edges + the Action as one unit —
         # a failed edge can never leave a committed extract Action pointing at a half-built Fact.
         async with atomic_write(session):
-            await merge_vertex(session, "Fact", fact_to_props(fact))
+            await merge_vertex(session, NodeLabel.FACT, fact_to_props(fact))
 
             # Entities as fresh Actor/Object vertices (no dedup, G2.3), with role-tagged INVOLVES.
             for e in entities:
@@ -416,7 +420,7 @@ class Extractor:
                     session,
                     src_id=fact.id,
                     dst_id=e.id,
-                    label="INVOLVES",
+                    label=EdgeType.INVOLVES,
                     props={"role": str(e.role), "box": str(box.id)},
                 )
 
@@ -425,7 +429,7 @@ class Extractor:
                 session,
                 src_id=fact.id,
                 dst_id=prop.id,
-                label="EVIDENCED_BY",
+                label=EdgeType.EVIDENCED_BY,
                 props={"box": str(box.id)},
             )
             for sid in item.span_ids:
@@ -433,7 +437,7 @@ class Extractor:
                     session,
                     src_id=fact.id,
                     dst_id=sid,
-                    label="EVIDENCED_BY",
+                    label=EdgeType.EVIDENCED_BY,
                     props={"box": str(box.id)},
                 )
 

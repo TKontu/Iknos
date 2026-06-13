@@ -433,7 +433,8 @@ class MeronymyInducer:
         direct: list[DirectPartOf],
     ) -> uuid.UUID:
         """Persist one proposition's ``directPartOf`` edges + an ``induce`` Action (one txn)."""
-        from iknos.db.age import atomic_write, merge_edge
+        from iknos.db.age import atomic_write
+        from iknos.db.cypher import EdgeType, merge_edge
 
         now = datetime.now(UTC)
         # W7: this proposition's directPartOf edges + its induce Action as one unit (per-proposition
@@ -444,7 +445,7 @@ class MeronymyInducer:
                     session,
                     src_id=d.child,
                     dst_id=d.parent,
-                    label="directPartOf",
+                    label=EdgeType.DIRECT_PART_OF,
                     props=direct_part_of_props(
                         box=box,
                         meronymy_type=d.meronymy_type,

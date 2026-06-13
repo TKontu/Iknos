@@ -536,15 +536,17 @@ class EdgeProducer:
         (``valid_to IS NULL``) nodes. The active-box scope is applied by candidate generation
         upstream — this read just resolves text/metadata for any node a candidate references.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, NodeLabel, node
 
         meta: dict[NodeId, NodeMeta] = {}
         for label in REASONING_LABELS:
-            rows = await execute_cypher(
-                session,  # type: ignore[arg-type]
-                f"MATCH (n:{label}) WHERE n.valid_to IS NULL "
-                "RETURN n.id, n.statement, n.tier, n.box",
-                returns="nid agtype, statement agtype, tier agtype, box agtype",
+            rows = await (
+                CypherQuery()
+                .match(node("n", NodeLabel(label)))
+                .where("n.valid_to IS NULL")
+                .return_("n.id, n.statement, n.tier, n.box")
+                .run(session, returns="nid agtype, statement agtype, tier agtype, box agtype")  # type: ignore[arg-type]
             )
             for nid, statement, tier, box in rows:
                 meta[unquote_agtype(nid)] = NodeMeta(
@@ -589,15 +591,17 @@ class EdgeProducer:
         quarantined with :data:`MISSING_PROVENANCE` (conservative — its high-stakes moves are
         surfaced, never silently driven) and a warning is logged. Total map over ``evidence_ids``.
         """
-        from iknos.db.age import execute_cypher, parse_agtype_map, unquote_agtype
+        from iknos.db.age import parse_agtype_map, unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
         ids = set(evidence_ids)
         acc: dict[NodeId, set[str]] = {}
-        rows = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            "MATCH (n)-[:EVIDENCED_BY]->(p:Proposition) WHERE n.valid_to IS NULL "
-            "RETURN n.id, properties(p)",
-            returns="nid agtype, props agtype",
+        rows = await (
+            CypherQuery()
+            .match(node("n") + rel(EdgeType.EVIDENCED_BY) + node("p", NodeLabel.PROPOSITION))
+            .where("n.valid_to IS NULL")
+            .return_("n.id, properties(p)")
+            .run(session, returns="nid agtype, props agtype")  # type: ignore[arg-type]
         )
         for nid_raw, props_raw in rows:
             nid = unquote_agtype(nid_raw)
@@ -668,7 +672,7 @@ class EdgeProducer:
         edges, their per-hypothesis edge-judge Actions, and any envelope Action it records all land
         in one transaction. ``grouped`` is the :func:`build_evidence` output (caller-scoped).
         """
-        from iknos.db.age import merge_edge
+        from iknos.db.cypher import EdgeType, merge_edge
         from iknos.provenance.action_log import record_action
 
         evidence_ids = {e.id for _hyp, (_text, evs) in grouped.items() for e in evs}
@@ -713,7 +717,7 @@ class EdgeProducer:
                     session,  # type: ignore[arg-type]
                     src_id=edge.src_id,
                     dst_id=edge.dst_id,
-                    label=edge.label,
+                    label=EdgeType(edge.label),
                     props=edge.props,
                 )
             action_ids.append(
