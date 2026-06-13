@@ -155,6 +155,24 @@ criterion; if an anchor quote changes, change manifest and document together.
       refuters, contradiction-finding must become a dedicated pass over the hypothesis
       neighbourhood, not a funnel-gated step.
 - **Gates:** Phase 4 — candidate generation; Phase 6 — generate-candidates stage.
+- *Funnel shipped:* stages 1–2 (structural-entity prior + embedding k-NN) are in
+  `core/candidates.py` (G4.2); coarse-to-fine is a documented deferred seam.
+
+**Scaffolding (2026-06-13) — harness ready, live run pending.** LLM-free, **label-free**
+(gold from the V1 planted manifest, not V2), DB-free harness:
+`scripts/a1_refuter_recall.py` + pure scorer `iknos.trials.a1_recall` (`GoldEdge` /
+`score_recall` split supporter/refuter/dissimilar-refuter recall + cost / `project_to_gold`),
+unit-tested in `tests/unit/test_trials_a1_recall.py`; report
+`docs/trials/a1_refuter_recall.md`. Gold inventory derived from the manifest's planted
+`supports`/`refutes` links: **3 supporter, 2 refuter (both dissimilar)** planted edges. The
+harness path (manifest gold → `core/candidates` funnel → `project_to_gold` → `score_recall`)
+is exercised end-to-end over the **real funnel** on a synthetic DB-free scenario that
+reproduces the §5.1 geometry (embedding-only misses the dissimilar refuters → 0.00 recall; the
+recall-first union recovers them → 1.00) — a wiring demonstration, **not** the gate numbers.
+The **Measure/Decision boxes stay unchecked**: the real measurement needs the gate corpus
+ingested into a live pgvector/AGE DB (perception; the extraction half also needs vLLM +
+R11-H), which is **blocked** (vLLM down; no containers without approval). Live-run recipe in
+the report §4.
 
 ### Trial A2 — LLM→QBAF weight mapping
 
