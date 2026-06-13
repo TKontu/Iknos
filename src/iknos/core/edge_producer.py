@@ -769,6 +769,13 @@ class EdgeProducer:
         Candidate generation runs the full funnel then filters to this hypothesis — exact-cosine
         over the active subgraph is investigation-scale, and a hypothesis-scoped funnel is a later
         efficiency seam, not a judgment change.
+
+        **Re-run / idempotency.** Re-running ``corroborate`` on the same hypothesis re-pays the LLM
+        judge and re-plans from current state; the edges are ``merge_edge``-deduped (same
+        ``(src, dst, label)`` MERGE — a second run updates the edge in place, never duplicates it),
+        while the Actions (the per-hypothesis edge-judge Action(s) and this corroborate envelope)
+        **append** once per run — the accepted append-only provenance contract, not a mutation. So a
+        re-run is safe to repeat; the graph converges, the audit trail grows.
         """
         from iknos.provenance.action_log import record_action
 

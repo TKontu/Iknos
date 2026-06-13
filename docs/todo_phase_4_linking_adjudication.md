@@ -20,10 +20,12 @@ algebra over the LLM/symbolic/temporal channels that authorises a persisted `ref
 (unanimity-of-required + universal dissent veto, `DEFAULT_GATE` decided by a fixture); the
 gate's **consumer-filter landed (V8, `persist_verdicts`)** — a structural `refuted` is held
 at its prior state + `pending_refutation` unless an authorising `GateDecision` is supplied,
-so `refuted` is unreachable through the writer without the gate;
-`corroborate`/`find-contradiction` operators + the gate's **temporal** channel producer
-(rest of G4.5; the **symbolic** producer landed in W3, `core/symbolic_gate.py`) and the
-validation gate (G4.6) open.**
+so `refuted` is unreachable through the writer without the gate; the
+`corroborate` **and** `find-contradiction` operators landed (`core/edge_producer.py`,
+`core/find_contradiction.py`) — `find-contradiction` wires the targeted refuter pass → the §7.2
+gate (real **symbolic** sub-region built from the active graph, `core/symbolic_gate.py`) → the §12
+`stabilize` revision loop, holding un-authorised flips as `pending_refutation`. The gate's
+**temporal** (§7.4 bitemporal) channel producer and the validation gate (G4.6) remain open.**
 G4.1 (`core/qbaf.py`) ships the pure QBAF gradual-semantics engine:
 the **semantics decision** (DF-QuAD vs Quadratic Energy, decided with a fixture — DF-QuAD the
 conservative default, both retained at the seam), the `solve` bounded fixpoint (acyclic-exact,
@@ -212,7 +214,7 @@ record in `archive/review_2026-06-11_planned_architecture_assessment.md`.
       "looked, gathered nothing"). No new machinery — the value is the named §12 seam the
       composed loop + `find-contradiction` build on. **Open:** a hypothesis-scoped funnel
       (today the full funnel runs then filters — investigation-scale exact cosine, fine).)*
-- [~] `find-contradiction` operator + **ensemble gate** (multi-sample LLM + symbolic +
+- [x] `find-contradiction` operator + **ensemble gate** (multi-sample LLM + symbolic +
       temporal agreement) required before any `REFUTES` (§7.2). *(G4.5 slice 1 —
       `core/ensemble_gate.py`: the **refuted-flip authoriser**, the pure decision algebra over the
       three channels. `authorise(signals, gate)` authorises a persisted `refuted` flip **iff every
@@ -223,11 +225,25 @@ record in `archive/review_2026-06-11_planned_architecture_assessment.md`.
       bridges the G4.3 panel (stable `REFUTES` → AFFIRM; sign-unstable / no-refuter → ABSTAIN — the
       `sign_stable=False` finding the gate "must clear"). A withheld flip is `is_finding` — surfaced
       for expert review, not auto-persisted; with `SYMBOLIC` required but unwired the default gate is
-      **safe-by-default** (no automated flip until the producer lands). **Open (later G4.5 slices):**
-      the symbolic (clingo/ASP) + temporal (bitemporal) channel **producers** — ABSTAIN seams today —
-      the `persist_verdicts` **filter** that drops un-authorised flips, and `corroborate` /
-      `find-contradiction` feeding the `REFUTES→retract→A→B→QBAF` body into the G3.9 `stabilize`
-      driver.)*
+      **safe-by-default** (no automated flip until the producer lands). **The operator shipped
+      (`core/find_contradiction.py`):** `FindContradiction.run(session, h)` composes the existing
+      pieces — the targeted refuter pass (reuses `EdgeProducer.corroborate`, atomic edges + envelope)
+      → the §7.2 gate → the §12 revision loop — and is the architecture's named **symbolic consuming
+      seam**: it builds the `SymbolicQuery` from the active sub-region (`build_symbolic_query` /
+      `assemble_symbolic_query`), assigning each `EVIDENCED_BY` proposition the embedding twin-cluster
+      claim key (polarity-blind clustering, G1.16 model-namespaced) + its `Polarity`, so a real
+      `P ∧ ¬P` reaches the **real clingo** channel (`symbolic_gate.symbolic_channel_for`). The LLM
+      channel is taken from the **persisted** (post-quarantine) edges via `llm_channel`; `TEMPORAL`
+      stays the ABSTAIN seam. The gate decision is injected as the loop's `decide`; the **default**
+      `retract_authorised_refuted` reviser retracts an authorised-refuted `h` and `stabilize` is the
+      **only** loop driver (no ad-hoc loop — grep-able). An un-authorised structural flip is **held**
+      by V8 `persist_verdicts` as `pending_refutation`, never written; the operator emits a
+      `find-contradiction` Action envelope (gate breakdown + the corroborate/loop Actions it drove).
+      Re-runnable: edges MERGE-deduped, retractions idempotent (`stabilize`'s monotone set never
+      un-retracts), Actions append per run. **Open:** the gate's **temporal** (bitemporal §7.4)
+      channel **producer** — the ABSTAIN seam today — and the validation gate (G4.6); the symbolic
+      sub-region today does the two-atom polarity clash (box derivation `rules` are a documented
+      seam).)*
 
 ## Adjudication (QBAF)
 

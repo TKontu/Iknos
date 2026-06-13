@@ -76,10 +76,42 @@ wired it to AGE.
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 
-from iknos.core.edge_judge import EdgeJudgment
 from iknos.core.truth_maintenance import NodeId
 from iknos.types.edges import EdgeSign
+
+
+class SignedJudgment(Protocol):
+    """The structural surface :func:`llm_channel` reads off a judged edge — the directional fields
+    that decide the LLM channel's stance, declared as a :class:`~typing.Protocol` so the channel is
+    derivable from *either* source without an adapter:
+
+    - the raw multi-sample :class:`~iknos.core.edge_judge.EdgeJudgment` (the panel), and
+    - the persisted :class:`~iknos.core.edge_producer.ProducedEdge` (the **post-quarantine**
+      projection the ``find-contradiction`` operator feeds — a §3.1-quarantined refuter is dropped
+      from the plan, so feeding the persisted edges keeps it from counting toward a flip).
+
+    Both are frozen value types carrying exactly these fields, so they satisfy this Protocol
+    structurally — the duck-typing the gate already relied on, now first-class in the type system
+    (it cannot silently rot into a real mismatch). The channel never reads magnitude as a verbalized
+    number (§8); ``strength`` is the calibrated read-off, used only to name the strongest refuter.
+
+    The members are read-only :class:`~typing.Protocol` properties (not plain attributes) so the
+    frozen value types that implement them match structurally — a frozen field is read-only, which
+    satisfies a property-declared member but not a settable one.
+    """
+
+    @property
+    def sign(self) -> EdgeSign: ...
+    @property
+    def hypothesis(self) -> NodeId: ...
+    @property
+    def evidence(self) -> NodeId: ...
+    @property
+    def strength(self) -> float: ...
+    @property
+    def sign_stable(self) -> bool: ...
 
 
 class GateChannel(StrEnum):
@@ -310,7 +342,7 @@ def _reason(sig: ChannelSignal, verb: str) -> str:
 
 
 def llm_channel(
-    judgments: Iterable[EdgeJudgment],
+    judgments: Iterable[SignedJudgment],
     *,
     hypothesis: NodeId | None = None,
 ) -> ChannelSignal:
@@ -392,7 +424,7 @@ def temporal_channel(detail: str = _TEMPORAL_UNWIRED) -> ChannelSignal:
 
 
 def authorise_from_panel(
-    judgments: Iterable[EdgeJudgment],
+    judgments: Iterable[SignedJudgment],
     *,
     hypothesis: NodeId | None = None,
     symbolic: ChannelSignal | None = None,
@@ -417,7 +449,7 @@ def authorise_from_panel(
 
 
 def authorised_hypotheses(
-    judged: Mapping[NodeId, Sequence[EdgeJudgment]],
+    judged: Mapping[NodeId, Sequence[SignedJudgment]],
     *,
     structurally_refuted: Iterable[NodeId],
     symbolic: Mapping[NodeId, ChannelSignal] | None = None,
