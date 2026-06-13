@@ -217,6 +217,16 @@ class DocumentContext:
         return pooled.tolist()
 
 
+def _common_prefix_len(xs: list[int], ys: list[int]) -> int:
+    """Length of the longest shared leading run of two id sequences."""
+    n = 0
+    for x, y in zip(xs, ys, strict=False):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
 def _derive_special_affixes(tokenizer: Any) -> tuple[list[int], list[int]]:
     """The special-token ids the tokenizer wraps a single sequence with, as ``(prefix, suffix)``.
 
@@ -226,19 +236,44 @@ def _derive_special_affixes(tokenizer: Any) -> tuple[list[int], list[int]]:
     tokenizer for exactly this; **transformers>=5 removed both from the fast tokenizers** AGE/bge-m3
     loads (``AutoTokenizer`` returns a fast ``XLMRobertaTokenizer`` whose ``__getattr__`` now raises
     on those names, and ``get_special_tokens_mask`` raises ``NotImplementedError`` for non-formatted
-    input). So we recover the wrapping from a probe — encode one content token with and without
-    special tokens and diff — using only ``__call__``, which is stable across transformers versions.
-    For bge-m3 (XLM-RoBERTa) this yields ``([bos], [eos]) == ([0], [2])``; a tokenizer that adds no
-    special tokens yields ``([], [])``.
+    input). So we recover the wrapping from probes — encode content with and without special tokens
+    and diff — using only ``__call__``, which is stable across transformers versions. For bge-m3
+    (XLM-RoBERTa) this yields ``([bos], [eos]) == ([0], [2])``; a tokenizer that adds no special
+    tokens yields ``([], [])``.
+
+    **Two-probe recovery (W12).** The wrapping is content-independent, so the prefix is the longest
+    token run shared at the *front* of two different probes' wrapped encodings and the suffix the
+    longest run shared at their *back*. This is robust even when a content token id equals a leading
+    special id (e.g. a tokenizer whose ``"a"`` encodes to ``[bos]``): the old single-probe
+    left-to-right substring search mislocated the prefix there, returning ``([], [bos, eos])``
+    instead of ``([bos], [eos])``. The two probes must differ at both content ends so the shared
+    run stops exactly at the content boundary; if they happen to collide there (degenerate
+    tokenizer) we fall back to the substring search, which is correct whenever no content id equals
+    a special id — the production bge-m3 case the four originally-shipped tests cover.
     """
-    probe = list(tokenizer("a", add_special_tokens=False)["input_ids"])
-    if not probe:  # pathological tokenizer (empty content encoding) — assume no wrapping
+    content_a = list(tokenizer("a", add_special_tokens=False)["input_ids"])
+    if not content_a:  # pathological tokenizer (empty content encoding) — assume no wrapping
         return [], []
-    wrapped = list(tokenizer("a", add_special_tokens=True)["input_ids"])
-    n = len(probe)
-    for i in range(len(wrapped) - n + 1):
-        if wrapped[i : i + n] == probe:  # locate the contiguous content run inside the wrapped ids
-            return wrapped[:i], wrapped[i + n :]
+    wrapped_a = list(tokenizer("a", add_special_tokens=True)["input_ids"])
+    n = len(content_a)
+    k = len(wrapped_a) - n  # total special tokens wrapping a single sequence
+    if k <= 0:
+        return [], []  # no wrapping, or the tokenizer rewrote the content — nothing to recover
+
+    content_b = list(tokenizer("0", add_special_tokens=False)["input_ids"])
+    if content_b and content_b[0] != content_a[0] and content_b[-1] != content_a[-1]:
+        # Probes differ at both ends → the shared front/back runs are exactly the special affixes.
+        wrapped_b = list(tokenizer("0", add_special_tokens=True)["input_ids"])
+        prefix_len = _common_prefix_len(wrapped_a, wrapped_b)
+        suffix_len = _common_prefix_len(wrapped_a[::-1], wrapped_b[::-1])
+        if prefix_len + suffix_len == k and wrapped_a[prefix_len : prefix_len + n] == content_a:
+            return wrapped_a[:prefix_len], wrapped_a[prefix_len + n :]
+
+    # Fallback: locate the content run verbatim. Correct whenever no content id collides with a
+    # leading special id (the production case); the two-probe path above covers the collision.
+    for i in range(len(wrapped_a) - n + 1):
+        if wrapped_a[i : i + n] == content_a:
+            return wrapped_a[:i], wrapped_a[i + n :]
     return [], []  # content not found verbatim (tokenizer rewrote it) — fall back to no wrapping
 
 
