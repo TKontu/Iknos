@@ -262,16 +262,20 @@ async def load_evidential_edges(session: object) -> list[EvidenceRow]:
     (like ``load_reasoning_nodes`` / ``load_hypothesis_ids``) so the revision loop (W1) consumes the
     *same* evidential-edge definition the adapter does — the active subgraph cannot diverge.
     """
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, EdgeType, node, rel
 
     rows: list[EvidenceRow] = []
-    for rel, sign in (("SUPPORTS", EdgeSign.SUPPORTS), ("REFUTES", EdgeSign.REFUTES)):
-        raw = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            f"MATCH (s)-[r:{rel}]->(t) "
-            "WHERE s.valid_to IS NULL AND t.valid_to IS NULL AND r.valid_to IS NULL "
-            "RETURN s.id, t.id, r.strength",
-            returns="sid agtype, tid agtype, strength agtype",
+    for etype, sign in (
+        (EdgeType.SUPPORTS, EdgeSign.SUPPORTS),
+        (EdgeType.REFUTES, EdgeSign.REFUTES),
+    ):
+        raw = await (
+            CypherQuery()
+            .match(node("s") + rel(etype, var="r") + node("t"))
+            .where("s.valid_to IS NULL", "t.valid_to IS NULL", "r.valid_to IS NULL")
+            .return_("s.id, t.id, r.strength")
+            .run(session, returns="sid agtype, tid agtype, strength agtype")  # type: ignore[arg-type]
         )
         for sid, tid, strength in raw:
             rows.append(
@@ -413,7 +417,8 @@ class QbafAdapter:
         ``ensemble_gate.authorise`` is the only intended producer of one. Returns the count written
         plus the held refutations.
         """
-        from iknos.db.age import execute_cypher
+
+        from iknos.db.cypher import CypherQuery, NodeLabel, lit, node
 
         decisions = gate_decisions or {}
         written = 0
@@ -426,19 +431,29 @@ class QbafAdapter:
                 # avoids relying on a coalesce-in-SET that AGE may not implement.
                 prior = await self._load_state(session, v.id)
                 held_state = prior if prior is not None else HypothesisState.UNSUPPORTED
-                await execute_cypher(
-                    session,  # type: ignore[arg-type]
-                    f"MATCH (h:Hypothesis {{id: '{v.id}'}}) WHERE h.valid_to IS NULL "
-                    f"SET h.acceptability = {float(v.acceptability)}, "
-                    f"h.state = '{held_state.value}', h.pending_refutation = true",
+                await (
+                    CypherQuery()
+                    .match(node("h", NodeLabel.HYPOTHESIS, {"id": str(v.id)}))
+                    .where("h.valid_to IS NULL")
+                    .set(
+                        "h.acceptability = " + lit(float(v.acceptability)),
+                        "h.state = " + lit(held_state.value),
+                        "h.pending_refutation = " + lit(True),
+                    )
+                    .run(session)  # type: ignore[arg-type]
                 )
                 held.append(HeldRefutation(id=v.id, held_state=held_state, decision=decision))
             else:
-                await execute_cypher(
-                    session,  # type: ignore[arg-type]
-                    f"MATCH (h:Hypothesis {{id: '{v.id}'}}) WHERE h.valid_to IS NULL "
-                    f"SET h.acceptability = {float(v.acceptability)}, h.state = '{v.state.value}', "
-                    f"h.pending_refutation = false",
+                await (
+                    CypherQuery()
+                    .match(node("h", NodeLabel.HYPOTHESIS, {"id": str(v.id)}))
+                    .where("h.valid_to IS NULL")
+                    .set(
+                        "h.acceptability = " + lit(float(v.acceptability)),
+                        "h.state = " + lit(v.state.value),
+                        "h.pending_refutation = " + lit(False),
+                    )
+                    .run(session)  # type: ignore[arg-type]
                 )
             written += 1
         return PersistResult(written=written, held=tuple(held))
@@ -450,13 +465,14 @@ class QbafAdapter:
         inventing one; an unrecognised value (a graph written under a newer vocabulary) reads as
         ``None`` → caller defaults to ``UNSUPPORTED``, never aborting on a metadata surprise.
         """
-        from iknos.db.age import execute_cypher
+        from iknos.db.cypher import CypherQuery, NodeLabel, node
 
-        rows = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            f"MATCH (h:Hypothesis {{id: '{hypothesis_id}'}}) WHERE h.valid_to IS NULL "
-            "RETURN h.state",
-            returns="state agtype",
+        rows = await (
+            CypherQuery()
+            .match(node("h", NodeLabel.HYPOTHESIS, {"id": str(hypothesis_id)}))
+            .where("h.valid_to IS NULL")
+            .return_("h.state")
+            .run(session, returns="state agtype")  # type: ignore[arg-type]
         )
         if not rows:
             return None
