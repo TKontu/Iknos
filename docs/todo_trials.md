@@ -625,6 +625,68 @@ ingest only").** Two resolutions, both in `src/iknos/jobs/app.py` + `core/`:
   (level 0, the extraction granularity). Re-*inference* gating stays the separate §6.1/§11.1 VoI/
   budget policy (Phase 5); this chains only the *initial* extraction of freshly-ingested spans.
 
+**R11-H — queue-worker hardening before the first hot extraction run** *(2026-06-13;
+findings record `archive/review_2026-06-12_completed_scope_residuals.md` + the #108
+review thread. **Blocks the first vLLM-up gate-corpus extraction run** — the
+perception dry-run already passed (`docs/trials/gate_ingest_report.md`), and the
+moment the LLM endpoint comes up the chained `propositionize_document_job` fires,
+straight into these three latent bugs. The commit half of the #108 review landed
+late as #116 (`_ingest_one` now wraps `atomic_write`); these three were never
+applied and remain on `main` in `src/iknos/jobs/app.py`.)* One PR, three items *(a fourth — the
+misleading `_propositionize_one` `atomic_write` wrap — was already corrected in
+#116: that function now carries no wrap and an accurate "commits per-span by design"
+comment, so do **not** re-touch it)*:
+
+1. **Make OpenAI/LLM transport failures retryable (today they are terminal).**
+   `RETRYABLE_INGEST_EXCEPTIONS` (`jobs/app.py`, ~line 64) is
+   `(httpx.TransportError, OperationalError, InterfaceError)` only. The LLM client
+   (`core/llm.py`) raises `openai.APIConnectionError`, `openai.APITimeoutError`,
+   `openai.InternalServerError` and `asyncio.TimeoutError` on transient endpoint
+   trouble — none are in the tuple, so a momentary vLLM blip during extraction
+   marks the job **terminally `failed`** with no retry. Add those four classes to
+   `RETRYABLE_INGEST_EXCEPTIONS` (import them from `openai`/builtins; mirror
+   `core/mineru.py`'s transport-vs-validation split — validation errors
+   `DocumentTooLongError`/`DocumentResegmentationError`/`StaleExtractionError`/
+   `CascadeDependentsError` must **stay terminal**). Extend the pure
+   retry-classification unit test (`tests/unit/test_jobs.py`) to assert each new
+   class is retryable and each validation error is not.
+
+2. **Stop reporting `succeeded` when every span failed to extract.**
+   `_propositionize_one` (`jobs/app.py`, ~line 235) calls `propositionize_document`
+   and **discards its returned `PropositionizeReport`** — which carries
+   `failed_spans` (the per-span error isolation from G1.17 R1). An extraction run
+   where every span hit an LLM error therefore commits nothing and is still marked
+   `succeeded`, with no re-fire path — a silent data-loss hole exactly when the
+   endpoint is flaky. Inspect the report after the call: if `failed_spans` is
+   non-empty, raise a retryable error (one of the item-1 classes, or a dedicated
+   `IngestRetryableError` added to the tuple) so procrastinate re-fires the job up
+   to `MAX_ATTEMPTS`; if a partial result is acceptable, at minimum log the count
+   loudly and record it — but the default per §6.1/§13 is **fail loud, do not
+   swallow**. Decide and document which; pin it with a unit test that injects a
+   report with `failed_spans` and asserts the job re-raises (or records the
+   failure visibly), not silent success.
+
+3. **Guard the chain defer against `AlreadyEnqueued`.** On a successful ingest,
+   `_ingest_one` chains `propositionize_document_job.configure(...).defer_async(...)`
+   (`jobs/app.py`, ~line 185) with `queueing_lock=f"propositionize:{document_id}"`
+   and **no try/except**. procrastinate raises `procrastinate.exceptions.AlreadyEnqueued`
+   when a job with that queueing lock is already pending; it is **not** in the
+   retry tuple, so re-ingesting a document whose earlier extraction job is still
+   queued fails the **otherwise-successful re-ingest**. This is realistic — the
+   gate runner (`scripts/run_gate_ingest.py`) uses stable `uuid5` document ids, so
+   a re-run hits it. Wrap the chain defer in `try/except AlreadyEnqueued` and treat
+   it as success (the extraction is already scheduled — log at debug, do not
+   propagate). Pin with a unit test: a second defer under a held lock does not fail
+   the ingest job. (This makes the module's own "a re-fired chain is a no-op" claim
+   true.)
+
+Accept: all three items land with the tests named above; `is_retryable_ingest_error`
+classifies the new transport classes; a `failed_spans`-non-empty extraction does
+not report `succeeded`; a double chain-defer does not fail the ingest. Do **not**
+change `_ingest_one`'s now-correct `atomic_write` commit, `_propositionize_one`'s
+(correctly unwrapped) transaction handling, the queue/lock topology, or the
+content-hash idempotency.
+
 ## Sequencing & gating summary
 
 ```

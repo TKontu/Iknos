@@ -154,7 +154,16 @@ folded four fix tasks into the plan: **V12** (baseline-rig hardening, #94) and
 #97) in `todo_phase_4_*.md` — **shipped**, with the empirical finding that the
 bounded push-down is an exact sort, not an HNSW scan (see the V14 build record;
 re-verify the plan shape at G4.6 scale before flipping the default); **G1.25**
-(G1.22 backfill-skip fix + docstring sync) in `todo_phase_1_ingest.md` — **open**.
+(G1.22 backfill-skip fix + docstring sync) in `todo_phase_1_ingest.md` — **shipped
+(#95)**. The **perception-stage gate-corpus dry run has now passed** on live AGE
+(2026-06-13, `docs/trials/gate_ingest_report.md`: 77 spans across the 10 documents,
+d08 in 3 embedding windows, per-document cost from R12 metrics), exercising R10/R11
+end-to-end and surfacing two real bugs since fixed (#116: the missing worker commit
+and a transformers-5 fast-tokenizer break). **One blocker now stands between here
+and the first hot extraction run: R11-H** (`todo_trials.md` *Gate prerequisites* +
+the deferred-items table) — three latent `jobs/app.py` bugs that only bite once the
+LLM endpoint is up and the chained extraction job fires. **R11-H must land before
+the first vLLM-up extraction run.**
 
 **The composed loop now runs as a system (2026-06-11 architecture assessment,
 W1/W2/W3 — all shipped).** The `REFUTES → retract → A → B → QBAF → gate` feedback
@@ -186,7 +195,8 @@ into the owning phase/gap doc as an active task.
 | Ensemble-gate TEMPORAL channel producer (§7.4) | `core/ensemble_gate.py` docstring (`temporal_channel`) | a time-sensitive sub-domain needs the bitemporal-overlap veto, or `STRICT_GATE` is adopted | waiting (later G4.5 / Phase 5 bitemporal) |
 | Ensemble-gate-only `refuted` flip (§7.2) | `todo_phase_4_*.md` *Open task specs* (V8) | any consumer writes `Hypothesis.state` | **FIRED** (G4.4 `persist_verdicts`) → **V8 shipped** |
 | pgvector ANN index + k-NN push-down | `todo_phase_4_*.md` *Open task specs* (R4/V9/V14), `core/candidates.py` docstring | k-NN runs beyond working-set scale, or the gate measures recall | **CLOSED** — R4 + V9 + V14 shipped; the bounded push-down is an exact sort (no HNSW); re-verify the plan shape at G4.6 scale before flipping the default |
-| Out-of-process embeddings + job queue (R10/R11) | `todo_trials.md` *Gate prerequisites* | first real multi-document corpus ingest | **FIRED** (V1 corpus is that ingest) → land before gate trials |
+| Out-of-process embeddings + job queue (R10/R11) | `todo_trials.md` *Gate prerequisites* | first real multi-document corpus ingest | **CLOSED** — R10 (#99/#108), R11 (#100), the R10/R11 follow-through, and the `_ingest_one` commit fix (#116) all shipped; the perception dry-run passed (`docs/trials/gate_ingest_report.md`) |
+| Queue-worker hardening (R11-H) | `todo_trials.md` *Gate prerequisites* (R11-H) | **the first vLLM-up extraction run** — the chained `propositionize_document_job` fires | **FIRED, OPEN** → three latent `jobs/app.py` bugs (LLM transport errors terminal; discarded `failed_spans` ⇒ false `succeeded`; unguarded `AlreadyEnqueued`) must land **before** the first hot extraction run |
 | G1.10 Part B — RAPTOR summary levels | `todo_phase_1_ingest.md` *Open work* | coarse-to-fine candidate stage (§5.1 stage 3) or retrieval needs coarse levels | waiting |
 | G1.11 — box scoping on dense/sparse indexes | `todo_phase_1_ingest.md` *Open work* | first hybrid-retrieval consumer (Phase 6 `retrieve`) | waiting |
 | G1.19 — RRF rank fusion | `todo_phase_1_ingest.md` *Open work* | same trigger as G1.11 | waiting |
@@ -341,6 +351,22 @@ cite a gap file by name resolve there):
       node *and* a `verifier_unavailable` row on the verify `Action`; so it is surfaced
       to triage, not only logged. Tests: unit (`_skip_reason`, config single-source +
       env override) + integration (per-reason skip audit, early model-swap guard).
+- [ ] **W12 — harden the transformers-5 special-token affix probe** *(2026-06-13,
+      #116 review finding 2/3 — low; the target model is unaffected, so this is
+      opportunistic, not blocking)*. `core/embeddings.py::_derive_special_affixes`
+      recovers the tokenizer's `(prefix, suffix)` special-token wrapping by encoding
+      a one-char probe (`"a"`) with and without special tokens and diffing. The
+      left-to-right substring search (`wrapped[i:i+n] == probe`) **mislocates the
+      prefix when the probe's content token id collides with a leading special-token
+      id** — e.g. a tokenizer whose `"a"` encodes to `[0]` (== bos) returns
+      `([], [0, 2])` instead of `([0], [2])`. bge-m3 / XLM-RoBERTa encodes `"a"` to an
+      ordinary subword (≠ bos/eos), so production is correct today and the 4 existing
+      unit tests pass — but the probe is fragile. Fix options: probe with a token
+      known not to collide (or two different probes and intersect), or assert the
+      recovered affixes against the tokenizer's declared special-token ids when the
+      fast tokenizer still exposes them. Add a unit test for the collision case
+      (probe id == a special id) and the multi-token-probe case. No behavior change
+      for bge-m3 — purely robustness against a future/alternate embedding model.
 
 ## Conventions for executing agents *(applies to every task in every phase file)*
 
