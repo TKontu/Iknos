@@ -309,11 +309,11 @@ cite a gap file by name resolve there):
       try/`_persist`/except-rollback) — the reference implementation `atomic_write` generalizes; the
       "caller owns transaction" operators (`domain/loader`, `boxes/registry`, `reference_corpus`,
       `ingest`) correctly defer the commit to a caller that should wrap with `atomic_write`.
-- [ ] **W8 — Cypher chokepoint + serde round-trips** *(assessment, P10)*. ~140
+- [~] **W8 — Cypher chokepoint + serde round-trips** *(assessment, P10)*. ~140
       call sites interpolate labels/edge types/ids/timestamps into f-string
       Cypher outside the `db/age.py` helpers — safe today (values come from
       enums/UUIDs/`isoformat()`), but convention, not construction: one future
-      call site with a user-influenced value breaks it silently. (1) A thin
+      call site with a user-influenced value breaks it silently. (1) **Open:** a thin
       query-builder over `db/age.py` (validated label/edge enums, mandatory
       value escaping through the `cypher_map` machinery); migrate the writers;
       a CI grep gate against raw f-string Cypher outside it. (2) Round-trip
