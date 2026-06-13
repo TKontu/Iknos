@@ -23,7 +23,9 @@ from iknos.types.epistemic import Attribution, EpistemicClass, Modality, Polarit
 
 # Cosine threshold above which two extracted propositions are treated as "the same claim"
 # for the agreement count. Tunable — Trial A5 fits it against a labeled corpus (single-pass
-# vs multi-sample). bge-m3 vectors are normalized, so this is a dot-product threshold.
+# vs multi-sample). bge-m3 vectors are normalized, so this is a dot-product threshold. This is the
+# **single source** for the value: ``config.prop_agreement_threshold`` (the PROP_AGREEMENT_THRESHOLD
+# env knob, W11) defaults to it, so the runtime override and the in-module default never drift.
 DEFAULT_AGREEMENT_THRESHOLD: float = 0.86
 
 

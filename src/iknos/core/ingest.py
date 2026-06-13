@@ -113,7 +113,7 @@ class SpanPersistResult:
 
     spans: list[Span]
     embedding_rows: int
-    skipped: int  # whitespace / zero-vector spans, which carry no claims
+    skipped: int  # whitespace + zero-vector spans, which carry no claims (the total)
     already_segmented: bool  # guard short-circuited; no writes were issued
     # Coarse-level results (G1.10), set only on the finest result returned by an ``ingest_*``
     # call when the segmenter has a multi-level policy. ``spans`` above is always the finest
@@ -121,6 +121,11 @@ class SpanPersistResult:
     # for §5.1 coarse-to-fine pruning but are not propositionized. Empty for a single-level run
     # and for the per-level results inside ``coarse`` themselves (no nesting).
     coarse: tuple["SpanPersistResult", ...] = ()
+    # W11: the per-reason skip split (``skipped`` is their sum) — a whitespace span (pooled to no
+    # token) vs a zero-vector span (the pre-G1.17 sentinel a direct caller still hands in).
+    # Defaulted so existing constructors that pass only the total stay valid.
+    skipped_whitespace: int = 0
+    skipped_zero_vector: int = 0
 
 
 @dataclass(frozen=True)
@@ -207,13 +212,41 @@ def span_content_hash(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+# The two reasons a span is dropped from both stores (the segment Action audits them per reason,
+# W11). Both keep the invariant "no zero/None vector ever reaches pgvector" (review R3).
+SKIP_WHITESPACE = (
+    "whitespace"  # pool_span returned None — the span overlapped no token (post-G1.17)
+)
+SKIP_ZERO_VECTOR = (
+    "zero_vector"  # a literal all-zero vector — the pre-G1.17 sentinel (direct caller)
+)
+
+
+def _skip_reason(emb: list[float] | None) -> str | None:
+    """Why a span carries no usable dense vector (whitespace / zero-vector), or ``None`` to keep it.
+
+    Splits the two cases :func:`_has_no_embedding` collapses so the segment ``Action`` can audit
+    them separately (W11): a whitespace span (``pool_span`` → ``None``, no token overlap) and a
+    literal all-zero vector (the pre-G1.17 sentinel a direct caller may still hand in) are skipped
+    for *different* reasons — a whitespace skip is expected, a zero-vector skip from the live
+    substrate would signal a pooling regression worth seeing in triage. ``not any(emb)`` is the
+    all-zero test (an empty list reads as zero-vector too, defensively).
+    """
+    if emb is None:
+        return SKIP_WHITESPACE
+    if not any(emb):
+        return SKIP_ZERO_VECTOR
+    return None
+
+
 def _has_no_embedding(emb: list[float] | None) -> bool:
     """True for a span that carries no usable dense vector and must be skipped.
 
     Two cases collapse here: ``None`` — the post-G1.17 signal from ``pool_span`` that a span
     overlapped no token (e.g. whitespace) — and a literal all-zero vector, the pre-G1.17 sentinel.
     Skipping both keeps the invariant "no zero vector reaches pgvector" even for a direct caller
-    that still hands in zeros (defense in depth, review R3).
+    that still hands in zeros (defense in depth, review R3). :func:`_skip_reason` is the per-reason
+    refinement the segment Action audits with (W11); this stays the boolean the skip branch reads.
     """
     return emb is None or all(c == 0.0 for c in emb)
 
@@ -255,6 +288,39 @@ async def _existing_embedding_model(session: AsyncSession, document_id: uuid.UUI
         {"did": document_id},
     )
     return row.scalar_one_or_none()
+
+
+async def _global_embedding_model(session: AsyncSession) -> str | None:
+    """The embedding model of **any** existing dense span row, or ``None`` if the index is empty.
+
+    The dense ANN index (``document_embeddings``) is single-space by the G1.16 guard — one model
+    across every row — so one row's model is the whole index's identity. Distinct from
+    :func:`_existing_embedding_model` (which scopes to a single document): this is the *global*
+    identity the early :func:`assert_embedding_model_compatible` guard checks before any embedding.
+    """
+    row = await session.execute(text("SELECT model FROM document_embeddings LIMIT 1"))
+    return row.scalar_one_or_none()
+
+
+async def assert_embedding_model_compatible(session: AsyncSession, model_name: str) -> None:
+    """Refuse a model swap **before** the dominant embedding pass (G1.16, W11) — fail fast.
+
+    The per-document guard in :func:`persist_spans` is the load-bearing structural check, but it
+    fires *after* the document is embedded (the expensive work), and it cannot see the swap at all
+    for a **brand-new** document — whose own index is empty, so it would silently mix a second model
+    into the shared ANN space. This early, global check (run once at the ingest entry, before
+    ``embed_document``) closes both gaps: if the dense index already holds a *different* model than
+    ``model_name`` (the backend's served identity, ``EmbeddingBackend.model_name``), it raises the
+    same :class:`~iknos.core.embeddings.EmbeddingModelMismatchError` with the actionable fix
+    (``scripts/reembed.py``) before any vector is computed. A no-op on an empty index or a match.
+    """
+    existing = await _global_embedding_model(session)
+    if existing is not None and existing != model_name:
+        raise EmbeddingModelMismatchError(
+            f"the dense span index already holds embeddings under model {existing!r}, cannot mix "
+            f"in {model_name!r} (cosine across embedding spaces is meaningless). Re-embed with "
+            f"scripts/reembed.py to migrate the index to {model_name!r} first."
+        )
 
 
 async def _parsed_hash(session: AsyncSession, document_id: uuid.UUID) -> str | None:
@@ -395,19 +461,24 @@ async def persist_spans(
     layout_list = layouts if layouts is not None else [None] * len(char_spans)
 
     spans: list[Span] = []
-    skipped = 0
+    skipped_whitespace = 0
+    skipped_zero_vector = 0
     rows = 0
     for (start, end), emb, layout in zip(char_spans, embeddings, layout_list, strict=True):
-        if _has_no_embedding(emb):
-            # A whitespace span carries no claims (the propositionizer would extract
-            # nothing) and has no usable vector — drop it from both stores so no
-            # zero/None embedding ever reaches pgvector (review R3).
-            skipped += 1
-            logger.warning(
-                "skipping whitespace/no-embedding span doc=%s [%d:%d]", document_id, start, end
-            )
+        reason = _skip_reason(emb)
+        if reason is not None:
+            # A whitespace/zero-vector span carries no claims (the propositionizer would extract
+            # nothing) and has no usable vector — drop it from both stores so no zero/None
+            # embedding ever reaches pgvector (review R3). The reason is counted per kind (W11) so
+            # the segment Action distinguishes the expected whitespace skip from a zero-vector skip
+            # (which from the live substrate would flag a pooling regression).
+            if reason == SKIP_ZERO_VECTOR:
+                skipped_zero_vector += 1
+            else:
+                skipped_whitespace += 1
+            logger.warning("skipping %s span doc=%s [%d:%d]", reason, document_id, start, end)
             continue
-        assert emb is not None  # narrowed by the _has_no_embedding skip above
+        assert emb is not None  # narrowed by the _skip_reason skip above
 
         span_id = span_id_for(document_id, start, end, level)
         spans.append(
@@ -483,20 +554,41 @@ async def persist_spans(
                 # that don't window (the key is simply absent then).
                 **({"windowing": window_layout} if window_layout is not None else {}),
             },
-            outputs={"span_ids": [str(s.id) for s in spans], "skipped": skipped},
+            outputs={
+                "span_ids": [str(s.id) for s in spans],
+                "skipped": skipped_whitespace + skipped_zero_vector,
+                # W11: the per-reason split so triage reads *why* a span was dropped — omitted on
+                # the clean path (no skips) to keep that Action byte-identical.
+                **(
+                    {
+                        "skipped_by_reason": {
+                            SKIP_WHITESPACE: skipped_whitespace,
+                            SKIP_ZERO_VECTOR: skipped_zero_vector,
+                        }
+                    }
+                    if skipped_whitespace or skipped_zero_vector
+                    else {}
+                ),
+            },
             model=model,
-            # R12 observability floor: persisted span count + whitespace/no-embedding spans dropped
-            # (review R3), with the full segment-stage wall-clock (the shared embed/split/segment
-            # cost the entry point paid + this level's persist). n_spans is the set written.
+            # R12 observability floor: persisted span count + the per-reason skip split (review R3 /
+            # W11), with the full segment-stage wall-clock (the shared embed/split/segment cost the
+            # entry point paid + this level's persist). n_spans is the set written.
             metrics={
                 "duration_ms": stage_setup_ms + elapsed_ms(t0),
                 "n_spans": len(spans),
-                "n_skipped_whitespace": skipped,
+                "n_skipped_whitespace": skipped_whitespace,
+                "n_skipped_zero_vector": skipped_zero_vector,
             },
         )
 
     return SpanPersistResult(
-        spans=spans, embedding_rows=rows, skipped=skipped, already_segmented=already
+        spans=spans,
+        embedding_rows=rows,
+        skipped=skipped_whitespace + skipped_zero_vector,
+        already_segmented=already,
+        skipped_whitespace=skipped_whitespace,
+        skipped_zero_vector=skipped_zero_vector,
     )
 
 
@@ -583,6 +675,12 @@ async def _ingest_parsed(
     # the finest level's segment Action below — the level the proposition layer extracts from —
     # so the total across the per-level segment Actions sums to the true segment-stage wall-clock
     # with no double-counting.
+    # G1.16 (W11): refuse a model swap *before* the dominant embedding pass — fail fast with the
+    # actionable fix rather than after paying the full embed (and catch the new-document hole the
+    # per-document persist_spans guard cannot see). The per-document guard stays the load-bearing
+    # structural check at the write.
+    await assert_embedding_model_compatible(session, substrate.model_name)
+
     segment_started = time.monotonic()
     context = substrate.embed_document(raw_text)
     sentences = split_sentences(raw_text)
