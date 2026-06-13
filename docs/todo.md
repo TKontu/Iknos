@@ -272,17 +272,23 @@ cite a gap file by name resolve there):
       call, and recording it would muddy the `cache_hit ⇒ ~zero extractor cost`
       signal; a distinct `embed_duration_ms` is the right fix iff replays ever
       dominate, a scale concern.)*
-- [~] **V11 — unit tests for untested infrastructure modules** *(in progress —
-      domain-loader result-builder tests #64, `_build_cypher_sql` seam + assembly
-      tests #65, `GRAPH_NAME` identifier validation + tests #66 shipped)*. Check
-      existing coverage first (`test_age_cypher_map.py` covers `cypher_map` — don't
-      duplicate). Remaining: `test_action_log.py` (record construction: required
-      fields, JSON-serializable payloads — extract a pure `build_action` seam if
-      the module is all-DB, behavior-identical); `test_audit.py` (pure parts of
-      reach-back assembly); `test_boxes_registry.py` (serde round-trip);
-      `test_config.py` (defaults without env; env overrides; no DB on import).
-      Pure where the module is pure; integration tests keep owning round-trips;
-      don't chase coverage into ORM/type modules.
+- [x] **V11 — unit tests for untested infrastructure modules** *(complete)*. Shipped
+      in stages: domain-loader result-builder tests #64, `_build_cypher_sql` seam +
+      assembly tests #65, `GRAPH_NAME` identifier validation + tests #66. The four
+      originally-remaining targets are all covered (verified 2026-06-12, no DB needed):
+      `test_action_log.py` pins the pure `build_action` seam — field mapping, the
+      inputs/outputs/`metrics` → `{}` defaulting, optional-stay-`None`, and
+      JSON-serializable payloads (#103, with R12 `metrics`); `test_audit.py` pins the
+      pure `provenance_gaps` reach-back invariants (#42); `test_config.py` pins
+      defaults-without-env, env overrides, no-DB-on-import, and the graph-name
+      identifier guard (#66). The `test_boxes_registry.py` line named a *serde
+      round-trip*, which is already covered DB-free by `test_boxes.py` (`boxes/serde.py`,
+      both directions incl. the agtype JSON-string read shape); `boxes/registry.py`
+      itself is all-DB with no pure seam to extract, so its round-trips are owned by
+      integration `test_box_registry.py` — a `tests/unit/test_boxes_registry.py` would
+      only duplicate `test_boxes.py`. `test_cypher_map.py` covers `cypher_map` — not
+      duplicated. Pure where the module is pure; integration tests keep owning
+      round-trips; coverage not chased into ORM/type modules.
 - [x] **W7 — dual-write transaction discipline** *(2026-06-11 architecture assessment, P7 —
       Phase-5 entry criterion)* *(shipped)*. `db/age.py::atomic_write(session)` is the wrapper —
       an `@asynccontextmanager` that commits the bracketed writes together on clean exit and
