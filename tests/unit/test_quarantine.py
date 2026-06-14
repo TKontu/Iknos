@@ -12,9 +12,10 @@ import pytest
 from iknos.core.quarantine import (
     QuarantinedPropositionError,
     Stakes,
+    _gates_on_provisional,
     assert_not_quarantined,
 )
-from iknos.types.epistemic import ProvisionalReason
+from iknos.types.epistemic import ProvisionalReason, provisional_threshold_for
 
 # --- the three-row truth table (§3.1, R9 accept) ---------------------------------------------
 
@@ -88,3 +89,22 @@ def test_same_reasons_gate_high_but_not_low() -> None:
     assert assert_not_quarantined(reasons, Stakes.LOW) is None
     with pytest.raises(QuarantinedPropositionError):
         assert_not_quarantined(reasons, Stakes.HIGH)
+
+
+# --- the gate's stakes-dependence is derived from the threshold function (G1.6) ---------------
+
+
+@pytest.mark.parametrize("stakes", list(Stakes))
+def test_gating_derives_from_the_stakes_threshold(stakes: Stakes) -> None:
+    """A stakes level gates iff it sets a non-zero faithfulness bar — the gate and the floor read
+    the *same* stakes-dependent threshold (epistemic.provisional_threshold_for), not a separate
+    hand-maintained boolean. This is what makes the threshold the single source of truth for both
+    'is this atom provisional' and 'does that matter for this move'."""
+    assert _gates_on_provisional(stakes) is (provisional_threshold_for(stakes) > 0.0)
+
+
+def test_high_gates_low_does_not() -> None:
+    """The concrete two-level reading of the threshold today: HIGH (strict bar) gates, LOW (0.0,
+    permissive) does not."""
+    assert _gates_on_provisional(Stakes.HIGH) is True
+    assert _gates_on_provisional(Stakes.LOW) is False
