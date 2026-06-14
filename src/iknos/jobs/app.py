@@ -46,25 +46,55 @@ entry point, not a replacement.
 from __future__ import annotations
 
 import base64
+import logging
 import uuid
+from typing import TYPE_CHECKING
 
 import httpx
+import openai
 from procrastinate import App, PsycopgConnector, RetryStrategy
+from procrastinate.exceptions import AlreadyEnqueued
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from iknos.config import settings
+
+if TYPE_CHECKING:
+    from iknos.core.proposition import PropositionizeReport
+
+logger = logging.getLogger(__name__)
 
 # Retry budget for a transient ingest failure (R11): at most this many attempts in total (the
 # initial run + retries), with exponential backoff between them.
 MAX_ATTEMPTS = 3
 
+
+class IngestRetryableError(Exception):
+    """A transient ingest/extraction failure the worker raises *itself* so procrastinate re-fires.
+
+    Distinct from the transport classes below, which originate inside the client libraries: this is
+    raised when a job completed its calls but the *result* is incomplete in a way a re-run can fix —
+    today, an extraction whose per-span isolation (G1.17 R1) left ``failed_spans`` non-empty. It is
+    a member of :data:`RETRYABLE_INGEST_EXCEPTIONS`, so the §6.1/§13 fail-loud default re-runs the
+    job up to :data:`MAX_ATTEMPTS`; content-hash idempotency re-extracts exactly the failed spans.
+    """
+
+
 # Transport-class failures only — see the module docstring. Anything not in this tuple is terminal.
 # A dropped DB connection mid-write is transient and a re-run is safe (ingest is idempotent on the
-# document's content hash). HTTP errors come from the parser/embedding service edges.
+# document's content hash). httpx errors come from the parser/embedding service edges; the openai
+# classes + ``TimeoutError`` come from the LLM extraction edge (``core/llm.py`` re-raises them on
+# retry exhaustion, and its hard ``asyncio.timeout`` backstop raises ``TimeoutError``) — a momentary
+# vLLM blip must retry, not fail the job terminally. Validation / bad-data errors stay terminal by
+# their absence (DocumentResegmentationError, StaleExtractionError, CascadeDependentsError).
 RETRYABLE_INGEST_EXCEPTIONS: tuple[type[Exception], ...] = (
     httpx.TransportError,
     OperationalError,
     InterfaceError,
+    openai.APIConnectionError,  # also covers openai.APITimeoutError (a subclass)
+    openai.APITimeoutError,
+    openai.InternalServerError,
+    TimeoutError,  # builtins.TimeoutError is asyncio.TimeoutError — the core/llm.py R5 deadline
+    IngestRetryableError,
 )
 
 
@@ -75,6 +105,25 @@ def is_retryable_ingest_error(exc: BaseException) -> bool:
     validation or programming error is a bug or bad data that retrying only re-burns.
     """
     return isinstance(exc, RETRYABLE_INGEST_EXCEPTIONS)
+
+
+def _raise_for_failed_spans(
+    report: PropositionizeReport, *, document_id: uuid.UUID, span_count: int
+) -> None:
+    """Fail loud (§6.1/§13) if any span failed extraction in isolation — never report ``succeeded``.
+
+    ``propositionize_document`` isolates a span-level error into ``report.failed_spans`` (G1.17 R1)
+    and commits only the spans that succeeded, returning normally. A run where every span hit a
+    flaky-endpoint error therefore commits nothing yet would otherwise look clean. Re-raising as
+    :class:`IngestRetryableError` re-fires the job up to :data:`MAX_ATTEMPTS`; content-hash
+    idempotency re-extracts exactly the failed spans and skips the committed ones. Pure (no I/O),
+    so it is unit-tested directly.
+    """
+    if report.failed_spans:
+        raise IngestRetryableError(
+            f"{len(report.failed_spans)} of {span_count} span(s) failed extraction for document "
+            f"{document_id} — re-firing for retry (idempotency resumes the failed spans)"
+        )
 
 
 def _psycopg_conninfo(database_url: str) -> str:
@@ -182,11 +231,20 @@ async def ingest_document_bytes_job(
     )
     # Follow-on extraction (chained only on a successful ingest). Same box queue + execution lock so
     # it serializes after perception; its own queueing_lock so the chain cannot double-queue it.
-    await propositionize_document_job.configure(
-        queue=_box_queue(box),
-        lock=box,
-        queueing_lock=f"propositionize:{document_id}",
-    ).defer_async(document_id=document_id, box=box)
+    try:
+        await propositionize_document_job.configure(
+            queue=_box_queue(box),
+            lock=box,
+            queueing_lock=f"propositionize:{document_id}",
+        ).defer_async(document_id=document_id, box=box)
+    except AlreadyEnqueued:
+        # The extraction for this document is already scheduled — a re-ingest (the gate runner uses
+        # stable uuid5 ids) whose earlier chain is still pending. The follow-on will run; treat the
+        # duplicate defer as success so it does not fail an otherwise-successful re-ingest. This is
+        # what makes the module's "a re-fired chain is a no-op" claim true.
+        logger.debug(
+            "extraction already enqueued for document %s; chain defer is a no-op", document_id
+        )
 
 
 def _box_queue(box: str | None) -> str:
@@ -245,7 +303,13 @@ async def _propositionize_one(*, document_id: uuid.UUID) -> None:
             raw_text = await load_document_text(session, document_id)
             if raw_text is None:
                 return
-            await propositionizer.propositionize_document(session, document_id, spans, raw_text)
+            report = await propositionizer.propositionize_document(
+                session, document_id, spans, raw_text
+            )
+            # Fail loud if any span failed in isolation (G1.17 R1): the report carries failed_spans,
+            # and swallowing them would mark an all-failed extraction `succeeded` with nothing
+            # committed. Raising re-fires the job; idempotency resumes exactly the failed spans.
+            _raise_for_failed_spans(report, document_id=document_id, span_count=len(spans))
     finally:
         substrate.close()
         await engine.dispose()
