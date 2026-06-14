@@ -368,11 +368,14 @@ async def load_document_spans(
     propositionizer's context windows (``_pipeline_hash``) match the ingest-time order. Empty list
     if the document was never ingested at that level (a clean no-op for the caller).
     """
-    from iknos.db.age import execute_cypher, parse_agtype_map
+    from iknos.db.age import parse_agtype_map
+    from iknos.db.cypher import CypherQuery, NodeLabel, node
 
-    rows = await execute_cypher(
-        session,
-        f"MATCH (s:Span {{document_id: '{document_id}', level: {level}}}) RETURN properties(s)",
+    rows = await (
+        CypherQuery()
+        .match(node("s", NodeLabel.SPAN, {"document_id": str(document_id), "level": level}))
+        .return_("properties(s)")
+        .run(session)
     )
     spans: list[Span] = []
     for (raw_props,) in rows:
@@ -429,7 +432,7 @@ async def persist_spans(
     Action records the persist time alone. Caller-owned transaction — does **not** commit. See
     module docstring for the immutability / atomicity model.
     """
-    from iknos.db.age import cypher_map, execute_cypher
+    from iknos.db.cypher import NodeLabel, merge_vertex
 
     # R12: time the span/dense writes (guards + persist). Added to ``stage_setup_ms`` — the
     # embed/split/segment cost the caller already paid — for the segment Action's duration_ms, so
@@ -508,9 +511,7 @@ async def persist_spans(
             props["layout"] = layout
         # MERGE (defense-in-depth alongside the content-hash guard): id-keyed upsert,
         # so even a forced re-run cannot duplicate the vertex.
-        await execute_cypher(
-            session, f"MERGE (s:Span {{id: '{span_id}'}}) SET s = {cypher_map(props)}"
-        )
+        await merge_vertex(session, NodeLabel.SPAN, props)
 
         # Dense row: upsert on the partial unique index (migration 0005) so the row id
         # is stable across re-runs (no churn) and never duplicates. pg_insert keeps the
@@ -620,7 +621,7 @@ async def _ingest_parsed(
     (null parser, ``layout=None``) cannot drift apart — the only difference between them
     is which ``ParseResult``/hash/media_type they hand in.
     """
-    from iknos.db.age import cypher_map, execute_cypher
+    from iknos.db.cypher import NodeLabel, merge_vertex
 
     raw_text = parse_result.text
 
@@ -639,9 +640,7 @@ async def _ingest_parsed(
     doc_props: dict[str, Any] = {"id": str(document_id), **Sensitivity().flatten()}
     if title is not None:
         doc_props["title"] = title
-    await execute_cypher(
-        session, f"MERGE (d:Document {{id: '{document_id}'}}) SET d = {cypher_map(doc_props)}"
-    )
+    await merge_vertex(session, NodeLabel.DOCUMENT, doc_props)
 
     # Record the parse Action only when new/changed (idempotent like the segment Action).
     # On a *changed* parse the segmentation guard below raises and the caller's rollback

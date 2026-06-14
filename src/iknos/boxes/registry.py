@@ -44,12 +44,14 @@ async def get_box(session: AsyncSession, box_id: uuid.UUID) -> Box | None:
     Reads the whole property map in one round-trip and rebuilds via ``box_from_props``;
     works for both registry boxes and domain-pack boxes (pack-only extras are ignored).
     """
-    from iknos.db.age import execute_cypher, parse_agtype_map
+    from iknos.db.age import parse_agtype_map
+    from iknos.db.cypher import CypherQuery, NodeLabel, node
 
-    rows = await execute_cypher(
-        session,
-        f"MATCH (b:Box {{id: '{box_id}'}}) RETURN properties(b)",
-        returns="props agtype",
+    rows = (
+        await CypherQuery()
+        .match(node("b", NodeLabel.BOX, {"id": str(box_id)}))
+        .return_("properties(b)")
+        .run(session, returns="props agtype")
     )
     if not rows:
         return None
@@ -65,12 +67,12 @@ async def create_box(session: AsyncSession, box: Box, *, actor: str = REGISTRY_A
     moved one. Emits a ``create-box`` Action only when a box is actually written. Caller
     commits.
     """
-    from iknos.db.age import merge_vertex
+    from iknos.db.cypher import NodeLabel, merge_vertex
 
     existing = await get_box(session, box.id)
     if existing is not None:
         return existing
-    await merge_vertex(session, "Box", box_to_props(box))
+    await merge_vertex(session, NodeLabel.BOX, box_to_props(box))
     await record_action(
         session,
         actor=actor,
@@ -92,19 +94,19 @@ async def list_boxes(
     ``status=None`` returns every status. Ordered by ``reliability_prior`` descending so
     the most entrenched sources come first — the ordering reasoning consumes (§9).
     """
-    from iknos.db.age import execute_cypher, parse_agtype_map
+    from iknos.db.age import parse_agtype_map
+    from iknos.db.cypher import CypherQuery, NodeLabel, lit, node
 
-    clauses: list[str] = []
+    conditions: list[str] = []
     if tier is not None:
-        clauses.append(f"b.tier = '{tier}'")
+        conditions.append("b.tier = " + lit(tier))
     if status is not None:
-        clauses.append(f"b.status = '{status}'")
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    rows = await execute_cypher(
-        session,
-        f"MATCH (b:Box) {where} RETURN properties(b) ORDER BY b.reliability_prior DESC",
-        returns="props agtype",
-    )
+        conditions.append("b.status = " + lit(status))
+    query = CypherQuery().match(node("b", NodeLabel.BOX))
+    if conditions:
+        query.where(*conditions)
+    query.return_("properties(b)").order_by("b.reliability_prior DESC")
+    rows = await query.run(session, returns="props agtype")
     return [box_from_props(parse_agtype_map(r[0])) for r in rows]
 
 
@@ -114,16 +116,18 @@ async def active_boxes_by_tier(session: AsyncSession, tiers: list[Tier]) -> list
     The "reasoning reads across active boxes by tier + reliability" query — e.g. an
     investigation's working set spans several reference tiers plus its case tier.
     """
-    from iknos.db.age import execute_cypher, parse_agtype_map
+    from iknos.db.age import parse_agtype_map
+    from iknos.db.cypher import CypherQuery, NodeLabel, lit, lit_list, node
 
     if not tiers:
         return []
-    tier_list = ", ".join(f"'{t}'" for t in tiers)
-    rows = await execute_cypher(
-        session,
-        f"MATCH (b:Box) WHERE b.status = 'active' AND b.tier IN [{tier_list}] "
-        "RETURN properties(b) ORDER BY b.reliability_prior DESC",
-        returns="props agtype",
+    rows = (
+        await CypherQuery()
+        .match(node("b", NodeLabel.BOX))
+        .where("b.status = " + lit("active"), "b.tier IN " + lit_list(tiers))
+        .return_("properties(b)")
+        .order_by("b.reliability_prior DESC")
+        .run(session, returns="props agtype")
     )
     return [box_from_props(parse_agtype_map(r[0])) for r in rows]
 
@@ -141,13 +145,14 @@ async def deprecate_box(
     layer's job (Phase 5); here we only close the box and log the event. ``SET`` of two
     scalars (not a full-replace) leaves ``valid_from`` and all other properties intact.
     """
-    from iknos.db.age import execute_cypher
+    from iknos.db.cypher import CypherQuery, NodeLabel, lit, node
 
     when = (valid_to or datetime.now(UTC)).isoformat()
-    await execute_cypher(
-        session,
-        f"MATCH (b:Box {{id: '{box_id}'}}) "
-        f"SET b.status = '{BoxStatus.DEPRECATED}', b.valid_to = '{when}'",
+    await (
+        CypherQuery()
+        .match(node("b", NodeLabel.BOX, {"id": str(box_id)}))
+        .set("b.status = " + lit(BoxStatus.DEPRECATED), "b.valid_to = " + lit(when))
+        .run(session)
     )
     await record_action(
         session,

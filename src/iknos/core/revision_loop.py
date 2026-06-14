@@ -370,17 +370,19 @@ class RevisionLoop:
         confidence is written back so a later independent ``evaluate`` reads the loop result, not
         stale seed.
         """
-        from iknos.db.age import execute_cypher
+        from iknos.db.cypher import CypherQuery, lit, node
 
         persisted = await self.qbaf.persist_verdicts(
             session, final.verdicts, gate_decisions=final.decisions
         )
 
         for nid in sorted(final.retracted):
-            await execute_cypher(
-                session,  # type: ignore[arg-type]
-                f"MATCH (n {{id: '{nid}'}}) WHERE n.valid_to IS NULL "
-                f"SET n.valid_to = '{_now_iso()}'",
+            await (
+                CypherQuery()
+                .match(node("n", props={"id": str(nid)}))
+                .where("n.valid_to IS NULL")
+                .set("n.valid_to = " + lit(_now_iso()))
+                .run(session)  # type: ignore[arg-type]
             )
 
         # Write back the recomputed Layer B confidence for every active derivation-governed node, so
@@ -391,10 +393,12 @@ class RevisionLoop:
         active_governed = {n.id for n in plan.nodes if n.id not in final.retracted} & governed
         for nid in sorted(active_governed):
             conf = final.confidence.get(nid, 0.0)
-            await execute_cypher(
-                session,  # type: ignore[arg-type]
-                f"MATCH (n {{id: '{nid}'}}) WHERE n.valid_to IS NULL "
-                f"SET n.confidence = {float(conf)}",
+            await (
+                CypherQuery()
+                .match(node("n", props={"id": str(nid)}))
+                .where("n.valid_to IS NULL")
+                .set("n.confidence = " + lit(float(conf)))
+                .run(session)  # type: ignore[arg-type]
             )
         return persisted
 

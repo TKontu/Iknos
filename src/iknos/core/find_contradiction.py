@@ -430,13 +430,15 @@ async def load_subregion_propositions(
     where it must). One current-state scan (investigation scale, like the other adapters); the
     proposition polarity defaults to ``ASSERTED`` when unset (a pre-G1.1 claim asserts its content).
     """
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
-    rows = await execute_cypher(
-        session,  # type: ignore[arg-type]
-        "MATCH (n)-[:EVIDENCED_BY]->(p:Proposition) WHERE n.valid_to IS NULL "
-        "RETURN n.id, p.id, p.polarity, p.text",
-        returns="nid agtype, pid agtype, polarity agtype, text agtype",
+    rows = await (
+        CypherQuery()
+        .match(node("n") + rel(EdgeType.EVIDENCED_BY) + node("p", NodeLabel.PROPOSITION))
+        .where("n.valid_to IS NULL")
+        .return_("n.id, p.id, p.polarity, p.text")
+        .run(session, returns="nid agtype, pid agtype, polarity agtype, text agtype")  # type: ignore[arg-type]
     )
     scoped: list[tuple[NodeId, NodeId, Polarity, str]] = []
     prop_ids: set[NodeId] = set()

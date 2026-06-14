@@ -649,18 +649,23 @@ class ReferenceBinder:
         the ``(id, label, type, kind)`` rows (deduped) and the ``proposition → own entity ids``
         map.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
         bx = str(box)
         rows_acc: dict[uuid.UUID, tuple[uuid.UUID, str, str, NodeKind]] = {}
         by_prop: dict[uuid.UUID, set[uuid.UUID]] = {}
-        for kind, label in ((NodeKind.ACTOR, "Actor"), (NodeKind.OBJECT, "Object")):
-            rows = await execute_cypher(
-                session,
-                f"MATCH (f:Fact {{box: '{bx}'}})-[:INVOLVES]->(e:{label} {{box: '{bx}'}}) "
-                "MATCH (f)-[:EVIDENCED_BY]->(p:Proposition) "
-                "RETURN e.id, e.label, e.type, p.id",
-                returns="eid agtype, label agtype, typ agtype, pid agtype",
+        for kind, label in ((NodeKind.ACTOR, NodeLabel.ACTOR), (NodeKind.OBJECT, NodeLabel.OBJECT)):
+            rows = await (
+                CypherQuery()
+                .match(
+                    node("f", NodeLabel.FACT, {"box": bx})
+                    + rel(EdgeType.INVOLVES)
+                    + node("e", label, {"box": bx})
+                )
+                .match(node("f") + rel(EdgeType.EVIDENCED_BY) + node("p", NodeLabel.PROPOSITION))
+                .return_("e.id, e.label, e.type, p.id")
+                .run(session, returns="eid agtype, label agtype, typ agtype, pid agtype")
             )
             for eid, lab, typ, pid in rows:
                 ent_id = uuid.UUID(unquote_agtype(eid))
@@ -676,15 +681,20 @@ class ReferenceBinder:
         ``EVIDENCED_BY`` its Proposition, which is in turn ``EVIDENCED_BY`` its Span(s). One
         query collects the proposition id + text and aggregates its span ids in Python.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
         bx = str(box)
-        rows = await execute_cypher(
-            session,
-            f"MATCH (f:Fact {{box: '{bx}'}})-[:EVIDENCED_BY]->(p:Proposition) "
-            "OPTIONAL MATCH (p)-[:EVIDENCED_BY]->(s:Span) "
-            "RETURN p.id, p.text, s.id",
-            returns="pid agtype, ptext agtype, sid agtype",
+        rows = await (
+            CypherQuery()
+            .match(
+                node("f", NodeLabel.FACT, {"box": bx})
+                + rel(EdgeType.EVIDENCED_BY)
+                + node("p", NodeLabel.PROPOSITION)
+            )
+            .optional_match(node("p") + rel(EdgeType.EVIDENCED_BY) + node("s", NodeLabel.SPAN))
+            .return_("p.id, p.text, s.id")
+            .run(session, returns="pid agtype, ptext agtype, sid agtype")
         )
         agg: dict[uuid.UUID, dict[str, Any]] = {}
         for pid, ptext, sid in rows:
@@ -732,21 +742,29 @@ class ReferenceBinder:
         the proposition-layer discipline) when any of its mentions is unresolved or only
         candidate-bound.
         """
-        from iknos.db.age import execute_cypher, merge_edge, merge_vertex
+        from iknos.db.cypher import (
+            CypherQuery,
+            EdgeType,
+            NodeLabel,
+            lit,
+            merge_edge,
+            merge_vertex,
+            node,
+        )
 
         now = datetime.now(UTC)
         bound: list[BoundMention] = []
         any_open = False
 
         for mention in mentions:
-            await merge_vertex(session, "Mention", mention_to_props(mention, box))
+            await merge_vertex(session, NodeLabel.MENTION, mention_to_props(mention, box))
             # Provenance (§10.2): the Mention occurs in the proposition's source Span(s).
             for sid in item.span_ids:
                 await merge_edge(
                     session,
                     src_id=mention.id,
                     dst_id=sid,
-                    label="EVIDENCED_BY",
+                    label=EdgeType.EVIDENCED_BY,
                     props={"box": str(box)},
                 )
 
@@ -762,7 +780,7 @@ class ReferenceBinder:
                     session,
                     src_id=mention.id,
                     dst_id=target_id,
-                    label="REFERS_TO",
+                    label=EdgeType.REFERS_TO,
                     props=refers_to_to_props(
                         box=box, state=binding.state, strength=strength, now=now
                     ),
@@ -785,10 +803,11 @@ class ReferenceBinder:
             # transition window. TODO(R8): drop `p.provisional` once readers consume the set.
             from iknos.db.age import cypher_string_literal, parse_agtype_map
 
-            rows = await execute_cypher(
-                session,
-                f"MATCH (p:Proposition {{id: '{item.proposition_id}'}}) RETURN properties(p)",
-                returns="props agtype",
+            rows = await (
+                CypherQuery()
+                .match(node("p", NodeLabel.PROPOSITION, {"id": str(item.proposition_id)}))
+                .return_("properties(p)")
+                .run(session, returns="props agtype")
             )
             existing = (
                 decode_provisional_reasons(parse_agtype_map(rows[0][0]).get("provisional_reasons"))
@@ -797,10 +816,11 @@ class ReferenceBinder:
             )
             merged = merge_provisional_reasons(existing, [ProvisionalReason.UNRESOLVED_REFERENCE])
             reasons_literal = cypher_string_literal(json.dumps(merged))
-            await execute_cypher(
-                session,
-                f"MATCH (p:Proposition {{id: '{item.proposition_id}'}}) "
-                f"SET p.provisional_reasons = {reasons_literal}, p.provisional = true",
+            await (
+                CypherQuery()
+                .match(node("p", NodeLabel.PROPOSITION, {"id": str(item.proposition_id)}))
+                .set("p.provisional_reasons = " + reasons_literal, "p.provisional = " + lit(True))
+                .run(session)
             )
 
         action_id = await record_action(

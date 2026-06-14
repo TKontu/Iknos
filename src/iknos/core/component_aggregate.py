@@ -223,7 +223,7 @@ class ComponentReasoner:
         (§9), supplied as ``box``.
         """
         from iknos.core.resolve import same_as_to_props
-        from iknos.db.age import merge_edge
+        from iknos.db.cypher import EdgeType, merge_edge
 
         src, dst = sorted((a, b), key=str)
         now = datetime.now(UTC)
@@ -231,7 +231,7 @@ class ComponentReasoner:
             session,
             src_id=src,
             dst_id=dst,
-            label="SAME_AS",
+            label=EdgeType.SAME_AS,
             props=same_as_to_props(
                 box=box, state=SameAsState.CONFIRMED, strength=strength, now=now
             ),
@@ -246,14 +246,20 @@ class ComponentReasoner:
         it so the components separate again — "over-merging is recoverable". Emits a
         ``belief-revision`` Action (§10.1).
         """
-        from iknos.db.age import execute_cypher
+        from iknos.db.cypher import CypherQuery, EdgeType, lit, node, rel
 
         src, dst = sorted((a, b), key=str)
         now = datetime.now(UTC).isoformat()
-        await execute_cypher(
-            session,
-            f"MATCH (x {{id: '{src}'}})-[r:SAME_AS]->(y {{id: '{dst}'}}) "
-            f"WHERE r.valid_to IS NULL SET r.valid_to = '{now}'",
+        await (
+            CypherQuery()
+            .match(
+                node("x", props={"id": str(src)})
+                + rel(EdgeType.SAME_AS, var="r")
+                + node("y", props={"id": str(dst)})
+            )
+            .where("r.valid_to IS NULL")
+            .set("r.valid_to = " + lit(now))
+            .run(session)
         )
         return await self._revise(session, asserted=None, retracted=(src, dst))
 
@@ -291,12 +297,15 @@ class ComponentReasoner:
 
     async def _load_involves(self, session: AsyncSession) -> dict[NodeId, frozenset[NodeId]]:
         """Current reasoning node → the entity ids it ``INVOLVES`` (§10)."""
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, node, rel
 
-        rows = await execute_cypher(
-            session,
-            "MATCH (n)-[:INVOLVES]->(e) WHERE n.valid_to IS NULL RETURN n.id, e.id",
-            returns="nid agtype, eid agtype",
+        rows = await (
+            CypherQuery()
+            .match(node("n") + rel(EdgeType.INVOLVES) + node("e"))
+            .where("n.valid_to IS NULL")
+            .return_("n.id, e.id")
+            .run(session, returns="nid agtype, eid agtype")
         )
         out: dict[NodeId, set[NodeId]] = {}
         for nid, eid in rows:
@@ -311,13 +320,15 @@ class ComponentReasoner:
         via ``resolve.components`` (reused so the component logic cannot diverge).
         """
         from iknos.core.resolve import components as union_components
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, lit, node, rel
 
-        rows = await execute_cypher(
-            session,
-            f"MATCH (a)-[r:SAME_AS]->(b) WHERE r.state = '{SameAsState.CONFIRMED}' "
-            "AND r.valid_to IS NULL RETURN a.id, b.id",
-            returns="aid agtype, bid agtype",
+        rows = await (
+            CypherQuery()
+            .match(node("a") + rel(EdgeType.SAME_AS, var="r") + node("b"))
+            .where("r.state = " + lit(SameAsState.CONFIRMED), "r.valid_to IS NULL")
+            .return_("a.id, b.id")
+            .run(session, returns="aid agtype, bid agtype")
         )
         pairs = [
             (uuid.UUID(unquote_agtype(aid)), uuid.UUID(unquote_agtype(bid))) for aid, bid in rows

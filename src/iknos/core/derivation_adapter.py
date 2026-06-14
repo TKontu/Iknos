@@ -240,12 +240,15 @@ async def load_active_box_ids(session: object) -> frozenset[str]:
     adapter (``core/qbaf_adapter.py``), so the "active box" definition cannot diverge between
     the propagation and adjudication loads.
     """
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, NodeLabel, lit, node
 
-    rows = await execute_cypher(
-        session,  # type: ignore[arg-type]
-        "MATCH (b:Box) WHERE b.status = 'active' AND b.valid_to IS NULL RETURN b.id",
-        returns="bid agtype",
+    rows = await (
+        CypherQuery()
+        .match(node("b", NodeLabel.BOX))
+        .where("b.status = " + lit("active"), "b.valid_to IS NULL")
+        .return_("b.id")
+        .run(session, returns="bid agtype")  # type: ignore[arg-type]
     )
     return frozenset(unquote_agtype(bid) for (bid,) in rows)
 
@@ -259,14 +262,17 @@ async def load_reasoning_nodes(session: object) -> list[NodeRow]:
     ``extract.seed_confidence`` uses when no verifier ran. Shared with the QBAF adapter, which
     consumes the same node confidence as the QBAF intrinsic/base score (§12 seam).
     """
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, NodeLabel, node
 
     rows: list[NodeRow] = []
     for label in REASONING_LABELS:
-        raw = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            f"MATCH (n:{label}) WHERE n.valid_to IS NULL RETURN n.id, n.box, n.confidence",
-            returns="nid agtype, box agtype, conf agtype",
+        raw = await (
+            CypherQuery()
+            .match(node("n", NodeLabel(label)))
+            .where("n.valid_to IS NULL")
+            .return_("n.id, n.box, n.confidence")
+            .run(session, returns="nid agtype, box agtype, conf agtype")  # type: ignore[arg-type]
         )
         for nid, box, conf in raw:
             rows.append(
@@ -287,12 +293,15 @@ async def load_hypothesis_ids(session: object) -> set[NodeId]:
     (``core/candidates.py``) uses it to pick the *targets* evidence is paired against — so the
     "current Hypothesis" definition cannot diverge between adjudication and candidate generation.
     """
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, NodeLabel, node
 
-    rows = await execute_cypher(
-        session,  # type: ignore[arg-type]
-        "MATCH (h:Hypothesis) WHERE h.valid_to IS NULL RETURN h.id",
-        returns="hid agtype",
+    rows = await (
+        CypherQuery()
+        .match(node("h", NodeLabel.HYPOTHESIS))
+        .where("h.valid_to IS NULL")
+        .return_("h.id")
+        .run(session, returns="hid agtype")  # type: ignore[arg-type]
     )
     return {unquote_agtype(hid) for (hid,) in rows}
 
@@ -304,12 +313,15 @@ async def load_base_fact_ids(session: object) -> set[NodeId]:
     set; the target node type is irrelevant (we only need that evidence exists). Shared module-level
     read so the revision loop (W1) re-assembles the same well-founded base the adapter does.
     """
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, EdgeType, node, rel
 
-    raw = await execute_cypher(
-        session,  # type: ignore[arg-type]
-        "MATCH (f)-[:EVIDENCED_BY]->() WHERE f.valid_to IS NULL RETURN DISTINCT f.id",
-        returns="fid agtype",
+    raw = await (
+        CypherQuery()
+        .match(node("f") + rel(EdgeType.EVIDENCED_BY) + node())
+        .where("f.valid_to IS NULL")
+        .return_("DISTINCT f.id")
+        .run(session, returns="fid agtype")  # type: ignore[arg-type]
     )
     return {unquote_agtype(fid) for (fid,) in raw}
 
@@ -320,14 +332,15 @@ async def load_derived_rows(session: object) -> list[DerivedRow]:
     Shared module-level read (W1 reuses it to re-assemble the derivation structure per retracted
     set); the adapter's ``load_active`` consumes the same rows.
     """
-    from iknos.db.age import execute_cypher, unquote_agtype
+    from iknos.db.age import unquote_agtype
+    from iknos.db.cypher import CypherQuery, EdgeType, node, rel
 
-    raw = await execute_cypher(
-        session,  # type: ignore[arg-type]
-        "MATCH (c)-[d:DERIVED_FROM]->(a) "
-        "WHERE c.valid_to IS NULL AND a.valid_to IS NULL AND d.valid_to IS NULL "
-        "RETURN c.id, a.id, d.derivation, d.strength",
-        returns="cid agtype, aid agtype, deriv agtype, strength agtype",
+    raw = await (
+        CypherQuery()
+        .match(node("c") + rel(EdgeType.DERIVED_FROM, var="d") + node("a"))
+        .where("c.valid_to IS NULL", "a.valid_to IS NULL", "d.valid_to IS NULL")
+        .return_("c.id, a.id, d.derivation, d.strength")
+        .run(session, returns="cid agtype, aid agtype, deriv agtype, strength agtype")  # type: ignore[arg-type]
     )
     return [
         DerivedRow(

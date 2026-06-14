@@ -352,15 +352,17 @@ class MeronymyInducer:
         canonical id), so an induced relation connects canonical entities, robust to whether
         resolution (G2.3) has run.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, NodeLabel, node
 
         bx = str(box)
         rows_acc: list[tuple[uuid.UUID, str, str, NodeKind]] = []
-        for kind, label in ((NodeKind.ACTOR, "Actor"), (NodeKind.OBJECT, "Object")):
-            rows = await execute_cypher(
-                session,
-                f"MATCH (e:{label} {{box: '{bx}'}}) RETURN e.id, e.label, e.type",
-                returns="eid agtype, lab agtype, typ agtype",
+        for kind, label in ((NodeKind.ACTOR, NodeLabel.ACTOR), (NodeKind.OBJECT, NodeLabel.OBJECT)):
+            rows = await (
+                CypherQuery()
+                .match(node("e", label, {"box": bx}))
+                .return_("e.id, e.label, e.type")
+                .run(session, returns="eid agtype, lab agtype, typ agtype")
             )
             for eid, lab, typ in rows:
                 rows_acc.append(
@@ -370,13 +372,19 @@ class MeronymyInducer:
 
     async def _load_propositions(self, session: AsyncSession, box: uuid.UUID) -> list[InduceInput]:
         """Load the box's propositions (reached via the box Facts ``EVIDENCED_BY`` them)."""
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
         bx = str(box)
-        rows = await execute_cypher(
-            session,
-            f"MATCH (f:Fact {{box: '{bx}'}})-[:EVIDENCED_BY]->(p:Proposition) RETURN p.id, p.text",
-            returns="pid agtype, ptext agtype",
+        rows = await (
+            CypherQuery()
+            .match(
+                node("f", NodeLabel.FACT, {"box": bx})
+                + rel(EdgeType.EVIDENCED_BY)
+                + node("p", NodeLabel.PROPOSITION)
+            )
+            .return_("p.id, p.text")
+            .run(session, returns="pid agtype, ptext agtype")
         )
         seen: dict[uuid.UUID, InduceInput] = {}
         for pid, ptext in rows:
@@ -425,7 +433,8 @@ class MeronymyInducer:
         direct: list[DirectPartOf],
     ) -> uuid.UUID:
         """Persist one proposition's ``directPartOf`` edges + an ``induce`` Action (one txn)."""
-        from iknos.db.age import atomic_write, merge_edge
+        from iknos.db.age import atomic_write
+        from iknos.db.cypher import EdgeType, merge_edge
 
         now = datetime.now(UTC)
         # W7: this proposition's directPartOf edges + its induce Action as one unit (per-proposition
@@ -436,7 +445,7 @@ class MeronymyInducer:
                     session,
                     src_id=d.child,
                     dst_id=d.parent,
-                    label="directPartOf",
+                    label=EdgeType.DIRECT_PART_OF,
                     props=direct_part_of_props(
                         box=box,
                         meronymy_type=d.meronymy_type,
@@ -481,14 +490,19 @@ class MeronymyInducer:
         cyclic entities (flagged, excluded from roll-up). Non-transitive subtypes are loaded
         for nothing here — they are excluded by the §14 rule (``is_transitive``).
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, node, rel
 
         bx = str(box)
-        rows = await execute_cypher(
-            session,
-            f"MATCH (c {{box: '{bx}'}})-[r:directPartOf]->(p {{box: '{bx}'}}) "
-            "RETURN c.id, p.id, r.meronymy_type",
-            returns="cid agtype, pid agtype, mtype agtype",
+        rows = await (
+            CypherQuery()
+            .match(
+                node("c", props={"box": bx})
+                + rel(EdgeType.DIRECT_PART_OF, var="r")
+                + node("p", props={"box": bx})
+            )
+            .return_("c.id, p.id, r.meronymy_type")
+            .run(session, returns="cid agtype, pid agtype, mtype agtype")
         )
         edges: list[tuple[uuid.UUID, uuid.UUID]] = []
         for cid, pid, mtype in rows:
@@ -497,7 +511,8 @@ class MeronymyInducer:
 
         closure, cyclic = transitive_closure(edges)
         if closure:
-            from iknos.db.age import atomic_write, merge_edge
+            from iknos.db.age import atomic_write
+            from iknos.db.cypher import EdgeType, merge_edge
 
             now = datetime.now(UTC)
             # W7: the closure rebuild is its own unit — all partOf edges land together or not at all
@@ -508,7 +523,7 @@ class MeronymyInducer:
                         session,
                         src_id=descendant,
                         dst_id=ancestor,
-                        label="partOf",
+                        label=EdgeType.PART_OF,
                         props=part_of_props(
                             box=box,
                             provenance=AttachmentProvenance.INDUCED,
@@ -573,13 +588,14 @@ class MeronymyInducer:
         referents = await self._load_referents(session, box)
         return {member: r.canonical for r in referents for member in r.ids}
 
-    async def _ancestor_count(self, session: AsyncSession, node: uuid.UUID) -> int:
-        from iknos.db.age import execute_cypher
+    async def _ancestor_count(self, session: AsyncSession, node_id: uuid.UUID) -> int:
+        from iknos.db.cypher import CypherQuery, EdgeType, node, rel
 
-        rows = await execute_cypher(
-            session,
-            f"MATCH (e {{id: '{node}'}})-[:partOf]->(a) RETURN count(a)",
-            returns="n agtype",
+        rows = await (
+            CypherQuery()
+            .match(node("e", props={"id": str(node_id)}) + rel(EdgeType.PART_OF) + node("a"))
+            .return_("count(a)")
+            .run(session, returns="n agtype")
         )
         return int(str(rows[0][0])) if rows else 0
 
@@ -646,13 +662,19 @@ class MeronymyInducer:
         label-canonical id first. Returns the sorted distinct readings (by depth, then
         provenance); empty when the fact has no subject-role referent.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, lit, node, rel
 
-        rows = await execute_cypher(
-            session,
-            f"MATCH (f:Fact {{id: '{fact_id}'}})-[i:INVOLVES]->(e) "
-            f"WHERE i.role = '{Role.SUBJECT}' RETURN e.id",
-            returns="eid agtype",
+        rows = await (
+            CypherQuery()
+            .match(
+                node("f", NodeLabel.FACT, {"id": str(fact_id)})
+                + rel(EdgeType.INVOLVES, var="i")
+                + node("e")
+            )
+            .where("i.role = " + lit(Role.SUBJECT))
+            .return_("e.id")
+            .run(session, returns="eid agtype")
         )
         subjects = [uuid.UUID(unquote_agtype(eid)) for (eid,) in rows]
         cmap = await self._canonical_map(session, box)

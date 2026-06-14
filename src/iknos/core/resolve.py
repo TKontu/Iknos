@@ -413,17 +413,26 @@ class Resolver:
         co-involved in those facts, aggregating roles and the context fingerprint in Python.
         Every entity an extractor wrote has ≥1 ``INVOLVES`` edge, so the join reaches them all.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
         bx = str(box)
         records: list[EntityRecord] = []
-        for kind, label in ((NodeKind.ACTOR, "Actor"), (NodeKind.OBJECT, "Object")):
-            rows = await execute_cypher(
-                session,
-                f"MATCH (f:Fact)-[i:INVOLVES]->(e:{label} {{box: '{bx}'}}) "
-                f"OPTIONAL MATCH (f)-[:INVOLVES]->(c {{box: '{bx}'}}) WHERE c.id <> e.id "
-                "RETURN e.id, e.label, e.type, i.role, c.label",
-                returns="eid agtype, label agtype, typ agtype, role agtype, clabel agtype",
+        for kind, label in ((NodeKind.ACTOR, NodeLabel.ACTOR), (NodeKind.OBJECT, NodeLabel.OBJECT)):
+            rows = await (
+                CypherQuery()
+                .match(
+                    node("f", NodeLabel.FACT)
+                    + rel(EdgeType.INVOLVES, var="i")
+                    + node("e", label, {"box": bx})
+                )
+                .optional_match(node("f") + rel(EdgeType.INVOLVES) + node("c", props={"box": bx}))
+                .where("c.id <> e.id")
+                .return_("e.id, e.label, e.type, i.role, c.label")
+                .run(
+                    session,
+                    returns="eid agtype, label agtype, typ agtype, role agtype, clabel agtype",
+                )
             )
             agg: dict[uuid.UUID, dict[str, Any]] = {}
             for eid, lab, typ, role, clabel in rows:
@@ -470,14 +479,14 @@ class Resolver:
         ``merge_edge`` keys on (src, dst, label), so the canonical direction gives the
         symmetric edge one stable key — a re-run upserts rather than duplicating.
         """
-        from iknos.db.age import merge_edge
+        from iknos.db.cypher import EdgeType, merge_edge
 
         src, dst = sorted((a.id, b.id), key=str)
         await merge_edge(
             session,
             src_id=src,
             dst_id=dst,
-            label="SAME_AS",
+            label=EdgeType.SAME_AS,
             props=same_as_to_props(box=box, state=state, strength=strength, now=now),
         )
         return SameAsEdge(src=src, dst=dst, state=state, strength=strength)
@@ -531,14 +540,20 @@ class Resolver:
         to the same taxonomy node fold into one entity (:func:`anchored_components`).
         """
         from iknos.core.anchor import EntityLinker
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, lit, node, rel
 
         bx = str(box)
-        rows = await execute_cypher(
-            session,
-            f"MATCH (a {{box: '{bx}'}})-[r:SAME_AS]->(b {{box: '{bx}'}}) "
-            f"WHERE r.state = '{SameAsState.CONFIRMED}' RETURN a.id, b.id",
-            returns="aid agtype, bid agtype",
+        rows = await (
+            CypherQuery()
+            .match(
+                node("a", props={"box": bx})
+                + rel(EdgeType.SAME_AS, var="r")
+                + node("b", props={"box": bx})
+            )
+            .where("r.state = " + lit(SameAsState.CONFIRMED))
+            .return_("a.id, b.id")
+            .run(session, returns="aid agtype, bid agtype")
         )
         pairs = [
             (uuid.UUID(unquote_agtype(aid)), uuid.UUID(unquote_agtype(bid))) for aid, bid in rows

@@ -325,15 +325,17 @@ class EntityLinker:
         (0007) on the ``box`` containment filter; the taxonomy is small (a pack's curated
         entities), so the per-box round-trips are cheap.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, NodeLabel, node
 
         nodes: list[TaxonomyNode] = []
         for pack_box in pack_box_ids:
             bx = str(pack_box)
-            rows = await execute_cypher(
-                session,
-                f"MATCH (o:Object {{box: '{bx}'}}) RETURN o.id, o.label, o.type",
-                returns="oid agtype, lab agtype, typ agtype",
+            rows = await (
+                CypherQuery()
+                .match(node("o", NodeLabel.OBJECT, {"box": bx}))
+                .return_("o.id, o.label, o.type")
+                .run(session, returns="oid agtype, lab agtype, typ agtype")
             )
             for oid, lab, typ in rows:
                 nodes.append(
@@ -354,15 +356,17 @@ class EntityLinker:
         ``partwhole`` level read and ``resolve`` component pick — to the taxonomy node, robust
         to whether entity resolution (G2.3) has run.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, NodeLabel, node
 
         bx = str(box)
         rows_acc: list[tuple[uuid.UUID, str, str, NodeKind]] = []
-        for kind, label in ((NodeKind.ACTOR, "Actor"), (NodeKind.OBJECT, "Object")):
-            rows = await execute_cypher(
-                session,
-                f"MATCH (e:{label} {{box: '{bx}'}}) RETURN e.id, e.label, e.type",
-                returns="eid agtype, lab agtype, typ agtype",
+        for kind, label in ((NodeKind.ACTOR, NodeLabel.ACTOR), (NodeKind.OBJECT, NodeLabel.OBJECT)):
+            rows = await (
+                CypherQuery()
+                .match(node("e", label, {"box": bx}))
+                .return_("e.id, e.label, e.type")
+                .run(session, returns="eid agtype, lab agtype, typ agtype")
             )
             for eid, lab, typ in rows:
                 rows_acc.append(
@@ -386,13 +390,13 @@ class EntityLinker:
         ``SAME_AS`` min-id canonical). ``merge_edge`` keys on (src, dst, label), so a re-run
         upserts rather than duplicating.
         """
-        from iknos.db.age import merge_edge
+        from iknos.db.cypher import EdgeType, merge_edge
 
         await merge_edge(
             session,
             src_id=entity.canonical,
             dst_id=node.id,
-            label="ANCHORS_TO",
+            label=EdgeType.ANCHORS_TO,
             props=anchors_to_props(
                 box=box, target_box=node.box, state=state, strength=strength, now=now
             ),
@@ -471,14 +475,16 @@ class EntityLinker:
         (§5.2/§14). ``CANDIDATE`` anchors are excluded — they keep the identity open by
         definition. A confirmed anchor is single-target, so the map is well-defined.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, lit, node, rel
 
         bx = str(box)
-        rows = await execute_cypher(
-            session,
-            f"MATCH (e {{box: '{bx}'}})-[r:ANCHORS_TO]->(t) "
-            f"WHERE r.state = '{AnchorState.CONFIRMED}' RETURN e.id, t.id",
-            returns="eid agtype, tid agtype",
+        rows = await (
+            CypherQuery()
+            .match(node("e", props={"box": bx}) + rel(EdgeType.ANCHORS_TO, var="r") + node("t"))
+            .where("r.state = " + lit(AnchorState.CONFIRMED))
+            .return_("e.id, t.id")
+            .run(session, returns="eid agtype, tid agtype")
         )
         return {uuid.UUID(unquote_agtype(eid)): uuid.UUID(unquote_agtype(tid)) for eid, tid in rows}
 

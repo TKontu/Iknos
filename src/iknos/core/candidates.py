@@ -462,14 +462,15 @@ class CandidateGenerationAdapter:
         retracted entity links nothing. Active-box scoping is applied in :meth:`generate` against
         the shared active-node universe (the entity's box is not re-read here).
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, node, rel
 
-        rows = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            "MATCH (n)-[r:INVOLVES]->(e) "
-            "WHERE n.valid_to IS NULL AND e.valid_to IS NULL "
-            "RETURN n.id, e.id, r.role",
-            returns="nid agtype, eid agtype, role agtype",
+        rows = await (
+            CypherQuery()
+            .match(node("n") + rel(EdgeType.INVOLVES, var="r") + node("e"))
+            .where("n.valid_to IS NULL", "e.valid_to IS NULL")
+            .return_("n.id, e.id, r.role")
+            .run(session, returns="nid agtype, eid agtype, role agtype")  # type: ignore[arg-type]
         )
         return [
             InvolvesRow(node=unquote_agtype(nid), entity=unquote_agtype(eid), role=_opt_str(role))
@@ -486,12 +487,15 @@ class CandidateGenerationAdapter:
         edges (node → Proposition) and excludes the text-locator ones (node → Span). Active-box
         scoping is applied in :meth:`generate` against the shared active-node universe.
         """
-        from iknos.db.age import execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
-        rows = await execute_cypher(
-            session,  # type: ignore[arg-type]
-            "MATCH (n)-[:EVIDENCED_BY]->(p:Proposition) WHERE n.valid_to IS NULL RETURN n.id, p.id",
-            returns="nid agtype, pid agtype",
+        rows = await (
+            CypherQuery()
+            .match(node("n") + rel(EdgeType.EVIDENCED_BY) + node("p", NodeLabel.PROPOSITION))
+            .where("n.valid_to IS NULL")
+            .return_("n.id, p.id")
+            .run(session, returns="nid agtype, pid agtype")  # type: ignore[arg-type]
         )
         return [(unquote_agtype(nid), unquote_agtype(pid)) for nid, pid in rows]
 

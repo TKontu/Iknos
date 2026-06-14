@@ -50,7 +50,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from iknos.db.age import execute_cypher, parse_agtype_map, unquote_agtype
+from iknos.db.age import parse_agtype_map, unquote_agtype
+from iknos.db.cypher import CypherQuery, NodeLabel, lit_list, node
 from iknos.types.epistemic import (
     Attribution,
     EpistemicClass,
@@ -226,13 +227,14 @@ async def find_reusable_extraction(
             source_verify_sig=await _source_verify_sig(session, source_span),
         )
 
-    # UUIDs are a safe charset to inline into the Cypher body (no escaping); mirrors
-    # core/reembed.py::_proposition_texts. One round-trip for the whole batch.
-    id_list = ", ".join(f"'{uuid.UUID(p)}'" for p in prop_ids)
-    rows = await execute_cypher(
-        session,
-        f"MATCH (p:Proposition) WHERE p.id IN [{id_list}] RETURN p.id, properties(p)",
-        returns="id agtype, props agtype",
+    # One round-trip for the whole batch; UUIDs normalized then escaped via lit_list.
+    ids = [str(uuid.UUID(p)) for p in prop_ids]
+    rows = await (
+        CypherQuery()
+        .match(node("p", NodeLabel.PROPOSITION))
+        .where("p.id IN " + lit_list(ids))
+        .return_("p.id, properties(p)")
+        .run(session, returns="id agtype, props agtype")
     )
     by_id = {unquote_agtype(rid): parse_agtype_map(props) for rid, props in rows}
 

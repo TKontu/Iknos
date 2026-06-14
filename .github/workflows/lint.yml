@@ -39,3 +39,26 @@ jobs:
 
       - name: ruff check (lint)
         run: uv run ruff check .
+
+  # W8 — the Cypher chokepoint. AGE cannot bind parameters into the Cypher body, so every query is
+  # built as text; raw f-string Cypher is safe only by convention. The query builder
+  # (src/iknos/db/cypher.py) makes it safe by construction (validated NodeLabel/EdgeType enums +
+  # mandatory value escaping). This gate keeps it that way: no raw f-string Cypher may reappear in
+  # src/ outside the builder and db/age.py. scripts/ is intentionally exempt (trial/benchmark
+  # harnesses write synthetic Cypher there).
+  cypher-chokepoint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: no raw f-string Cypher outside the builder
+        run: |
+          hits=$(grep -rEn "f[\"'][^\"']*\b(MATCH|MERGE|CREATE|DETACH|OPTIONAL MATCH)\b" \
+            src/ --include="*.py" | grep -vE "src/iknos/db/(age|cypher)\.py" || true)
+          if [ -n "$hits" ]; then
+            echo "$hits" >&2
+            echo "::error::Raw f-string Cypher found in src/ outside the builder. Use the" \
+              "src/iknos/db/cypher.py query builder (CypherQuery + node/rel + NodeLabel/EdgeType" \
+              "+ lit) so labels/edges are validated and values are escaped (W8)." >&2
+            exit 1
+          fi

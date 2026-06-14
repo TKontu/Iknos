@@ -596,16 +596,20 @@ class Propositionizer:
         relationship a later phase introduces. Used to refuse a cascade purge that would orphan
         such a consumer (:class:`CascadeDependentsError`) — the deferred full-cascade boundary.
         """
-        from iknos.db.age import cypher_map, execute_cypher
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
-        rows = await execute_cypher(
-            session,
-            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(s:Span {cypher_map({'id': str(span_id)})}) "
-            "OPTIONAL MATCH (p)-[r]-() "
-            "WITH p, count(r) AS degree "
-            "WHERE degree > 1 "
-            "RETURN count(p)",
-            returns="dependents agtype",
+        rows = await (
+            CypherQuery()
+            .match(
+                node("p", NodeLabel.PROPOSITION)
+                + rel(EdgeType.EVIDENCED_BY)
+                + node("s", NodeLabel.SPAN, {"id": str(span_id)})
+            )
+            .optional_match(node("p") + rel(var="r", directed=False) + node())
+            .with_("p, count(r) AS degree")
+            .where("degree > 1")
+            .return_("count(p)")
+            .run(session, returns="dependents agtype")
         )
         return bool(rows) and int(str(rows[0][0])) > 0
 
@@ -625,13 +629,15 @@ class Propositionizer:
         only the lone ``EVIDENCED_BY`` edge. Returns the purged proposition ids (for the
         re-extraction ``Action``'s audit trail — what was superseded).
         """
-        from iknos.db.age import cypher_map, execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
-        span_match = f"(s:Span {cypher_map({'id': str(span_id)})})"
-        rows = await execute_cypher(
-            session,
-            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->{span_match} RETURN p.id",
-            returns="pid agtype",
+        span_match = node("s", NodeLabel.SPAN, {"id": str(span_id)})
+        rows = await (
+            CypherQuery()
+            .match(node("p", NodeLabel.PROPOSITION) + rel(EdgeType.EVIDENCED_BY) + span_match)
+            .return_("p.id")
+            .run(session, returns="pid agtype")
         )
         purged = [unquote_agtype(r[0]) for r in rows]
         if not purged:
@@ -647,9 +653,11 @@ class Propositionizer:
             {"ids": prop_uuids},
         )
         # The AGE vertices + their EVIDENCED_BY edges (DETACH DELETE drops the edge with the node).
-        await execute_cypher(
-            session,
-            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->{span_match} DETACH DELETE p",
+        await (
+            CypherQuery()
+            .match(node("p", NodeLabel.PROPOSITION) + rel(EdgeType.EVIDENCED_BY) + span_match)
+            .detach_delete("p")
+            .run(session)
         )
         return purged
 
@@ -689,7 +697,7 @@ class Propositionizer:
         ``(prop_ids, edge_ids)`` for the recording Action's outputs. No commit (the caller owns the
         transaction boundary).
         """
-        from iknos.db.age import cypher_map, execute_cypher
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
         prop_ids: list[str] = []
         edge_ids: list[str] = []
@@ -717,17 +725,22 @@ class Propositionizer:
                 # exactly as before until LLM_EXTRACT_SAMPLES is raised.
                 "agreement": r.agreement,
             }
-            await execute_cypher(
-                session,
-                f"CREATE (p:Proposition {cypher_map(prop_props)}) RETURN p",
-                returns="p agtype",
+            await (
+                CypherQuery()
+                .create(node("p", NodeLabel.PROPOSITION, prop_props))
+                .return_("p")
+                .run(session, returns="p agtype")
             )
-            await execute_cypher(
-                session,
-                f"MATCH (p:Proposition {cypher_map({'id': str(r.id)})}), "
-                f"(s:Span {cypher_map({'id': str(r.span_id)})}) "
-                "CREATE (p)-[e:EVIDENCED_BY]->(s) RETURN e",
-                returns="e agtype",
+            await (
+                CypherQuery()
+                .match(
+                    node("p", NodeLabel.PROPOSITION, {"id": str(r.id)})
+                    + ", "
+                    + node("s", NodeLabel.SPAN, {"id": str(r.span_id)})
+                )
+                .create(node("p") + rel(EdgeType.EVIDENCED_BY, var="e") + node("s"))
+                .return_("e")
+                .run(session, returns="e agtype")
             )
             session.add(
                 PropositionEmbedding(
@@ -1060,13 +1073,18 @@ class Propositionizer:
         with new ids, so this set *is* the generation marker :meth:`_span_verify_identity` uses to
         reject a stale verify ``Action`` from a previous generation (G1.25).
         """
-        from iknos.db.age import cypher_map, execute_cypher, unquote_agtype
+        from iknos.db.age import unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
-        rows = await execute_cypher(
-            session,
-            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(:Span {cypher_map({'id': str(span_id)})}) "
-            "RETURN p.id",
-            returns="pid agtype",
+        rows = await (
+            CypherQuery()
+            .match(
+                node("p", NodeLabel.PROPOSITION)
+                + rel(EdgeType.EVIDENCED_BY)
+                + node("", NodeLabel.SPAN, {"id": str(span_id)})
+            )
+            .return_("p.id")
+            .run(session, returns="pid agtype")
         )
         return {unquote_agtype(r[0]) for r in rows}
 
@@ -1242,13 +1260,18 @@ class Propositionizer:
         rewrites faithfulness, never the vector — so it is left empty; these results are never
         persisted through :meth:`_write_propositions`.
         """
-        from iknos.db.age import cypher_map, execute_cypher, parse_agtype_map, unquote_agtype
+        from iknos.db.age import parse_agtype_map, unquote_agtype
+        from iknos.db.cypher import CypherQuery, EdgeType, NodeLabel, node, rel
 
-        rows = await execute_cypher(
-            session,
-            f"MATCH (p:Proposition)-[:EVIDENCED_BY]->(s:Span {cypher_map({'id': str(span.id)})}) "
-            "RETURN p.id, properties(p)",
-            returns="id agtype, props agtype",
+        rows = await (
+            CypherQuery()
+            .match(
+                node("p", NodeLabel.PROPOSITION)
+                + rel(EdgeType.EVIDENCED_BY)
+                + node("s", NodeLabel.SPAN, {"id": str(span.id)})
+            )
+            .return_("p.id, properties(p)")
+            .run(session, returns="id agtype, props agtype")
         )
         results: list[PropositionResult] = []
         for rid, raw in rows:
@@ -1286,18 +1309,23 @@ class Propositionizer:
         in-place update in ``core/reference.py`` (the reason list is a JSON string; the legacy
         boolean tracks non-emptiness; ``faithfulness``/``provisional`` ``null`` when unassessed).
         """
-        from iknos.db.age import cypher_map, cypher_string_literal, execute_cypher
+        from iknos.db.age import cypher_string_literal
+        from iknos.db.cypher import CypherQuery, NodeLabel, node
 
         # json.dumps renders Cypher-valid scalar literals: a float, or `null`/`true`/`false`.
         faith_lit = json.dumps(r.faithfulness)
         provisional = legacy_provisional(r.faithfulness, r.provisional_reasons)
         provisional_lit = json.dumps(provisional)
         reasons_lit = cypher_string_literal(json.dumps(r.provisional_reasons))
-        await execute_cypher(
-            session,
-            f"MATCH (p:Proposition {cypher_map({'id': str(r.id)})}) "
-            f"SET p.faithfulness = {faith_lit}, p.provisional_reasons = {reasons_lit}, "
-            f"p.provisional = {provisional_lit}",
+        await (
+            CypherQuery()
+            .match(node("p", NodeLabel.PROPOSITION, {"id": str(r.id)}))
+            .set(
+                "p.faithfulness = " + faith_lit,
+                "p.provisional_reasons = " + reasons_lit,
+                "p.provisional = " + provisional_lit,
+            )
+            .run(session)
         )
 
     def _pipeline_hash(self, spans: list[Span], index: int, raw_text: str) -> str:
