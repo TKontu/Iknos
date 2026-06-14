@@ -125,9 +125,57 @@ def route_for(epistemic_class: EpistemicClass) -> Routing:
     return _ROUTING[epistemic_class]
 
 
-# Placeholder, stakes-dependent calibration is G1.6. Single source of truth for the
-# provisional gate — the *only* place the threshold is encoded.
-_FAITHFULNESS_PROVISIONAL_THRESHOLD: float = 0.5
+class Stakes(StrEnum):
+    """How load-bearing a would-be graph move is — the axis the provisional gate is keyed on (§3.1).
+
+    A property of the *move*, derived per-edge by the producer (``core/edge_producer.edge_stakes``),
+    never of the proposition: the same provisional atom is quarantined from a ``REFUTES`` yet
+    welcome in a non-sole ``SUPPORTS`` (§3.1: "a reference feeding a high-significance refutation
+    needs higher confidence than one feeding a minor corroboration"). It lives in this vocabulary
+    module (not in ``core/quarantine``, which re-exports it) so the stakes → faithfulness-bar
+    mapping (:data:`_FAITHFULNESS_THRESHOLD_BY_STAKES`) — the single source of truth for the
+    threshold — can be keyed on it without a ``core`` → ``types`` layering inversion.
+
+    A closed enum (not a bool) so a future calibrated middle band (§3.1's "stakes-**dependent**"
+    threshold is a spectrum, fitted by a trial) is a vocabulary growth caught fail-loud in
+    :func:`provisional_threshold_for`, not a silent third path.
+    """
+
+    LOW = "low"
+    HIGH = "high"
+
+
+# The §3.1 stakes-dependent provisional threshold (G1.6): the faithfulness bar a proposition's
+# grounding must clear, as a function of the **stakes** of the move it would drive. The single
+# source of truth for the gate — the *only* place the threshold is encoded. Keyed on **every**
+# Stakes member so a future calibrated band raises a KeyError in :func:`provisional_threshold_for`
+# (fail-loud on vocabulary growth) rather than silently defaulting to "passes" — for a *safety*
+# gate the silent default is the dangerous one. Same exhaustiveness discipline as ``_ROUTING`` /
+# ``_ENTAILMENT_BASE``.
+#
+#   HIGH → 0.5  the strict bar: a REFUTES (overturns a hypothesis) or a sole-support SUPPORTS needs
+#               grounding above this. The 0.5 the operator penalties below are tuned against.
+#   LOW  → 0.0  permissive: corroboration sets no bar, so a provisional atom may still exist and
+#               add to existing support — what the gate reads as "LOW always passes" (R9).
+#
+# A trial later refits these (and may add a middle band); because both the gate and the
+# proposition-time floor read them here, that recalibration is a one-place change.
+_FAITHFULNESS_THRESHOLD_BY_STAKES: dict[Stakes, float] = {
+    Stakes.HIGH: 0.5,
+    Stakes.LOW: 0.0,
+}
+
+
+def provisional_threshold_for(stakes: Stakes) -> float:
+    """The faithfulness bar a move's grounding must clear, by its stakes (§3.1, G1.6)."""
+    return _FAITHFULNESS_THRESHOLD_BY_STAKES[stakes]  # fail-loud on an unmapped stakes level
+
+
+# The faithfulness floor an atom must clear to escape quarantine at the strictest (high-stakes)
+# move — and so the default bar of :func:`provisional_reasons_for`: a proposition is marked
+# provisional precisely when its grounding would be quarantined from the strictest gated move.
+# Derived from the stakes map (no second copy of the 0.5 value).
+_FAITHFULNESS_PROVISIONAL_THRESHOLD: float = _FAITHFULNESS_THRESHOLD_BY_STAKES[Stakes.HIGH]
 
 
 class ProvisionalReason(StrEnum):

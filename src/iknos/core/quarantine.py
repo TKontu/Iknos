@@ -33,34 +33,34 @@ surfaces a withheld flip as a finding rather than an error (§13).
 """
 
 from collections.abc import Collection
-from enum import StrEnum
 
-from iknos.types.epistemic import merge_provisional_reasons
+from iknos.types.epistemic import Stakes, merge_provisional_reasons, provisional_threshold_for
+
+# ``Stakes`` is the move-stakes vocabulary; it lives in ``types/epistemic`` alongside the
+# stakes → faithfulness-bar mapping it keys (so the threshold has one home and no ``core`` →
+# ``types`` layering inversion), and is re-exported here because this gate and the enforcement
+# seam (``core/edge_producer`` V7) are its callers. Re-exported, not redefined — one Stakes only.
+__all__ = ["QuarantinedPropositionError", "Stakes", "assert_not_quarantined"]
 
 
-class Stakes(StrEnum):
-    """How load-bearing a would-be graph move is — the axis the quarantine gates on (§3.1).
+def _gates_on_provisional(stakes: Stakes) -> bool:
+    """Whether a stakes level gates on provisional reasons at all (§3.1, G1.6).
 
-    A property of the *move*, derived per-edge by the caller (V7), never of the proposition: the
-    same provisional atom is quarantined from a ``REFUTES`` yet welcome in a non-sole ``SUPPORTS``.
-    A closed enum (not a bool) so a future calibrated middle band (§3.1's "stakes-**dependent**"
-    threshold is a spectrum) is a vocabulary growth caught fail-loud in
-    :data:`_GATES_ON_PROVISIONAL`, not a silent third path.
+    Derived from the single stakes-dependent threshold (:func:`provisional_threshold_for`): a level
+    gates iff it sets a non-zero faithfulness bar. So this gate and the proposition-time provisional
+    floor read the **same** source of truth — recalibrating the threshold (or adding a future middle
+    band) moves both at once, and an unmapped stakes level raises a KeyError there (fail-loud on
+    vocabulary growth) rather than silently defaulting to "passes", which for a *safety* gate is the
+    dangerous default.
+
+    Today this is two-level and **exact**: ``HIGH`` sets the 0.5 floor that *defines* the
+    ``LOW_FAITHFULNESS`` reason, so "any reason at HIGH" ⟺ "faithfulness below the HIGH bar", and
+    ``LOW``'s 0.0 bar means it never gates. A *graded* middle band (a bar strictly between 0 and the
+    proposition-time floor) would need the faithfulness value carried to the gate, not just the
+    precomputed reason set; the Stakes enum and the threshold map are positioned so that lands as a
+    localized change when a trial calibrates the spectrum.
     """
-
-    LOW = "low"
-    HIGH = "high"
-
-
-# Whether a given stakes level gates on provisional reasons at all. Keyed on **every** Stakes member
-# so adding a level (e.g. a future calibrated MEDIUM) raises a KeyError here — fail-loud on
-# vocabulary growth — rather than silently defaulting to "passes", which for a *safety* gate is the
-# dangerous default. Same exhaustiveness discipline as ``_ROUTING`` / ``_ENTAILMENT_BASE`` in
-# ``types/epistemic.py``.
-_GATES_ON_PROVISIONAL: dict[Stakes, bool] = {
-    Stakes.LOW: False,
-    Stakes.HIGH: True,
-}
+    return provisional_threshold_for(stakes) > 0.0
 
 
 class QuarantinedPropositionError(Exception):
@@ -101,5 +101,5 @@ def assert_not_quarantined(proposition_reasons: Collection[str], stakes: Stakes)
     collection is "no reason → not provisional", never an error.
     """
     reasons = merge_provisional_reasons(proposition_reasons)
-    if _GATES_ON_PROVISIONAL[stakes] and reasons:
+    if _gates_on_provisional(stakes) and reasons:
         raise QuarantinedPropositionError(reasons=reasons, stakes=stakes)

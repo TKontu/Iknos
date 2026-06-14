@@ -17,6 +17,7 @@ from iknos.types.epistemic import (
     Polarity,
     ProvisionalReason,
     Routing,
+    Stakes,
     calibrate_agreement,
     combine_faithfulness,
     decode_provisional_reasons,
@@ -24,6 +25,7 @@ from iknos.types.epistemic import (
     legacy_provisional,
     merge_provisional_reasons,
     provisional_reasons_for,
+    provisional_threshold_for,
     reassess_faithfulness_reasons,
     route_for,
 )
@@ -57,6 +59,38 @@ def test_provisional_reasons_half_open_boundary() -> None:
 def test_provisional_reasons_custom_threshold() -> None:
     assert provisional_reasons_for(0.7, threshold=0.8) == {_LOW}
     assert provisional_reasons_for(0.8, threshold=0.8) == set()
+
+
+# --- the stakes-dependent threshold (G1.6, §3.1: "the threshold is stakes-dependent") ---
+
+
+@pytest.mark.parametrize("stakes", list(Stakes))
+def test_provisional_threshold_covers_every_stakes(stakes: Stakes) -> None:
+    # No KeyError for any member → the threshold map is exhaustive (fail-loud on a future
+    # calibrated band, the same discipline as route_for / the entailment base).
+    assert isinstance(provisional_threshold_for(stakes), float)
+
+
+def test_high_stakes_bar_is_stricter_than_low() -> None:
+    # §3.1: "a reference feeding a high-significance refutation needs higher confidence than one
+    # feeding a minor corroboration." The bar a move's grounding must clear rises with its stakes.
+    assert provisional_threshold_for(Stakes.HIGH) > provisional_threshold_for(Stakes.LOW)
+
+
+def test_low_stakes_bar_is_permissive_zero() -> None:
+    # LOW sets no faithfulness bar (0.0) — a provisional atom may exist and corroborate; this is
+    # the value the quarantine gate reads as "LOW always passes" (§3.1, R9).
+    assert provisional_threshold_for(Stakes.LOW) == 0.0
+
+
+def test_default_provisional_floor_is_the_high_stakes_bar() -> None:
+    # The default threshold of provisional_reasons_for IS the high-stakes bar: an atom is marked
+    # provisional precisely when it would be quarantined from the strictest gated move. Single
+    # source of truth — the 0.5 boundary the operator penalties are tuned against lives only in the
+    # stakes map now.
+    high = provisional_threshold_for(Stakes.HIGH)
+    assert provisional_reasons_for(high) == set()  # at-bar passes (half-open)
+    assert provisional_reasons_for(high - 0.01) == {_LOW}  # just below is provisional
 
 
 def test_provisional_reasons_none_is_unassessed() -> None:

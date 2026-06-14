@@ -24,11 +24,24 @@ because Phase 2 is where its absence turns from latent to expensive.*
       a synthetic graph at target schema density, on the four real query patterns,
       *before* building heavily on AGE. If AGE fails here, the fallback decision
       (separate graph store) must be made now, not after Phases 2–5 are built on it.
-- [ ] **Quarantine enforcement lands with the first evidential edges (G1.6).** The
-      `provisional` flag is already set per proposition; the §3.1 rule "provisional
-      atoms cannot drive high-stakes moves (e.g. a `REFUTES`)" is enforced at
-      edge-creation time — which begins in this phase. Until enforced, the flag is
-      decorative.
+- [x] **Quarantine enforcement lands with the first evidential edges (G1.6).** The §3.1
+      rule "provisional atoms cannot drive high-stakes moves (e.g. a `REFUTES`)" is now
+      enforced at edge-creation time, and the threshold it gates on is stakes-dependent.
+      **Done across R8→R9→V7→G1.6:** R8 (#72) turned the `provisional` boolean into a
+      `provisional_reasons` set; R9 (#73) added the pure stakes-gated
+      `core/quarantine.assert_not_quarantined`; V7 (#77) wired it into
+      `core/edge_producer.plan_hypothesis` so a provisional source's high-stakes edge is
+      dropped from the plan and surfaced as a `QuarantineRecord` triage signal (§11.1),
+      never persisted; **G1.6 (this change)** replaced the placeholder single-threshold
+      constant with the §3.1 stakes-dependent bar — `provisional_threshold_for(stakes)` in
+      `types/epistemic.py`, the single source of truth both the gate and the
+      proposition-time provisional floor read (HIGH = strict 0.5 bar, LOW = 0.0 permissive,
+      spectrum-ready for a trial-fitted middle band). **In-phase scope:** the high-stakes
+      moves that exist at edge creation are gated now — every `REFUTES` and any
+      sole-support `SUPPORTS` (`edge_stakes`); a corroborating `SUPPORTS` is LOW and passes.
+      **Distinct, still-deferred gate:** the persisted hypothesis-state *flip* to `refuted`
+      is the §7.2 ensemble gate (G4.5), a separate safety check — not the quarantine and not
+      in this change.
 - [x] **Polarity-aware agreement (G1.14) and the truncation guard (G1.13 slice 1)
       shipped** — Phase 2 consumes propositions and their faithfulness; both fixes
       change what reaches it. *(Shipped in #32 — `feat(ingest): G1.13 slice 1
