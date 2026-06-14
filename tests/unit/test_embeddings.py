@@ -52,6 +52,39 @@ def test_derive_special_affixes_empty_probe_is_safe() -> None:
     assert _derive_special_affixes(tok) == ([], [])
 
 
+def _fake_tokenizer_by_text(
+    prefix: list[int], suffix: list[int], content_by_text: dict[str, list[int]]
+):
+    """A tokenizer stub whose content ids depend on the *text* — so the two distinct probes
+    (``"a"`` and ``"0"``) the two-probe recovery uses encode differently, as a real tokenizer's
+    would. Wraps with ``prefix``/``suffix`` when ``add_special_tokens``."""
+
+    def call(text: str, add_special_tokens: bool = True, **_kw: object) -> dict[str, list[int]]:
+        ids = list(content_by_text[text])
+        if add_special_tokens:
+            ids = prefix + ids + suffix
+        return {"input_ids": ids}
+
+    return call
+
+
+def test_derive_special_affixes_probe_id_collides_with_special_id() -> None:
+    # W12: the probe "a" encodes to a content id equal to the bos prefix id (0). The old
+    # single-probe left-to-right search mislocated the prefix (it matched the bos at index 0 and
+    # returned ([], [0, 2])); the two-probe common-affix recovery isolates ([0], [2]) correctly.
+    tok = _fake_tokenizer_by_text(prefix=[0], suffix=[2], content_by_text={"a": [0], "0": [5]})
+    assert _derive_special_affixes(tok) == ([0], [2])
+
+
+def test_derive_special_affixes_multi_token_probe() -> None:
+    # The probe "a" encodes to *multiple* content tokens; the wrapping is still isolated. The
+    # second probe "0" is a single, distinct token so the shared runs stop at the content boundary.
+    tok = _fake_tokenizer_by_text(
+        prefix=[0], suffix=[2], content_by_text={"a": [10, 11], "0": [12]}
+    )
+    assert _derive_special_affixes(tok) == ([0], [2])
+
+
 # --- windowing plan (G1.13 slice 2) ---
 
 

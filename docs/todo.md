@@ -351,7 +351,7 @@ cite a gap file by name resolve there):
       node *and* a `verifier_unavailable` row on the verify `Action`; so it is surfaced
       to triage, not only logged. Tests: unit (`_skip_reason`, config single-source +
       env override) + integration (per-reason skip audit, early model-swap guard).
-- [ ] **W12 — harden the transformers-5 special-token affix probe** *(2026-06-13,
+- [x] **W12 — harden the transformers-5 special-token affix probe** *(2026-06-13,
       #116 review finding 2/3 — low; the target model is unaffected, so this is
       opportunistic, not blocking)*. `core/embeddings.py::_derive_special_affixes`
       recovers the tokenizer's `(prefix, suffix)` special-token wrapping by encoding
